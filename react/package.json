@@ -1,0 +1,24 @@
+{
+  "name": "@ravnexchange/react",
+  "version": "0.1.1",
+  "description": "React hooks for @ravnexchange/sdk — quote/execute/status state management. Bring your own wallet.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/ravndex/ravn-sdk.git", "directory": "react" },
+  "homepage": "https://github.com/ravndex/ravn-sdk#readme",
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "peerDependencies": {
+    "@ravnexchange/sdk": "*",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@ravnexchange/sdk": "*",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.0"
+  }
+}

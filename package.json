@@ -1,0 +1,18 @@
+{
+  "name": "ravn-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": ["core", "react", "widget-connector"],
+  "scripts": {
+    "build": "npm run build -w core && npm run build -w react && npm run build -w widget-connector",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  }
+}
