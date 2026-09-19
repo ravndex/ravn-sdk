@@ -65,6 +65,10 @@
       });
 
       document.getElementById("connect").addEventListener("click", async () => {
+        if (!window.ethereum) {
+          alert("No injected wallet found. Install MetaMask (or similar) and reload.");
+          return;
+        }
         const [address] = await window.ethereum.request({ method: "eth_requestAccounts" });
         account = address;
         bridge.updateWallet({ address, chainId: 1 });
