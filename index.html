@@ -180,8 +180,14 @@
 <\/script>`;
 
       document.getElementById("copy").addEventListener("click", async () => {
-        await navigator.clipboard.writeText(EMBED_CODE);
-        statusEl.textContent = "Embed code copied. See examples/widget-embed.html for the full wallet wiring.";
+        try {
+          await navigator.clipboard.writeText(EMBED_CODE);
+          statusEl.textContent = "Embed code copied. See examples/widget-embed.html for the full wallet wiring.";
+        } catch {
+          // Clipboard access can be denied (permissions policy, insecure context, browser
+          // settings) independently of anything this page does; fall back to a manual copy.
+          window.prompt("Clipboard access was denied. Copy the embed code manually:", EMBED_CODE);
+        }
       });
     </script>
   </body>
