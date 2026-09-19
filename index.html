@@ -100,6 +100,7 @@
       <button id="connect" class="primary">Connect wallet</button>
       <button id="copy">Copy embed code</button>
       <div id="status">Not connected.</div>
+      <pre id="fallback-code" hidden></pre>
       <h2 style="font-size: 15px; margin-top: 28px">What's configurable today</h2>
       <p style="color: #a3a19c; font-size: 13.5px">
         Just the wallet bridge. There's no theme, token allowlist, or layout mode to toggle yet;
@@ -185,8 +186,13 @@
           statusEl.textContent = "Embed code copied. See examples/widget-embed.html for the full wallet wiring.";
         } catch {
           // Clipboard access can be denied (permissions policy, insecure context, browser
-          // settings) independently of anything this page does; fall back to a manual copy.
-          window.prompt("Clipboard access was denied. Copy the embed code manually:", EMBED_CODE);
+          // settings) independently of anything this page does. Fall back to revealing the code
+          // as selectable text rather than a second browser API (prompt()) that can itself be
+          // unavailable in a restrictive embedding context.
+          const fallback = document.getElementById("fallback-code");
+          fallback.textContent = EMBED_CODE;
+          fallback.hidden = false;
+          statusEl.textContent = "Clipboard access was denied; select and copy the code below manually.";
         }
       });
     </script>
