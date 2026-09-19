@@ -49,6 +49,10 @@ version, for quick manual testing only; don't embed that one in production.
 
 Runnable, verified-working code for each package in [`examples/`](./examples): a Node script, a Python script, a React hooks snippet, and a plain-HTML widget embed.
 
+## Playground
+
+[ravndex.github.io/ravn-sdk](https://ravndex.github.io/ravn-sdk/) is a live version of the widget embed: connect a wallet, watch it bridge into the real widget iframe, copy the working code. It's not a config-knob playground (there's no theme/mode/variant to toggle yet; see `src/app/widget/v1/page.tsx` in the private app for what would need to change first) — what's here is real and verified working, not a mockup.
+
 ## API reference
 
 The full OpenAPI spec for `/api/v1` is published at [docs.ravn.exchange](https://docs.ravn.exchange).
