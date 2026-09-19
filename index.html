@@ -7,7 +7,7 @@
   demonstrates is real: connect a wallet, watch @ravnexchange/widget-connector bridge it into the
   live widget iframe, and copy the exact code that does it.
 
-  The iframe's ?origin= must equal wherever this page is actually served from — the widget's
+  The iframe's ?origin= must equal wherever this page is actually served from: the widget's
   bridge only accepts postMessage from that exact origin, enforced by the browser itself, not by
   anything this page can fake. If GitHub Pages serves this repo from a different origin than
   https://ravndex.github.io, update WIDGET_ORIGIN below to match.
