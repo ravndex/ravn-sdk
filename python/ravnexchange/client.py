@@ -1,12 +1,12 @@
 """Typed client for RAVN's public /api/v1 surface.
 
 Deliberately a standalone mirror of @ravnexchange/sdk's RavnClient
-(sdk/core/src/client.ts) — same scope (quote, execute, submit-signature, status, tokens,
+(sdk/core/src/client.ts): same scope (quote, execute, submit-signature, status, tokens,
 chains), same envelope-unwrapping/error-throwing behavior, snake_cased. Keep the two in sync
 by hand when the API's public contract changes; ships to PyPI on its own and can't import
 from the TS package or the app's internal source tree.
 
-Zero runtime dependencies — built on urllib.request, not requests, so installing this adds
+Zero runtime dependencies: built on urllib.request, not requests, so installing this adds
 nothing to a project's dependency tree.
 """
 
@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, TypedDict
 
-# ravn.exchange is the marketing site (separate deployment, no /api/* routes at all) — the
+# ravn.exchange is the marketing site (separate deployment, no /api/* routes at all); the
 # actual app, including this API, is served from the app subdomain.
 DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1"
 
@@ -66,7 +66,7 @@ class SubmitSignatureParams(TypedDict, total=False):
     approvalSignature: str
 
 
-# Injectable transport, mirroring RavnClientConfig.fetch in the TS client — lets tests (and
+# Injectable transport, mirroring RavnClientConfig.fetch in the TS client: lets tests (and
 # unusual runtimes) supply their own opener instead of hitting the network.
 UrlOpener = Callable[[urllib.request.Request], Any]
 
@@ -96,7 +96,7 @@ class RavnClient:
                 status = res.status
                 raw = res.read()
         except urllib.error.HTTPError as e:
-            # A non-2xx still carries a JSON error envelope for this API — read it the same
+            # A non-2xx still carries a JSON error envelope for this API; read it the same
             # way a successful response would be, rather than letting HTTPError propagate.
             status = e.code
             raw = e.read()
@@ -121,30 +121,30 @@ class RavnClient:
         return envelope.get("data")
 
     def get_quote(self, params: GetQuoteParams) -> Dict[str, Any]:
-        """POST /v1/quote — omitting destinationAddress/refundAddress returns a preview-only
+        """POST /v1/quote: omitting destinationAddress/refundAddress returns a preview-only
         quote (see the response's `executable` field)."""
         return self._request("/quote", "POST", dict(params))
 
     def execute(self, params: ExecuteParams) -> Dict[str, Any]:
-        """POST /v1/execute — branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT)."""
+        """POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT)."""
         return self._request("/execute", "POST", dict(params))
 
     def submit_signature(self, params: SubmitSignatureParams) -> Dict[str, Any]:
-        """POST /v1/submit-signature — SIGNATURE-type executions only. Returns {"statusRef": ...}
+        """POST /v1/submit-signature: SIGNATURE-type executions only. Returns {"statusRef": ...}
         to poll get_status with."""
         return self._request("/submit-signature", "POST", dict(params))
 
     def get_status(self, quote_token: str, ref: str) -> Dict[str, Any]:
-        """GET /v1/status — ref is the DEPOSIT address or the statusRef from submit_signature."""
+        """GET /v1/status: ref is the DEPOSIT address or the statusRef from submit_signature."""
         qs = urllib.parse.urlencode({"quoteToken": quote_token, "ref": ref})
         return self._request(f"/status?{qs}")
 
     def get_tokens(self, chain_id: int) -> List[Dict[str, Any]]:
-        """GET /v1/tokens — RAVN's listed token registry for one chain. Not a per-pair
+        """GET /v1/tokens: RAVN's listed token registry for one chain. Not a per-pair
         routability guarantee."""
         qs = urllib.parse.urlencode({"chainId": chain_id})
         return self._request(f"/tokens?{qs}")
 
     def get_chains(self) -> List[Dict[str, Any]]:
-        """GET /v1/chains — every chain RAVN lists tokens for. Static; safe to cache client-side."""
+        """GET /v1/chains: every chain RAVN lists tokens for. Static; safe to cache client-side."""
         return self._request("/chains")

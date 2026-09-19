@@ -1,7 +1,7 @@
 {
   "name": "@ravnexchange/sdk",
   "version": "0.1.4",
-  "description": "Typed client for the RAVN integrator API (/api/v1) — quote, execute, submit-signature, status.",
+  "description": "Typed client for the RAVN integrator API (/api/v1): quote, execute, submit-signature, status.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": ["dist"],

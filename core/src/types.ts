@@ -1,6 +1,6 @@
 /**
  * Wire types for RAVN's public /api/v1 surface. Deliberately a standalone mirror of
- * src/lib/api/v1/dto.ts's public DTOs, not an import from it — this package ships to npm on
+ * src/lib/api/v1/dto.ts's public DTOs, not an import from it: this package ships to npm on
  * its own and can't depend on the app's internal source tree. Keep these two in sync by hand
  * when the API's public contract changes; that file's own comment already promises the shape
  * is frozen for third parties, so drift should be rare.
@@ -17,16 +17,16 @@ export interface TokenDTO {
 }
 
 export interface QuoteDTO {
-  /** Opaque handle — pass back to execute() verbatim. Do not parse. */
+  /** Opaque handle: pass back to execute() verbatim. Do not parse. */
   quoteToken: string;
   venue: { id: string; name: string };
   routeType: string;
   input: { token: TokenDTO; amount: string };
   output: { token: TokenDTO; amount: string };
   /** `supported: false` means the venue has no fee mechanism at all (bps will be 0 either
-   * way) — distinct from `supported: true, bps: 0`, a real, intentional zero fee. */
+   * way); distinct from `supported: true, bps: 0`, a real, intentional zero fee. */
   fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
-  /** False means this is a preview-only price — see RavnClient.getQuote's destinationAddress note. */
+  /** False means this is a preview-only price; see RavnClient.getQuote's destinationAddress note. */
   executable: boolean;
   slippage: { bps: number; isFirm: boolean; guaranteedMin: string | null } | null;
   gas: { native: string; nativeSymbol: string; usd: string | null; estimated: boolean } | null;
@@ -125,12 +125,12 @@ export interface GetQuoteParams {
   /** Positive integer string, in the token's smallest unit (no decimals). */
   inputAmount: string;
   userAddress: string;
-  /** Omitting this yields a preview-only quote — see QuoteDTO.executable. */
+  /** Omitting this yields a preview-only quote; see QuoteDTO.executable. */
   destinationAddress?: string;
   refundAddress?: string;
   slippageBps?: number;
   rankingMode?: "best_output" | "fastest";
-  /** Drop specific venues from this race — e.g. a risk objection to one of them. */
+  /** Drop specific venues from this race, e.g. a risk objection to one of them. */
   excludeVenues?: string[];
   /** Test quote -> execute -> status with no real funds and no live venue settlement. See
    * the API's own sandbox field description for per-venue/per-route exceptions. */

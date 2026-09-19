@@ -28,7 +28,7 @@ jobs:
         run: python -m build
 
       # No API token: PyPI's OIDC trusted-publisher trust (configured on pypi.org for this
-      # repo+workflow+environment) authenticates the publish instead of a stored secret — same
+      # repo+workflow+environment) authenticates the publish instead of a stored secret, same
       # model as publish-sdk.yml's npm OIDC publish. skip-existing covers the "already
       # published this version" case that workflow checks by hand via `npm view`.
       - name: Publish to PyPI

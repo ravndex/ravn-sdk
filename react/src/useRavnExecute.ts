@@ -9,7 +9,7 @@ export interface UseRavnExecuteResult {
 }
 
 /**
- * Thin state wrapper around client.execute(). Deliberately does NOT sign or send anything —
+ * Thin state wrapper around client.execute(). Deliberately does NOT sign or send anything:
  * this package has no opinion on wallets. Branch on the returned executionType and hand it to
  * whatever signer the integrator already has (wagmi, ethers, a hardware wallet, ...).
  */

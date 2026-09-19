@@ -1,9 +1,9 @@
 # ravnexchange
 
-Typed Python client for RAVN's public `/api/v1` — quote, execute, submit-signature, status,
+Typed Python client for RAVN's public `/api/v1`: quote, execute, submit-signature, status,
 tokens, chains. Zero runtime dependencies (built on `urllib.request`, not `requests`).
 
-Same scope as the official TS client (`@ravnexchange/sdk`) — for an agent that already speaks
+Same scope as the official TS client (`@ravnexchange/sdk`); for an agent that already speaks
 MCP, RAVN's MCP server (see the root [README](https://github.com/ravndex/ravn-sdk)) covers this
 and more; this package is for a plain, non-agent Python backend that wants a typed wrapper
 instead of hand-rolling HTTP calls against the JSON API.
@@ -39,11 +39,11 @@ else:
 ```
 
 Pass `"sandbox": True` on `get_quote` to test the full quote → execute → status flow with no
-real funds — see the API's own docs for per-venue exceptions (THORChain BTC-source and
+real funds; see the API's own docs for per-venue exceptions (THORChain BTC-source and
 Chainflip can't be sandboxed).
 
 ## Status
 
 Published to PyPI via `.github/workflows/publish-python-sdk.yml` using trusted publishing
-(OIDC, no stored token) — same model as this repo's npm packages, on a push to `main` that
+(OIDC, no stored token), same model as this repo's npm packages, on a push to `main` that
 bumps `pyproject.toml`'s version.

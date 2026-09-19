@@ -61,21 +61,21 @@ describe("createRavnWidgetBridge", () => {
     expect(posted).toHaveLength(1); // wallet:connected
 
     bridge.updateWallet({ address: "0xabc", chainId: 1 }); // identical, redundant call
-    expect(posted).toHaveLength(1); // still just the one push — no spurious chainChanged
+    expect(posted).toHaveLength(1); // still just the one push, no spurious chainChanged
   });
 
   it("updateWallet(null) does not repost wallet:disconnected while already disconnected", () => {
     const { iframe, posted } = fakeIframe();
     const bridge = createRavnWidgetBridge({ iframe, widgetOrigin: WIDGET_ORIGIN, getWallet: () => null });
 
-    bridge.updateWallet(null); // starts disconnected — this itself is a no-op, nothing to announce
+    bridge.updateWallet(null); // starts disconnected: this itself is a no-op, nothing to announce
     expect(posted).toHaveLength(0);
 
     bridge.updateWallet({ address: "0xabc", chainId: 1 });
     bridge.updateWallet(null);
     expect(posted).toHaveLength(2); // connected, then disconnected
 
-    bridge.updateWallet(null); // redundant — a host re-running an effect while still disconnected
+    bridge.updateWallet(null); // redundant: a host re-running an effect while still disconnected
     bridge.updateWallet(null);
     expect(posted).toHaveLength(2); // no additional spurious disconnect pushes
   });
@@ -105,7 +105,7 @@ describe("createRavnWidgetBridge", () => {
       { chainId: 1, to: "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead" },
       "same-id"
     );
-    const first = simulate(envelope); // not yet awaited — still in flight
+    const first = simulate(envelope); // not yet awaited, still in flight
     const second = simulate(envelope); // duplicate delivery of the identical request
 
     expect(wallet.sendTransaction).toHaveBeenCalledTimes(1);

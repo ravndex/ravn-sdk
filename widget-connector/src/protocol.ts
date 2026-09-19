@@ -3,7 +3,7 @@
  *
  * Every message carries this envelope so the bridge can tell its own traffic apart from
  * everything else postMessage carries on a page (browser extensions, analytics, other
- * widgets). `version` is the protocol version, not the package version — bumped only on a
+ * widgets). `version` is the protocol version, not the package version: bumped only on a
  * breaking wire-format change, so an old widget and a new host (or vice versa) can still tell
  * they're mismatched instead of silently misparsing each other.
  */
@@ -34,7 +34,7 @@ export function makeEnvelope<T>(type: string, payload: T, id: string): BridgeEnv
   return { source: BRIDGE_SOURCE, version: BRIDGE_VERSION, id, type, payload };
 }
 
-/** crypto.randomUUID needs a secure context and isn't in every supported browser — this bridge
+/** crypto.randomUUID needs a secure context and isn't in every supported browser: this bridge
  *  ships into arbitrary integrator pages, so it always needs the fallback, not just "sometimes". */
 export function generateId(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
@@ -52,7 +52,7 @@ export function isTrustedBridgeMessage(
 }
 
 /**
- * Diagnostic only — never affects control flow. isBridgeEnvelope() rejects a version-mismatched
+ * Diagnostic only; never affects control flow. isBridgeEnvelope() rejects a version-mismatched
  * message identically to random page noise (a browser extension, an unrelated script), which
  * means a genuine version skew between the widget and a host's @ravnexchange/widget-connector otherwise
  * fails completely silently: bridge:ready never gets a bridge:init reply, and nothing anywhere
@@ -64,7 +64,7 @@ export function warnOnVersionMismatch(data: unknown): void {
   const d = data as Record<string, unknown>;
   if (d.source === BRIDGE_SOURCE && typeof d.version === "string" && d.version !== BRIDGE_VERSION) {
     console.warn(
-      `[ravn-bridge] protocol version mismatch: expected "${BRIDGE_VERSION}", got "${d.version}" — message ignored. The widget and this page's @ravnexchange/widget-connector are on different versions.`
+      `[ravn-bridge] protocol version mismatch: expected "${BRIDGE_VERSION}", got "${d.version}"; message ignored. The widget and this page's @ravnexchange/widget-connector are on different versions.`
     );
   }
 }
@@ -74,7 +74,7 @@ export function warnOnVersionMismatch(data: unknown): void {
 export interface BridgeInitPayload {
   version: typeof BRIDGE_VERSION;
   wallet: WalletState | null;
-  /** Independent from `wallet` (EVM) — a host can have either, both, or neither connected. */
+  /** Independent from `wallet` (EVM): a host can have either, both, or neither connected. */
   solanaWallet: SolanaWalletState | null;
   config?: Record<string, unknown>;
 }
@@ -142,9 +142,9 @@ export function isWalletActionType(type: string): type is WalletActionType {
   );
 }
 
-// ---- Solana — a separate, independent lane from the EVM one above -----------
+// ---- Solana: a separate, independent lane from the EVM one above -----------
 //
-// A host can have an EVM wallet, a Solana wallet, both, or neither connected — they're pushed
+// A host can have an EVM wallet, a Solana wallet, both, or neither connected; they're pushed
 // and requested through entirely separate message types rather than folded into WalletState, so
 // one updating never implies anything about the other.
 
@@ -154,7 +154,7 @@ export interface SolanaWalletState {
 
 export type SolanaWalletPushType = "solana:connected" | "solana:accountChanged" | "solana:disconnected";
 
-/** Base64 of an UNSIGNED VersionedTransaction's serialize() — same encoding useSwap.ts already
+/** Base64 of an UNSIGNED VersionedTransaction's serialize(): same encoding useSwap.ts already
  *  uses everywhere it hands a Solana tx to a venue's submit endpoint. */
 export interface SolanaSignTransactionRequest {
   transaction: string;

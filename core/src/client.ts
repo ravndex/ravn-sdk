@@ -25,7 +25,7 @@ interface Envelope<T> {
   meta?: { requestId: string; version: string };
 }
 
-// ravn.exchange is the marketing site (separate deployment, no /api/* routes at all) — the
+// ravn.exchange is the marketing site (separate deployment, no /api/* routes at all); the
 // actual app, including this API, is served from the app subdomain. A caller that omits
 // baseUrl entirely was 404ing on every single call until this fix.
 const DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1";
@@ -56,7 +56,7 @@ export class RavnClient {
       body = (await res.json()) as Envelope<T>;
     } catch {
       // A non-JSON body (an intermediary's HTML error page, an empty 204/502/504) must still
-      // surface as the one error type this client promises — never a raw SyntaxError.
+      // surface as the one error type this client promises, never a raw SyntaxError.
       throw new RavnApiError("INTERNAL", `HTTP ${res.status}: response was not valid JSON`, undefined, undefined);
     }
 
@@ -68,17 +68,17 @@ export class RavnClient {
     return body.data as T;
   }
 
-  /** POST /v1/quote — omitting destinationAddress/refundAddress returns a preview-only quote (see QuoteDTO.executable). */
+  /** POST /v1/quote: omitting destinationAddress/refundAddress returns a preview-only quote (see QuoteDTO.executable). */
   getQuote(params: GetQuoteParams): Promise<QuoteDTO> {
     return this.request<QuoteDTO>("/quote", { method: "POST", body: JSON.stringify(params) });
   }
 
-  /** POST /v1/execute — branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT). */
+  /** POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT). */
   execute(params: ExecuteParams): Promise<ExecutionDTO> {
     return this.request<ExecutionDTO>("/execute", { method: "POST", body: JSON.stringify(params) });
   }
 
-  /** POST /v1/submit-signature — for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */
+  /** POST /v1/submit-signature: for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */
   submitSignature(params: SubmitSignatureParams): Promise<{ statusRef: string }> {
     return this.request<{ statusRef: string }>("/submit-signature", {
       method: "POST",
@@ -86,19 +86,19 @@ export class RavnClient {
     });
   }
 
-  /** GET /v1/status — `ref` is the DEPOSIT address or the statusRef from submitSignature. */
+  /** GET /v1/status: `ref` is the DEPOSIT address or the statusRef from submitSignature. */
   getStatus(quoteToken: string, ref: string): Promise<StatusDTO> {
     const qs = new URLSearchParams({ quoteToken, ref }).toString();
     return this.request<StatusDTO>(`/status?${qs}`, { method: "GET" });
   }
 
-  /** GET /v1/tokens — RAVN's listed token registry for one chain. Not a per-pair routability guarantee. */
+  /** GET /v1/tokens: RAVN's listed token registry for one chain. Not a per-pair routability guarantee. */
   getTokens(chainId: number): Promise<TokenDTO[]> {
     const qs = new URLSearchParams({ chainId: String(chainId) }).toString();
     return this.request<TokenDTO[]>(`/tokens?${qs}`, { method: "GET" });
   }
 
-  /** GET /v1/chains — every chain RAVN lists tokens for. Static; safe to cache client-side. */
+  /** GET /v1/chains: every chain RAVN lists tokens for. Static; safe to cache client-side. */
   getChains(): Promise<ChainDTO[]> {
     return this.request<ChainDTO[]>("/chains", { method: "GET" });
   }

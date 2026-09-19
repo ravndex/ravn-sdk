@@ -1,4 +1,4 @@
-"""Stdlib unittest, no pytest dependency — mirrors sdk/core/src/client.test.ts's approach of
+"""Stdlib unittest, no pytest dependency: mirrors sdk/core/src/client.test.ts's approach of
 injecting a fake transport instead of hitting the network."""
 
 import io

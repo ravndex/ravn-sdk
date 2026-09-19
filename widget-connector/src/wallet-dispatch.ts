@@ -12,12 +12,12 @@ import {
 } from "./protocol";
 
 /**
- * What the host must implement to back the bridge — one call per wallet:* action type.
+ * What the host must implement to back the bridge: one call per wallet:* action type.
  *
  * These methods are the host's own wallet-signing boundary, not RAVN's: implement them by
  * calling your existing wallet/signer (e.g. wagmi's sendTransaction against an injected
  * connector), which already shows its own user-facing confirmation before signing. Do not wire
- * these to an auto-signer with no confirmation step — the widget iframe relays whatever it's
+ * these to an auto-signer with no confirmation step: the widget iframe relays whatever it's
  * asked to relay, so the host implementation is the only place a user gets to see what they're
  * approving.
  */
@@ -30,13 +30,13 @@ export interface RavnWallet {
   switchChain(req: SwitchChainRequest): Promise<{ ok: true }>;
 }
 
-/** Shape check only, not a checksum validation — the host's own wallet library does the real
+/** Shape check only, not a checksum validation: the host's own wallet library does the real
  *  validation before signing. Deliberately not viem's isAddress: this package has zero runtime
  *  dependencies (see package.json), and pulling in a whole wallet library for one regex isn't
  *  worth an integrator's install size. */
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
-/** Rejects malformed payloads before they reach the host's wallet — the widget iframe is the
+/** Rejects malformed payloads before they reach the host's wallet: the widget iframe is the
  *  only source of these, but it's still an arbitrary postMessage across an origin boundary. */
 function validate(type: WalletActionType, payload: unknown): void {
   if (typeof payload !== "object" || payload === null) {
@@ -112,7 +112,7 @@ function dispatch(type: WalletActionType, payload: unknown, wallet: RavnWallet) 
   }
 }
 
-/** What the host must implement to back Solana signing — a separate, independent wallet from RavnWallet (EVM). */
+/** What the host must implement to back Solana signing: a separate, independent wallet from RavnWallet (EVM). */
 export interface RavnSolanaWallet {
   address: string | null;
   signTransaction(req: SolanaSignTransactionRequest): Promise<{ signedTransaction: string }>;

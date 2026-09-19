@@ -1,7 +1,7 @@
 {
   "name": "@ravnexchange/widget-connector",
   "version": "0.1.2",
-  "description": "Host-side postMessage bridge for the RAVN embeddable swap widget — lets the widget iframe use the integrator's already-connected wallet instead of asking to connect a second one.",
+  "description": "Host-side postMessage bridge for the RAVN embeddable swap widget: lets the widget iframe use the integrator's already-connected wallet instead of asking to connect a second one.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": ["dist"],

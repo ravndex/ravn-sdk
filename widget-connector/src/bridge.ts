@@ -21,7 +21,7 @@ export interface CreateRavnWidgetBridgeOptions {
   widgetOrigin: string;
   /** Called on every wallet:* request from the widget. Return null while no EVM wallet is connected. */
   getWallet: () => RavnWallet | null;
-  /** Called on every solana:* request. Independent of getWallet — return null while no Solana wallet is connected. */
+  /** Called on every solana:* request. Independent of getWallet: return null while no Solana wallet is connected. */
   getSolanaWallet?: () => RavnSolanaWallet | null;
   /** Non-wallet config sent once at handshake: theme, allowed tokens, integrator API key, etc. */
   config?: Record<string, unknown>;
@@ -40,7 +40,7 @@ export interface RavnWidgetBridge {
  * Host-side half of the widget postMessage bridge (see sdk/widget-connector/src/protocol.ts for
  * the wire format, and wallet-dispatch.ts for the actual per-action logic). Lets the embedded
  * iframe use whatever wallet is already connected on the host page instead of showing its own
- * connect flow — the widget only falls back to a self-contained connect UI if this bridge never
+ * connect flow: the widget only falls back to a self-contained connect UI if this bridge never
  * responds to its initial "bridge:ready" handshake.
  */
 export function createRavnWidgetBridge(options: CreateRavnWidgetBridgeOptions): RavnWidgetBridge {
@@ -48,7 +48,7 @@ export function createRavnWidgetBridge(options: CreateRavnWidgetBridgeOptions): 
   let lastWallet: WalletState | null = null;
   let lastSolanaWallet: SolanaWalletState | null = null;
   // Guards against the same action envelope being dispatched twice while the first dispatch is
-  // still in flight (a duplicate postMessage delivery, or a buggy double-send from the widget) —
+  // still in flight (a duplicate postMessage delivery, or a buggy double-send from the widget);
   // signing/sending is not idempotent, so a duplicate must be dropped, not re-run.
   const inFlightActionIds = new Set<string>();
 
@@ -93,7 +93,7 @@ export function createRavnWidgetBridge(options: CreateRavnWidgetBridgeOptions): 
 
   return {
     updateWallet(wallet) {
-      // Checked on wallet?.address, not object truthiness — an integrator naively calling
+      // Checked on wallet?.address, not object truthiness: an integrator naively calling
       // updateWallet({ address: account.address ?? null, chainId: ... }) during a brief
       // reconnect/disconnect transition would otherwise pass a non-null OBJECT with a null
       // address, which read as "connected" under a plain `!wallet` check.

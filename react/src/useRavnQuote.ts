@@ -6,13 +6,13 @@ export interface UseRavnQuoteResult {
   quote: QuoteDTO | null;
   isLoading: boolean;
   error: unknown;
-  /** True once quote.expiresAt has passed — stop letting the user sign, call refetch(). */
+  /** True once quote.expiresAt has passed: stop letting the user sign, call refetch(). */
   isExpired: boolean;
   refetch: () => void;
 }
 
 /**
- * Fetches a quote and flips `isExpired` on its own timer when expiresAt passes — no polling,
+ * Fetches a quote and flips `isExpired` on its own timer when expiresAt passes, no polling,
  * just one setTimeout per quote. Pass `params: null` to skip fetching (e.g. amount not entered
  * yet). Does not auto-refetch on expiry: that's a UX choice (silently re-pricing behind a user's
  * back is worse than telling them to ask again), left to the caller.
@@ -57,7 +57,7 @@ export function useRavnQuote(client: RavnClient, params: GetQuoteParams | null):
     return () => {
       cancelled = true;
     };
-    // paramsKey (not params) drives refetch — a fresh object with the same fields shouldn't refire.
+    // paramsKey (not params) drives refetch: a fresh object with the same fields shouldn't refire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, paramsKey, generation]);
 

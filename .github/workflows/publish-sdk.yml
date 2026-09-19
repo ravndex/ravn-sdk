@@ -23,7 +23,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing (OIDC) needs a recent npm CLI (>=11.5.1) — the one bundled with
+      # Trusted publishing (OIDC) needs a recent npm CLI (>=11.5.1); the one bundled with
       # setup-node is too old. npm@latest itself now requires Node >=22.22.2, hence node-version
       # 24 above (this workflow's own choice, not a repo-wide Node version convention).
       - name: Update npm

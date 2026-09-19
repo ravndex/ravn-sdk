@@ -16,7 +16,7 @@ function scriptedFetch(byPath: Record<string, unknown[]>): typeof fetch {
 
 const baseParams = { quoteToken: "qt-1" };
 
-describe("executeAndTrack — TRANSACTION", () => {
+describe("executeAndTrack: TRANSACTION", () => {
   it("waits for the approval receipt before sending the main tx, then polls to terminal", async () => {
     const fetchImpl = scriptedFetch({
       execute: [
@@ -110,7 +110,7 @@ describe("executeAndTrack — TRANSACTION", () => {
   });
 });
 
-describe("executeAndTrack — SIGNATURE", () => {
+describe("executeAndTrack: SIGNATURE", () => {
   it("signs the approval and trade typed data, submits, then polls", async () => {
     const fetchImpl = scriptedFetch({
       execute: [
@@ -141,7 +141,7 @@ describe("executeAndTrack — SIGNATURE", () => {
     expect(result.finalStatus).toEqual({ status: "success", venue: "0x" });
   });
 
-  it("sends and confirms the on-chain approval before signing anything — CoW/Bebop's vault relayer and Permit2 still pull via transferFrom even on a signed order", async () => {
+  it("sends and confirms the on-chain approval before signing anything: CoW/Bebop's vault relayer and Permit2 still pull via transferFrom even on a signed order", async () => {
     const fetchImpl = scriptedFetch({
       execute: [
         {
@@ -203,8 +203,8 @@ describe("executeAndTrack — SIGNATURE", () => {
   });
 });
 
-describe("executeAndTrack — DEPOSIT", () => {
-  it("returns immediately without polling — the deposit itself happens out-of-band", async () => {
+describe("executeAndTrack: DEPOSIT", () => {
+  it("returns immediately without polling: the deposit itself happens out-of-band", async () => {
     const fetchImpl = scriptedFetch({
       execute: [{ executionType: "DEPOSIT", deposit: { address: "bc1q...", amount: "100000" }, statusRef: "dep-1" }],
     });
