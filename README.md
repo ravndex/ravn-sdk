@@ -45,6 +45,10 @@ version, for quick manual testing only; don't embed that one in production.
   enforced entirely at the application layer (the `?origin=` parameter plus the bridge's
   origin+source checks on every message), not by browser framing headers.
 
+## Examples
+
+Runnable, verified-working code for each package in [`examples/`](./examples): a Node script, a Python script, a React hooks snippet, and a plain-HTML widget embed.
+
 ## API reference
 
 The full OpenAPI spec for `/api/v1` is published at [docs.ravn.exchange](https://docs.ravn.exchange).

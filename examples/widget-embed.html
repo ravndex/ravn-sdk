@@ -1,0 +1,74 @@
+<!--
+  Open this file directly in a browser (no build step). Requires an injected EVM wallet
+  (MetaMask, etc.) on the page. Demonstrates wiring @ravnexchange/widget-connector's bridge to
+  a real wallet so the RAVN widget iframe can use it instead of asking users to connect twice.
+
+  For a wagmi/RainbowKit app, use wallet-connector's exported wagmi connector or the
+  bridge-solana-adapter instead of hand-rolling window.ethereum calls like this example does.
+-->
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>RAVN widget embed example</title>
+  </head>
+  <body>
+    <button id="connect">Connect wallet</button>
+    <iframe
+      id="ravn-widget"
+      src="https://app.ravn.exchange/widget/v1?origin=https://your-site.example"
+      sandbox="allow-scripts allow-same-origin allow-forms"
+      style="width: 420px; height: 640px; border: none"
+    ></iframe>
+
+    <script type="module">
+      import { createRavnWidgetBridge } from "https://esm.sh/@ravnexchange/widget-connector";
+
+      const iframe = document.getElementById("ravn-widget");
+      let account = null;
+
+      const bridge = createRavnWidgetBridge({
+        iframe,
+        widgetOrigin: "https://app.ravn.exchange", // never "*"; see the root README
+        getWallet: () =>
+          account && {
+            address: account,
+            chainId: 1,
+            async sendTransaction(tx) {
+              return window.ethereum.request({
+                method: "eth_sendTransaction",
+                params: [{ from: account, to: tx.to, data: tx.data, value: tx.value }],
+              });
+            },
+            async signTypedData({ typedData }) {
+              const signature = await window.ethereum.request({
+                method: "eth_signTypedData_v4",
+                params: [account, JSON.stringify(typedData)],
+              });
+              return { signature };
+            },
+            async signMessage({ message }) {
+              const signature = await window.ethereum.request({
+                method: "personal_sign",
+                params: [message, account],
+              });
+              return { signature };
+            },
+            async switchChain({ chainId }) {
+              await window.ethereum.request({
+                method: "wallet_switchEthereumChain",
+                params: [{ chainId: `0x${chainId.toString(16)}` }],
+              });
+              return { ok: true };
+            },
+          },
+      });
+
+      document.getElementById("connect").addEventListener("click", async () => {
+        const [address] = await window.ethereum.request({ method: "eth_requestAccounts" });
+        account = address;
+        bridge.updateWallet({ address, chainId: 1 });
+      });
+    </script>
+  </body>
+</html>

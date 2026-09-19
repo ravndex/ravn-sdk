@@ -28,8 +28,10 @@ try:
         "inputToken": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
         "outputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "inputAmount": "1000000000000000000",
-        "userAddress": "0xYourAddress",
-        "destinationAddress": "0xYourAddress",
+        # Must be a real 0x-prefixed 40-hex-char address: a malformed one fails as NO_LIQUIDITY,
+        # not a clear validation error.
+        "userAddress": "0xYourWalletAddress",
+        "destinationAddress": "0xYourWalletAddress",
     })
 except RavnApiError as e:
     print(e.code, str(e))
