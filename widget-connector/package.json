@@ -1,13 +1,14 @@
 {
   "name": "@ravnexchange/widget-connector",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Host-side postMessage bridge for the RAVN embeddable swap widget: lets the widget iframe use the integrator's already-connected wallet instead of asking to connect a second one.",
+  "keywords": ["ravn", "cross-chain", "swap", "swap-api", "dex-aggregator", "bitcoin", "native-btc", "solana", "evm", "crypto", "defi", "widget", "iframe", "wallet", "postmessage"],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": ["dist"],
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/ravndex/ravn-sdk.git", "directory": "widget-connector" },
-  "homepage": "https://github.com/ravndex/ravn-sdk#readme",
+  "homepage": "https://ravn.exchange",
   "publishConfig": { "access": "public" },
   "scripts": {
     "build": "tsc -p tsconfig.build.json"
