@@ -1,6 +1,6 @@
 {
   "name": "@ravnexchange/sdk",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Typed client for the RAVN integrator API (/api/v1): quote, execute, submit-signature, status.",
   "keywords": ["ravn", "cross-chain", "swap", "swap-api", "dex-aggregator", "bitcoin", "native-btc", "solana", "evm", "crypto", "defi", "typescript", "sdk", "api-client"],
   "main": "./dist/index.js",

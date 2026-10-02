@@ -130,12 +130,14 @@ class RavnClient:
         return self._request("/execute", "POST", dict(params))
 
     def submit_signature(self, params: SubmitSignatureParams) -> Dict[str, Any]:
-        """POST /v1/submit-signature: SIGNATURE-type executions only. Returns {"statusRef": ...}
-        to poll get_status with."""
+        """POST /v1/submit-signature: SIGNATURE-type executions only. Pass the quoteToken execute
+        returned, not the quote's own (compose refuses it). Returns {"statusRef": ...} to poll
+        get_status with."""
         return self._request("/submit-signature", "POST", dict(params))
 
     def get_status(self, quote_token: str, ref: str) -> Dict[str, Any]:
-        """GET /v1/status: ref is the DEPOSIT address or the statusRef from submit_signature."""
+        """GET /v1/status: pass the quoteToken execute returned (not the quote's own), and as ref
+        the execution's statusRef, submit_signature's statusRef, or the origin tx hash."""
         qs = urllib.parse.urlencode({"quoteToken": quote_token, "ref": ref})
         return self._request(f"/status?{qs}")
 

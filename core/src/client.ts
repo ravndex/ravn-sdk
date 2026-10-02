@@ -86,7 +86,8 @@ export class RavnClient {
     });
   }
 
-  /** GET /v1/status: `ref` is the DEPOSIT address or the statusRef from submitSignature. */
+  /** GET /v1/status: pass the quoteToken execute() returned (not the quote's own), and as `ref`
+   * the execution's statusRef, submitSignature's statusRef, or the origin tx hash. */
   getStatus(quoteToken: string, ref: string): Promise<StatusDTO> {
     const qs = new URLSearchParams({ quoteToken, ref }).toString();
     return this.request<StatusDTO>(`/status?${qs}`, { method: "GET" });
