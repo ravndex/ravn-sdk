@@ -41,8 +41,8 @@ else:
 ```
 
 Pass `"sandbox": True` on `get_quote` to test the full quote → execute → status flow with no
-real funds; see the API's own docs for per-venue exceptions (THORChain BTC-source and
-Chainflip can't be sandboxed).
+real funds; see the API's own docs for per-venue exceptions (THORChain BTC-source,
+Chainflip, and Houdini Swap can't be sandboxed).
 
 ## Status
 

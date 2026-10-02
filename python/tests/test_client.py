@@ -73,6 +73,18 @@ class RavnClientTest(unittest.TestCase):
             client.get_status("tok", "ref")
         self.assertEqual(ctx.exception.code, "INTERNAL")
 
+    def test_get_status_posts_json_body(self):
+        seen = {}
+
+        def _urlopen(req):
+            seen["url"], seen["method"], seen["body"] = req.full_url, req.get_method(), req.data
+            return FakeResponse({"data": {"status": "success", "venue": "relay"}})
+
+        RavnClient(urlopen=_urlopen).get_status("tok", "0xref")
+        self.assertEqual(seen["url"], "https://app.ravn.exchange/api/v1/status")
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(json.loads(seen["body"]), {"quoteToken": "tok", "ref": "0xref"})
+
     def test_get_chains_returns_list(self):
         client = RavnClient(urlopen=fake_urlopen_returning({"data": [{"chainId": 1}]}))
         self.assertEqual(client.get_chains(), [{"chainId": 1}])

@@ -86,11 +86,14 @@ export class RavnClient {
     });
   }
 
-  /** GET /v1/status: pass the quoteToken execute() returned (not the quote's own), and as `ref`
-   * the execution's statusRef, submitSignature's statusRef, or the origin tx hash. */
+  /** POST /v1/status: pass the quoteToken execute() returned (not the quote's own), and as `ref`
+   * the execution's statusRef, submitSignature's statusRef, or the origin tx hash. POST, not GET:
+   * a 2-hop quoteToken in a query string can exceed header limits and fail with 431. */
   getStatus(quoteToken: string, ref: string): Promise<StatusDTO> {
-    const qs = new URLSearchParams({ quoteToken, ref }).toString();
-    return this.request<StatusDTO>(`/status?${qs}`, { method: "GET" });
+    return this.request<StatusDTO>("/status", {
+      method: "POST",
+      body: JSON.stringify({ quoteToken, ref }),
+    });
   }
 
   /** GET /v1/tokens: RAVN's listed token registry for one chain. Not a per-pair routability guarantee. */
