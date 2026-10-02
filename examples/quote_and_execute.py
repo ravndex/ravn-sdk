@@ -34,6 +34,9 @@ else:
         f"{quote['output']['amount']} {quote['output']['token']['symbol']} via {quote['venue']['name']}, "
         f"executable={quote['executable']}"
     )
+    # Rift enforces no minimum output: slippage.bps is then not a protection. Tell the user.
+    if (quote.get("slippage") or {}).get("noMinimum"):
+        print("No guaranteed minimum: the venue fills at its own rate, so you may receive more or less than quoted.")
     if quote["executable"]:
         # Real usage: execution = client.execute({"quoteToken": quote["quoteToken"]})
         # then branch on execution["executionType"] and hand it to your own signer.

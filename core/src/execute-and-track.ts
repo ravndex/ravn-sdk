@@ -36,7 +36,11 @@ export interface ExecuteAndTrackResult {
   execution: ExecutionDTO;
   approvalTxHash?: string;
   txHash?: string;
-  /** Pass to client.getStatus(quoteToken, ref): same value as txHash for TRANSACTION. */
+  /** Pass to client.getStatus(quoteToken, statusRef). Same as `execution.quoteToken`, NOT the
+   * quote's own token: on compose (2-hop) quotes execute rebinds hop 1 onto hop 2's deposit. */
+  quoteToken: string;
+  /** Pass to client.getStatus(quoteToken, statusRef). For TRANSACTION, the execution's own
+   * statusRef when it has one (compose), else txHash. */
   statusRef?: string;
   /** Set once pollUntilTerminal reaches a terminal status. Absent for DEPOSIT (see below) or when polling is turned off. */
   finalStatus?: StatusDTO;
@@ -56,11 +60,12 @@ export async function executeAndTrack(
 ): Promise<ExecuteAndTrackResult> {
   const { pollUntilTerminal = true, pollIntervalMs = 4_000 } = options;
   const execution = await client.execute(params);
+  const { quoteToken } = execution;
 
   const pollStatus = async (ref: string): Promise<StatusDTO | undefined> => {
     if (!pollUntilTerminal) return undefined;
     for (;;) {
-      const status = await client.getStatus(params.quoteToken, ref);
+      const status = await client.getStatus(quoteToken, ref);
       if (isPollingTerminal(status.status)) return status;
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
@@ -79,7 +84,8 @@ export async function executeAndTrack(
   if (execution.executionType === "TRANSACTION") {
     const approvalTxHash = await maybeSendApproval(execution.approval);
     const txHash = await handlers.sendTransaction(execution.transaction);
-    return { execution, approvalTxHash, txHash, statusRef: txHash, finalStatus: await pollStatus(txHash) };
+    const statusRef = execution.statusRef ?? txHash;
+    return { execution, quoteToken, approvalTxHash, txHash, statusRef, finalStatus: await pollStatus(statusRef) };
   }
 
   if (execution.executionType === "SIGNATURE") {
@@ -99,12 +105,12 @@ export async function executeAndTrack(
       approvalSignature = await handlers.signTypedData(execution.approvalData);
     }
     const signature = await handlers.signTypedData(execution.typedData);
-    const { statusRef } = await client.submitSignature({ quoteToken: params.quoteToken, signature, approvalSignature });
-    return { execution, approvalTxHash, statusRef, finalStatus: await pollStatus(statusRef) };
+    const { statusRef } = await client.submitSignature({ quoteToken, signature, approvalSignature });
+    return { execution, quoteToken, approvalTxHash, statusRef, finalStatus: await pollStatus(statusRef) };
   }
 
   // DEPOSIT: nothing to sign or send from here; the user moves funds to execution.deposit.address
   // out-of-band, and this helper has no way to know when that happens. Returned without polling;
   // start polling yourself (getStatus / useRavnStatus) once the deposit is actually sent.
-  return { execution, statusRef: execution.statusRef };
+  return { execution, quoteToken, statusRef: execution.statusRef };
 }

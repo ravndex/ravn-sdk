@@ -15,6 +15,12 @@ Real npm workspaces (root `package.json`'s `workspaces` field) plus a per-packag
 
 The widget iframe page itself, and the rest of RAVN's routing/execution engine, live in RAVN's main application, which is closed source. This repo only carries the client-side pieces an integrator embeds in their own project.
 
+## Reading a quote
+
+- **`slippage.noMinimum`**: `true` means the venue enforces no minimum output (today: Rift, which fills at its own best rate once the deposit lands). `slippage.bps` is then not a protection and the user can receive more or less than `output.amount`. Show this before the user sends funds. Alternatives carry the same field.
+- **`hops`**: present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. The user signs hop 1 only.
+- **After `execute()`**: poll `getStatus` with the `quoteToken` that `execute()` returned, not the quote's own (compose rebinds it), and the execution's `statusRef` when present. `executeAndTrack()` does both and returns them.
+
 ## Embedding the widget
 
 Point the `<iframe>` at `/widget/v1?origin=<your exact page origin>`. The version segment is

@@ -21,7 +21,7 @@ describe("executeAndTrack: TRANSACTION", () => {
     const fetchImpl = scriptedFetch({
       execute: [
         {
-          executionType: "TRANSACTION",
+          executionType: "TRANSACTION", quoteToken: "qt-exec",
           approval: { to: "0xSpender", data: "0xapprove", value: "0", chainId: 1 },
           transaction: { to: "0xRouter", data: "0xswap", value: "0", chainId: 1 },
         },
@@ -29,6 +29,7 @@ describe("executeAndTrack: TRANSACTION", () => {
       status: [{ status: "pending", venue: "across" }, { status: "success", venue: "across" }],
     });
     const client = new RavnClient({ fetch: fetchImpl });
+    const getStatusSpy = vi.spyOn(client, "getStatus");
 
     const order: string[] = [];
     const handlers = {
@@ -47,11 +48,32 @@ describe("executeAndTrack: TRANSACTION", () => {
     expect(result.approvalTxHash).toBe("0xApprovalHash");
     expect(result.txHash).toBe("0xMainHash");
     expect(result.finalStatus).toEqual({ status: "success", venue: "across" });
+    // Execute's own token, not the quote's: compose rebinds it at execute.
+    expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", "0xMainHash");
+    expect(result.quoteToken).toBe("qt-exec");
+  });
+
+  it("polls the execution's statusRef instead of the tx hash when it has one (compose)", async () => {
+    const fetchImpl = scriptedFetch({
+      execute: [
+        { executionType: "TRANSACTION", quoteToken: "qt-bound", statusRef: "compose-ref", transaction: { to: "0xRouter" } },
+      ],
+      status: [{ status: "success", venue: "compose" }],
+    });
+    const client = new RavnClient({ fetch: fetchImpl });
+    const getStatusSpy = vi.spyOn(client, "getStatus");
+    const handlers = { sendTransaction: vi.fn(async () => "0xMainHash"), waitForReceipt: vi.fn(async () => {}) };
+
+    const result = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
+
+    expect(getStatusSpy).toHaveBeenCalledWith("qt-bound", "compose-ref");
+    expect(result.statusRef).toBe("compose-ref");
+    expect(result.txHash).toBe("0xMainHash");
   });
 
   it("skips the approval step entirely when the execution has none", async () => {
     const fetchImpl = scriptedFetch({
-      execute: [{ executionType: "TRANSACTION", transaction: { to: "0xRouter", data: "0xswap" } }],
+      execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xRouter", data: "0xswap" } }],
       status: [{ status: "success", venue: "relay" }],
     });
     const client = new RavnClient({ fetch: fetchImpl });
@@ -71,7 +93,7 @@ describe("executeAndTrack: TRANSACTION", () => {
     const fetchImpl = scriptedFetch({
       execute: [
         {
-          executionType: "TRANSACTION",
+          executionType: "TRANSACTION", quoteToken: "qt-exec",
           approval: { to: "0xSpender", data: "0xapprove", value: "0", chainId: 1 },
           transaction: { to: "0xRouter", data: "0xswap" },
         },
@@ -95,7 +117,7 @@ describe("executeAndTrack: TRANSACTION", () => {
 
   it("does not poll when pollUntilTerminal is false", async () => {
     const fetchImpl = scriptedFetch({
-      execute: [{ executionType: "TRANSACTION", transaction: { to: "0xRouter", data: "0xswap" } }],
+      execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xRouter", data: "0xswap" } }],
       status: [{ status: "pending", venue: "relay" }],
     });
     const client = new RavnClient({ fetch: fetchImpl });
@@ -115,7 +137,7 @@ describe("executeAndTrack: SIGNATURE", () => {
     const fetchImpl = scriptedFetch({
       execute: [
         {
-          executionType: "SIGNATURE",
+          executionType: "SIGNATURE", quoteToken: "qt-exec",
           approvalData: { domain: {}, types: {}, primaryType: "Permit", message: {} },
           typedData: { domain: {}, types: {}, primaryType: "Order", message: {} },
           submit: { url: "/submit-signature" },
@@ -125,6 +147,8 @@ describe("executeAndTrack: SIGNATURE", () => {
       status: [{ status: "success", venue: "0x" }],
     });
     const client = new RavnClient({ fetch: fetchImpl });
+    const submitSpy = vi.spyOn(client, "submitSignature");
+    const getStatusSpy = vi.spyOn(client, "getStatus");
     const signTypedData = vi.fn(async (d: { primaryType: string }) =>
       d.primaryType === "Permit" ? "0xApprovalSig" : "0xTradeSig"
     );
@@ -139,13 +163,16 @@ describe("executeAndTrack: SIGNATURE", () => {
     expect(signTypedData).toHaveBeenCalledTimes(2);
     expect(result.statusRef).toBe("ref-1");
     expect(result.finalStatus).toEqual({ status: "success", venue: "0x" });
+    // Compose SIGNATURE quotes are refused at submit-signature unless given execute's token.
+    expect(submitSpy).toHaveBeenCalledWith(expect.objectContaining({ quoteToken: "qt-exec" }));
+    expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", "ref-1");
   });
 
   it("sends and confirms the on-chain approval before signing anything: CoW/Bebop's vault relayer and Permit2 still pull via transferFrom even on a signed order", async () => {
     const fetchImpl = scriptedFetch({
       execute: [
         {
-          executionType: "SIGNATURE",
+          executionType: "SIGNATURE", quoteToken: "qt-exec",
           approval: { to: "0xVaultRelayer", data: "0xapprove", value: "0", chainId: 1 },
           typedData: { domain: {}, types: {}, primaryType: "Order", message: {} },
           submit: { url: "/submit-signature" },
@@ -178,7 +205,7 @@ describe("executeAndTrack: SIGNATURE", () => {
 
   it("throws when the execution needs a signature but no signer was given", async () => {
     const fetchImpl = scriptedFetch({
-      execute: [{ executionType: "SIGNATURE", typedData: {}, submit: { url: "/submit-signature" } }],
+      execute: [{ executionType: "SIGNATURE", quoteToken: "qt-exec", typedData: {}, submit: { url: "/submit-signature" } }],
     });
     const client = new RavnClient({ fetch: fetchImpl });
 
@@ -190,7 +217,7 @@ describe("executeAndTrack: SIGNATURE", () => {
   it("checks for missing typedData before ever prompting a signature for approvalData", async () => {
     const fetchImpl = scriptedFetch({
       execute: [
-        { executionType: "SIGNATURE", approvalData: { primaryType: "Permit" }, submit: { url: "/submit-signature" } },
+        { executionType: "SIGNATURE", quoteToken: "qt-exec", approvalData: { primaryType: "Permit" }, submit: { url: "/submit-signature" } },
       ],
     });
     const client = new RavnClient({ fetch: fetchImpl });
@@ -206,7 +233,7 @@ describe("executeAndTrack: SIGNATURE", () => {
 describe("executeAndTrack: DEPOSIT", () => {
   it("returns immediately without polling: the deposit itself happens out-of-band", async () => {
     const fetchImpl = scriptedFetch({
-      execute: [{ executionType: "DEPOSIT", deposit: { address: "bc1q...", amount: "100000" }, statusRef: "dep-1" }],
+      execute: [{ executionType: "DEPOSIT", quoteToken: "qt-exec", deposit: { address: "bc1q...", amount: "100000" }, statusRef: "dep-1" }],
     });
     const client = new RavnClient({ fetch: fetchImpl });
     const getStatusSpy = vi.spyOn(client, "getStatus");
@@ -215,6 +242,7 @@ describe("executeAndTrack: DEPOSIT", () => {
 
     expect(getStatusSpy).not.toHaveBeenCalled();
     expect(result.statusRef).toBe("dep-1");
+    expect(result.quoteToken).toBe("qt-exec");
     expect(result.finalStatus).toBeUndefined();
   });
 });

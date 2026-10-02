@@ -49,7 +49,8 @@ export function SwapWidget() {
       { pollUntilTerminal: false } // this example polls via useRavnStatus instead
     );
     if (result.statusRef) {
-      setStatusRef({ quoteToken: quote.quoteToken, ref: result.statusRef });
+      // execute's own quoteToken, not quote.quoteToken: compose (2-hop) quotes are rebound at execute.
+      setStatusRef({ quoteToken: result.quoteToken, ref: result.statusRef });
     }
   }
 

@@ -1,9 +1,9 @@
 /**
  * Wire types for RAVN's public /api/v1 surface. Deliberately a standalone mirror of
  * src/lib/api/v1/dto.ts's public DTOs, not an import from it: this package ships to npm on
- * its own and can't depend on the app's internal source tree. Keep these two in sync by hand
- * when the API's public contract changes; that file's own comment already promises the shape
- * is frozen for third parties, so drift should be rare.
+ * its own and can't depend on the app's internal source tree. The app type-checks this copy
+ * against its own DTOs (dto-sdk-parity.ts), so a change on either side that isn't mirrored here
+ * fails the app's build.
  */
 
 export interface TokenDTO {
@@ -28,7 +28,7 @@ export interface QuoteDTO {
   fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
   /** False means this is a preview-only price; see RavnClient.getQuote's destinationAddress note. */
   executable: boolean;
-  slippage: { bps: number; isFirm: boolean; guaranteedMin: string | null } | null;
+  slippage: SlippageDTO | null;
   gas: { native: string; nativeSymbol: string; usd: string | null; estimated: boolean } | null;
   /** Same price source as `gas.usd`. Null when the token can't be priced. */
   inputUsd: string | null;
@@ -36,6 +36,9 @@ export interface QuoteDTO {
   estimatedTimeSeconds: number;
   estimatedTimeIsGuess: boolean;
   expiresAt: number;
+  /** Present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. Sign hop 1; hop 2 is
+   * a unique deposit, not a second wallet tx. */
+  hops?: { id: string; name: string }[];
   /** Every other venue that raced and produced a usable quote, best output first. */
   alternatives: AlternativeQuoteDTO[];
 }
@@ -46,10 +49,30 @@ export interface AlternativeQuoteDTO {
   /** Pass to execute() to run THIS route instead of the primary quote. */
   quoteToken: string;
   outputAmount: string;
-  fee: { bps: number; amount: string; supported: boolean };
+  /** `amount` is in `token`'s base units: the output token everywhere except Fly Trade and
+   * Mayan, which deduct their fee from the input token. */
+  fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
   executable: boolean;
   estimatedTimeSeconds: number;
   estimatedTimeIsGuess: boolean;
+  hops?: { id: string; name: string }[];
+  /** Same as QuoteDTO.slippage: an alternative can be executed, so it needs the same warning. */
+  slippage: SlippageDTO | null;
+}
+
+/**
+ * The slippage protection on a quote. `isFirm`: a firm RFQ price, no slippage possible.
+ * `guaranteedMin`: the minimum output in the output token's base units, when the venue exposes it.
+ *
+ * `noMinimum: true` means the venue enforces NO minimum output (Rift: it fills at its own best
+ * rate once the deposit lands), so `bps` is not a protection and the user can receive more or
+ * less than the quoted output. Show that to the user before they send funds.
+ */
+export interface SlippageDTO {
+  bps: number;
+  isFirm: boolean;
+  guaranteedMin: string | null;
+  noMinimum: boolean;
 }
 
 export interface ChainDTO {
@@ -74,6 +97,11 @@ export interface ApprovalDTO {
 export type ExecutionDTO =
   | {
       executionType: "TRANSACTION";
+      /** Pass this, not the quote's own token, to getStatus. Compose: the post-bind token. */
+      quoteToken: string;
+      /** Poll getStatus with this when present (compose: the packed hop-2 handle). Otherwise
+       * use the origin tx hash. */
+      statusRef?: string;
       approval?: ApprovalDTO;
       transaction: {
         to?: string;
@@ -85,6 +113,9 @@ export type ExecutionDTO =
     }
   | {
       executionType: "SIGNATURE";
+      /** Pass this, not the quote's own token, to submitSignature and getStatus. */
+      quoteToken: string;
+      statusRef?: string;
       approval?: ApprovalDTO;
       typedData?: Record<string, unknown>;
       approvalData?: Record<string, unknown>;
@@ -92,7 +123,12 @@ export type ExecutionDTO =
     }
   | {
       executionType: "DEPOSIT";
-      deposit: { address: string; amount: string; chainId?: number };
+      /** Pass this, not the quote's own token, to getStatus. */
+      quoteToken: string;
+      /** `expiresAt` (ISO 8601), when set, is when the deposit must have ARRIVED (confirmed on
+       * the origin chain) by. A later deposit lands at an expired order. */
+      deposit: { address: string; amount: string; chainId?: number; expiresAt?: string };
+      /** Poll getStatus with this, not `deposit.address`. */
       statusRef: string;
     };
 

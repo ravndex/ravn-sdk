@@ -31,6 +31,11 @@ console.log(
     ` via ${quote.venue.name}, executable=${quote.executable}`
 );
 
+// Rift enforces no minimum output: slippage.bps is then not a protection. Tell the user.
+if (quote.slippage?.noMinimum) {
+  console.log("No guaranteed minimum: the venue fills at its own rate, so you may receive more or less than quoted.");
+}
+
 if (quote.executable) {
   // Real usage: const execution = await client.execute({ quoteToken: quote.quoteToken });
   // then branch on execution.executionType (TRANSACTION / SIGNATURE / DEPOSIT) and hand it to
