@@ -18,7 +18,7 @@ export function isPermanentError(err: unknown): boolean {
 }
 
 /**
- * Polls GET /v1/status until it reaches a terminal state (see isPollingTerminal: "unknown"
+ * Polls /v1/status until it reaches a terminal state (see isPollingTerminal: "unknown"
  * counts as terminal, it means the venue has no live tracker and never will for this swap).
  * Pass `params: null` to not poll at all (e.g. before execution has produced a ref).
  */

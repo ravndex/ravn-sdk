@@ -168,6 +168,16 @@ export interface GetQuoteParams {
   rankingMode?: "best_output" | "fastest";
   /** Drop specific venues from this race, e.g. a risk objection to one of them. */
   excludeVenues?: string[];
+  /** Settle privately: the race narrows to NEAR Intents (Confidential Intents) and Houdini Swap,
+   * and NO_LIQUIDITY replaces a public fill if neither can quote. Houdini is sent the request's IP,
+   * user-agent and clientTimezone for compliance screening; its terms bar US persons and
+   * sanctioned jurisdictions, and you own your users' eligibility (excludeVenues: ["houdini"]). */
+  confidential?: boolean;
+  /** Your end user's IANA timezone (e.g. "Europe/Berlin"), forwarded only to Houdini. Default UTC. */
+  clientTimezone?: string;
+  /** Optional analytics handle: send the same value while re-pricing one swap so it counts as one
+   * intent. Never affects pricing, routing or fees. Max 64 chars. */
+  quoteSessionId?: string;
   /** Test quote -> execute -> status with no real funds and no live venue settlement. See
    * the API's own sandbox field description for per-venue/per-route exceptions. */
   sandbox?: boolean;
@@ -175,8 +185,12 @@ export interface GetQuoteParams {
 
 export interface ExecuteParams {
   quoteToken: string;
+  /** Only venues that bind the recipient at execute (Chainflip, Houdini Swap, Layerswap, Mayan,
+   * NEAR Intents, Rift) accept a new one; elsewhere a different address is INVALID_REQUEST. */
   destinationAddress?: string;
   refundAddress?: string;
+  /** Your end user's IANA timezone, forwarded only to Houdini. Default UTC. */
+  clientTimezone?: string;
 }
 
 export interface SubmitSignatureParams {

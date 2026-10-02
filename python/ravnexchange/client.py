@@ -51,6 +51,11 @@ class GetQuoteParams(TypedDict, total=False):
     slippageBps: int
     rankingMode: str
     excludeVenues: List[str]
+    # Private swap: NEAR Intents + Houdini Swap only. See the API's /quote docs for Houdini's
+    # compliance rules (it is sent the request's IP, user-agent and clientTimezone).
+    confidential: bool
+    clientTimezone: str  # end user's IANA timezone, forwarded only to Houdini; default UTC
+    quoteSessionId: str  # analytics only: same value while re-pricing one swap, max 64 chars
     sandbox: bool
 
 
@@ -58,6 +63,7 @@ class ExecuteParams(TypedDict, total=False):
     quoteToken: str
     destinationAddress: str
     refundAddress: str
+    clientTimezone: str
 
 
 class SubmitSignatureParams(TypedDict, total=False):
@@ -136,10 +142,10 @@ class RavnClient:
         return self._request("/submit-signature", "POST", dict(params))
 
     def get_status(self, quote_token: str, ref: str) -> Dict[str, Any]:
-        """GET /v1/status: pass the quoteToken execute returned (not the quote's own), and as ref
-        the execution's statusRef, submit_signature's statusRef, or the origin tx hash."""
-        qs = urllib.parse.urlencode({"quoteToken": quote_token, "ref": ref})
-        return self._request(f"/status?{qs}")
+        """POST /v1/status: pass the quoteToken execute returned (not the quote's own), and as ref
+        the execution's statusRef, submit_signature's statusRef, or the origin tx hash. POST, not
+        GET: a 2-hop quoteToken in a query string can exceed header limits and fail with 431."""
+        return self._request("/status", "POST", {"quoteToken": quote_token, "ref": ref})
 
     def get_tokens(self, chain_id: int) -> List[Dict[str, Any]]:
         """GET /v1/tokens: RAVN's listed token registry for one chain. Not a per-pair

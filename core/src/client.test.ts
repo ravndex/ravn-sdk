@@ -23,6 +23,18 @@ describe("RavnClient", () => {
     expect((init.headers as Record<string, string>)["x-api-key"]).toBe("test-key");
   });
 
+  it("POSTs status as a JSON body, not a query string (a 2-hop quoteToken can 431 a GET)", async () => {
+    const fetchImpl = fakeFetch(200, { data: { status: "success", venue: "relay" } });
+    const client = new RavnClient({ fetch: fetchImpl });
+
+    await client.getStatus("tok", "0xref");
+
+    const [url, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe("https://app.ravn.exchange/api/v1/status");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ quoteToken: "tok", ref: "0xref" });
+  });
+
   it("omits x-api-key when no key is configured (anonymous tier)", async () => {
     const fetchImpl = fakeFetch(200, { data: {} });
     const client = new RavnClient({ fetch: fetchImpl });
