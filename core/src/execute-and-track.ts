@@ -40,7 +40,7 @@ export interface ExecuteAndTrackResult {
    * quote's own token: on compose (2-hop) quotes execute rebinds hop 1 onto hop 2's deposit. */
   quoteToken: string;
   /** Pass to client.getStatus(quoteToken, statusRef). For TRANSACTION, the execution's own
-   * statusRef when it has one (compose), else txHash. */
+   * statusRef when it has one (compose, Garden, Relay), else txHash: not always a tx hash. */
   statusRef?: string;
   /** Set once pollUntilTerminal reaches a terminal status. Absent for DEPOSIT (see below) or when polling is turned off. */
   finalStatus?: StatusDTO;

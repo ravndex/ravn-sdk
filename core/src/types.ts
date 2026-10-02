@@ -99,8 +99,8 @@ export type ExecutionDTO =
       executionType: "TRANSACTION";
       /** Pass this, not the quote's own token, to getStatus. Compose: the post-bind token. */
       quoteToken: string;
-      /** Poll getStatus with this when present (compose: the packed hop-2 handle). Otherwise
-       * use the origin tx hash. */
+      /** The venue's own tracking key (compose hop-2 handle, Garden order id, Relay request id).
+       * Poll getStatus with this when present; otherwise use the origin tx hash. */
       statusRef?: string;
       approval?: ApprovalDTO;
       transaction: {
