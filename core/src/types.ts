@@ -38,7 +38,9 @@ export interface QuoteDTO {
   /** Epoch ms, always a real time: execute() on `quoteToken` before this, re-quote after. Never
    * refused for age before it; past it most routes fail with QUOTE_EXPIRED. Already 5 s ahead of
    * the venue's own deadline, so compare it to the clock as is. 2-hop routes
-   * (`venue.id === "compose"`, re-priced at execute) and venues with no deadline get 60 s. */
+   * (`venue.id === "compose"`) and venues with no deadline are never refused for age: it's 60 s
+   * from the response, when to re-quote. A 2-hop route re-prices at execute (BUILD_FAILED if the
+   * minimum shown can no longer be met). */
   expiresAt: number;
   /** Present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. Sign hop 1; hop 2 is
    * a unique deposit, not a second wallet tx. */
