@@ -35,9 +35,10 @@ export interface QuoteDTO {
   outputUsd: string | null;
   estimatedTimeSeconds: number;
   estimatedTimeIsGuess: boolean;
-  /** Epoch ms: execute() on `quoteToken` must reach RAVN before this, or it fails with
-   * QUOTE_EXPIRED. Already 5 s ahead of the venue's own deadline, so compare it to the clock as
-   * is. 0 means no deadline. A 2-hop route (`venue.id === "compose"`) re-prices at execute instead. */
+  /** Epoch ms, always a real time: execute() on `quoteToken` before this, re-quote after. Never
+   * refused for age before it; past it most routes fail with QUOTE_EXPIRED. Already 5 s ahead of
+   * the venue's own deadline, so compare it to the clock as is. 2-hop routes
+   * (`venue.id === "compose"`, re-priced at execute) and venues with no deadline get 60 s. */
   expiresAt: number;
   /** Present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. Sign hop 1; hop 2 is
    * a unique deposit, not a second wallet tx. */
