@@ -119,6 +119,10 @@ export type ExecutionDTO =
         chainId?: number;
         serialized?: string;
       };
+      /** Only on quotes made with `broadcastViaRavn: true`. Don't broadcast this one: sign
+       * `transaction.serialized` and pass it to submitTransaction, which checks the signed
+       * transaction still pays Layerswap the way it matches deposits, then sends it. */
+      submit?: { url: string };
     }
   | {
       executionType: "SIGNATURE";
@@ -190,6 +194,12 @@ export interface GetQuoteParams {
   /** Test quote -> execute -> status with no real funds and no live venue settlement. See
    * the API's own sandbox field description for per-venue/per-route exceptions. */
   sandbox?: boolean;
+  /** Set if you can post a signed Solana transaction back (submitTransaction) instead of
+   * broadcasting it yourself. Adds Layerswap's memo routes (Solana tokens into native BTC or
+   * Robinhood Chain stocks, no account rent), which only work when RAVN checks the signed
+   * transaction first: a TRANSACTION execution carrying `submit` must go through
+   * submitTransaction. executeAndTrack does this when given signSolanaTransaction. */
+  broadcastViaRavn?: boolean;
 }
 
 export interface ExecuteParams {
@@ -206,6 +216,13 @@ export interface SubmitSignatureParams {
   quoteToken: string;
   signature: `0x${string}`;
   approvalSignature?: `0x${string}`;
+}
+
+export interface SubmitTransactionParams {
+  /** The quoteToken execute() returned with that transaction, not the quote's own. */
+  quoteToken: string;
+  /** `transaction.serialized` after your user's wallet signed it, base64. */
+  signedTransaction: string;
 }
 
 export interface ErrorMeta {

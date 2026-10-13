@@ -1,7 +1,7 @@
 """Typed client for RAVN's public /api/v1 surface.
 
 Deliberately a standalone mirror of @ravnexchange/sdk's RavnClient
-(sdk/core/src/client.ts): same scope (quote, execute, submit-signature, status, tokens,
+(sdk/core/src/client.ts): same scope (quote, execute, submit-signature, submit-transaction, status, tokens,
 chains), same envelope-unwrapping/error-throwing behavior, snake_cased. Keep the two in sync
 by hand when the API's public contract changes; ships to PyPI on its own and can't import
 from the TS package or the app's internal source tree.
@@ -57,6 +57,9 @@ class GetQuoteParams(TypedDict, total=False):
     clientTimezone: str  # end user's IANA timezone, forwarded only to Houdini; default UTC
     quoteSessionId: str  # analytics only: same value while re-pricing one swap, max 64 chars
     sandbox: bool
+    # You post signed Solana transactions back (submit_transaction) instead of broadcasting them:
+    # adds Layerswap's memo routes. A TRANSACTION execution carrying `submit` must go that way.
+    broadcastViaRavn: bool
 
 
 class ExecuteParams(TypedDict, total=False):
@@ -70,6 +73,11 @@ class SubmitSignatureParams(TypedDict, total=False):
     quoteToken: str
     signature: str
     approvalSignature: str
+
+
+class SubmitTransactionParams(TypedDict, total=False):
+    quoteToken: str  # the one execute returned with that transaction
+    signedTransaction: str  # transaction.serialized after the user's wallet signed it, base64
 
 
 # Injectable transport, mirroring RavnClientConfig.fetch in the TS client: lets tests (and
@@ -140,6 +148,12 @@ class RavnClient:
         returned, not the quote's own (compose refuses it). Returns {"statusRef": ...} to poll
         get_status with."""
         return self._request("/submit-signature", "POST", dict(params))
+
+    def submit_transaction(self, params: SubmitTransactionParams) -> Dict[str, Any]:
+        """POST /v1/submit-transaction: only for a TRANSACTION execution carrying `submit`
+        (broadcastViaRavn quotes). RAVN checks the signed transaction, then sends it; refused,
+        nothing is sent. Returns {"txHash": ...}; poll get_status with the execution's statusRef."""
+        return self._request("/submit-transaction", "POST", dict(params))
 
     def get_status(self, quote_token: str, ref: str) -> Dict[str, Any]:
         """POST /v1/status: pass the quoteToken execute returned (not the quote's own), and as ref

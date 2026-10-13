@@ -7,6 +7,7 @@ import type {
   QuoteDTO,
   StatusDTO,
   SubmitSignatureParams,
+  SubmitTransactionParams,
   TokenDTO,
 } from "./types";
 
@@ -81,6 +82,16 @@ export class RavnClient {
   /** POST /v1/submit-signature: for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */
   submitSignature(params: SubmitSignatureParams): Promise<{ statusRef: string }> {
     return this.request<{ statusRef: string }>("/submit-signature", {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+
+  /** POST /v1/submit-transaction: only for a TRANSACTION execution carrying `submit`
+   * (broadcastViaRavn quotes). RAVN checks the signed transaction, then sends it; refused, nothing
+   * is sent. Returns the Solana signature; poll getStatus with the execution's statusRef. */
+  submitTransaction(params: SubmitTransactionParams): Promise<{ txHash: string }> {
+    return this.request<{ txHash: string }>("/submit-transaction", {
       method: "POST",
       body: JSON.stringify(params),
     });

@@ -16,6 +16,11 @@ export interface ExecuteAndTrackHandlers {
   /** Sign an EIP-712 typed-data payload. Only called for SIGNATURE executions. */
   signTypedData?(typedData: Record<string, unknown>): Promise<`0x${string}`>;
   /**
+   * Sign (don't send) a base64 Solana transaction and return it signed, base64. Only called for a
+   * TRANSACTION carrying `submit` (broadcastViaRavn quotes), which RAVN checks and sends itself.
+   */
+  signSolanaTransaction?(serialized: string): Promise<string>;
+  /**
    * The API sends `approval` whenever the venue generically needs an allowance: it deliberately
    * never reads the chain to check whether the caller already has one (that's an RPC round-trip
    * on every execute). Without this handler, that approval tx is sent unconditionally, even when
@@ -80,6 +85,21 @@ export async function executeAndTrack(
     await handlers.waitForReceipt(hash, approval.chainId);
     return hash;
   };
+
+  if (execution.executionType === "TRANSACTION" && execution.submit) {
+    // Never broadcast this one ourselves: a payment Layerswap can't match sits at Layerswap, and
+    // RAVN's check before sending is what catches it.
+    if (!handlers.signSolanaTransaction) {
+      throw new Error("executeAndTrack: this execution must be submitted through RAVN and requires signSolanaTransaction, none was provided");
+    }
+    if (!execution.transaction.serialized) {
+      throw new Error("executeAndTrack: TRANSACTION execution with submit is missing transaction.serialized");
+    }
+    const signedTransaction = await handlers.signSolanaTransaction(execution.transaction.serialized);
+    const { txHash } = await client.submitTransaction({ quoteToken, signedTransaction });
+    const statusRef = execution.statusRef ?? txHash;
+    return { execution, quoteToken, txHash, statusRef, finalStatus: await pollStatus(statusRef) };
+  }
 
   if (execution.executionType === "TRANSACTION") {
     const approvalTxHash = await maybeSendApproval(execution.approval);

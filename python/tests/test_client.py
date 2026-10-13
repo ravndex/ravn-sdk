@@ -85,6 +85,21 @@ class RavnClientTest(unittest.TestCase):
         self.assertEqual(seen["method"], "POST")
         self.assertEqual(json.loads(seen["body"]), {"quoteToken": "tok", "ref": "0xref"})
 
+    def test_submit_transaction_posts_signed_transaction(self):
+        seen = {}
+
+        def _urlopen(req):
+            seen["url"], seen["method"], seen["body"] = req.full_url, req.get_method(), req.data
+            return FakeResponse({"data": {"txHash": "5igSig"}})
+
+        result = RavnClient(urlopen=_urlopen).submit_transaction(
+            {"quoteToken": "qt-exec", "signedTransaction": "AQID"}
+        )
+        self.assertEqual(result, {"txHash": "5igSig"})
+        self.assertEqual(seen["url"], "https://app.ravn.exchange/api/v1/submit-transaction")
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(json.loads(seen["body"]), {"quoteToken": "qt-exec", "signedTransaction": "AQID"})
+
     def test_get_chains_returns_list(self):
         client = RavnClient(urlopen=fake_urlopen_returning({"data": [{"chainId": 1}]}))
         self.assertEqual(client.get_chains(), [{"chainId": 1}])
