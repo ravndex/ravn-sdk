@@ -5,6 +5,7 @@ from .client import (
     RavnApiError,
     RavnClient,
     SubmitSignatureParams,
+    SubmitTransactionParams,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "RavnApiError",
     "RavnClient",
     "SubmitSignatureParams",
+    "SubmitTransactionParams",
 ]

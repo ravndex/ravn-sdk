@@ -246,3 +246,45 @@ describe("executeAndTrack: DEPOSIT", () => {
     expect(result.finalStatus).toBeUndefined();
   });
 });
+
+// broadcastViaRavn: a Layerswap memo payment must reach the chain through RAVN's check, never
+// through the caller's own sendTransaction.
+describe("executeAndTrack: TRANSACTION with submit", () => {
+  const execution = {
+    executionType: "TRANSACTION", quoteToken: "qt-exec", statusRef: "ls-swap-id",
+    transaction: { chainId: -2, serialized: "AQID" },
+    submit: { url: "/api/v1/submit-transaction" },
+  };
+
+  it("signs only, submits through RAVN, and polls the execution's statusRef", async () => {
+    const fetchImpl = scriptedFetch({
+      execute: [execution],
+      "submit-transaction": [{ txHash: "5igSig" }],
+      status: [{ status: "success", venue: "layerswap" }],
+    });
+    const client = new RavnClient({ fetch: fetchImpl });
+    const submitSpy = vi.spyOn(client, "submitTransaction");
+    const handlers = {
+      sendTransaction: vi.fn(async () => "never"),
+      waitForReceipt: vi.fn(async () => {}),
+      signSolanaTransaction: vi.fn(async (tx: string) => `signed:${tx}`),
+    };
+
+    const result = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
+
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.signSolanaTransaction).toHaveBeenCalledWith("AQID");
+    expect(submitSpy).toHaveBeenCalledWith({ quoteToken: "qt-exec", signedTransaction: "signed:AQID" });
+    expect(result.txHash).toBe("5igSig");
+    expect(result.statusRef).toBe("ls-swap-id");
+    expect(result.finalStatus).toEqual({ status: "success", venue: "layerswap" });
+  });
+
+  it("refuses rather than broadcasting when it can't sign without sending", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution] }) });
+    const handlers = { sendTransaction: vi.fn(async () => "never"), waitForReceipt: vi.fn(async () => {}) };
+
+    await expect(executeAndTrack(client, baseParams, handlers)).rejects.toThrow(/signSolanaTransaction/);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+});

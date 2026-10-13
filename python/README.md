@@ -1,6 +1,6 @@
 # ravnexchange
 
-Typed Python client for RAVN's public `/api/v1`: quote, execute, submit-signature, status,
+Typed Python client for RAVN's public `/api/v1`: quote, execute, submit-signature, submit-transaction, status,
 tokens, chains. Zero runtime dependencies (built on `urllib.request`, not `requests`).
 
 Same scope as the official TS client (`@ravnexchange/sdk`); for an agent that already speaks
