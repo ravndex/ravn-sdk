@@ -177,7 +177,12 @@ export interface GetQuoteParams {
   /** Omitting this yields a preview-only quote; see QuoteDTO.executable. */
   destinationAddress?: string;
   refundAddress?: string;
+  /** Max slippage in bps. Omitted = Auto (50, wider where a route needs it). Setting it keeps
+   * venues with no minimum (slippage.noMinimum, today Rift) out of the race unless allowNoMinimum. */
   slippageBps?: number;
+  /** Let venues with no minimum (today Rift) race even though slippageBps is set. Their quotes
+   * carry slippage.noMinimum: true and guaranteedMin: null; slippageBps does not protect them. */
+  allowNoMinimum?: boolean;
   rankingMode?: "best_output" | "fastest";
   /** Drop specific venues from this race, e.g. a risk objection to one of them. */
   excludeVenues?: string[];

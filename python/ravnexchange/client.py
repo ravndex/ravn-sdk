@@ -48,7 +48,10 @@ class GetQuoteParams(TypedDict, total=False):
     userAddress: str
     destinationAddress: str
     refundAddress: str
-    slippageBps: int
+    slippageBps: int  # omitted = Auto; setting it keeps no-minimum venues (Rift) out unless allowNoMinimum
+    # Let venues with no minimum (today Rift) race beside slippageBps. Their quotes carry
+    # slippage.noMinimum True and guaranteedMin None: slippageBps does not protect them.
+    allowNoMinimum: bool
     rankingMode: str
     excludeVenues: List[str]
     # Private swap: NEAR Intents + Houdini Swap only. See the API's /quote docs for Houdini's
