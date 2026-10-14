@@ -124,14 +124,16 @@ export type ExecutionDTO =
        * transaction still pays Layerswap the way it matches deposits, then sends it. */
       submit?: { url: string };
       /**
-       * Only when your key sets a fee and the venue has no fee of its own (Eco, Layerswap): RAVN's
-       * fee, a transfer of the input token to RAVN; `transaction` already leaves it out. Skip it and
-       * the swap still fills; no fee is owed to you. With no `statusRef` here (you poll with the
-       * swap's own tx hash), a wallet that batches (EIP-5792 `wallet_sendCalls`) may send
-       * `fee.transaction` in the same batch as `transaction`, and the swap's tx proves it (an ERC-20
-       * sell only: a native coin batched leaves nothing to read). Otherwise send it as a
-       * transaction of its own from the user's regular wallet once the swap has confirmed, and pass
-       * its hash as `txHash` to getStatus. A fee paid on a swap the venue refunds stays with RAVN.
+       * Only when your key sets a fee and the route has no fee of its own (Eco, Layerswap, Mayan's
+       * routes paying no referrer): RAVN's fee, a transfer of the input token to RAVN;
+       * `transaction` already leaves it out. Skip it and the swap still fills; no fee is owed to
+       * you. With no `statusRef` here (you poll with the swap's own tx hash), a wallet that batches
+       * atomically (EIP-5792 `wallet_sendCalls`, one transaction) may send `fee.transaction` in the
+       * same batch as `transaction`, and the swap's tx proves it (an ERC-20 sell only: a native coin
+       * batched leaves nothing to read). Otherwise — including a batch the wallet splits into
+       * several transactions — send it as a transaction of its own from the user's regular wallet
+       * once the swap has confirmed, and pass its hash as `txHash` to getStatus. A fee paid on a
+       * swap the venue refunds stays with RAVN.
        */
       fee?: DepositFeeDTO;
     }
@@ -174,7 +176,7 @@ export interface DepositFeeDTO {
    * smart-wallet batch it can't be proven, and nothing is owed on it), then pass its hash as
    * `txHash` to getStatus once it has confirmed (simplest: on every poll). Absent on Bitcoin: pay `amount` to `address`
    * as an extra output of the SAME transaction that pays the deposit; RAVN finds it there once
-   * that transaction confirms. */
+   * that transaction confirms. One deposit per Bitcoin transaction: a fee output proves one swap. */
   transaction?: { to: string; data: string; value: string; chainId: number };
 }
 
