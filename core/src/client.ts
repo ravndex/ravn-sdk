@@ -16,7 +16,8 @@ export interface RavnClientConfig {
   apiKey?: string;
   /** Default: https://app.ravn.exchange/api/v1 */
   baseUrl?: string;
-  /** Swap in your own fetch (e.g. for React Native, or a test double). Defaults to global fetch. */
+  /** Swap in your own fetch (e.g. for React Native, or a test double). Defaults to global fetch.
+   * Called as a plain function (no `this`): pass fetch itself, or a plain or bound wrapper. */
   fetch?: typeof fetch;
 }
 
