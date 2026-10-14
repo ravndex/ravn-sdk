@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Nothing publishes unless typecheck and the whole suite pass on the merged commit. A separate
-  # job, so the three packages publish all together or not at all.
+  # Nothing publishes unless typecheck, the whole suite and every package's build pass on the
+  # merged commit. A separate job, so a failure here stops all three packages, not just one.
   test:
     runs-on: ubuntu-latest
     permissions:
@@ -28,6 +28,11 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # Each package builds with its own tsconfig.build.json (narrower lib than the root typecheck),
+      # so a build can fail where typecheck passes.
+      - name: Build all packages
+        run: npm run build
 
   publish:
     needs: test
