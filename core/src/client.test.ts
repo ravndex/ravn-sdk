@@ -49,6 +49,13 @@ describe("RavnClient", () => {
     expect(JSON.parse(init.body as string)).toEqual({ quoteToken: "tok", ref: "0xref" });
   });
 
+  it("sends txHash with status when given (a Rift fee payment or a 2-hop hop-1 tx)", async () => {
+    const fetchImpl = fakeFetch(200, { data: { status: "success", venue: "rift" } });
+    await new RavnClient({ fetch: fetchImpl }).getStatus("tok", "order-id", "0xfee");
+    const [, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(init.body as string)).toEqual({ quoteToken: "tok", ref: "order-id", txHash: "0xfee" });
+  });
+
   it("omits x-api-key when no key is configured (anonymous tier)", async () => {
     const fetchImpl = fakeFetch(200, { data: {} });
     const client = new RavnClient({ fetch: fetchImpl });

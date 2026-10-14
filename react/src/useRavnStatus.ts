@@ -21,10 +21,12 @@ export function isPermanentError(err: unknown): boolean {
  * Polls /v1/status until it reaches a terminal state (see isPollingTerminal: "unknown"
  * counts as terminal, it means the venue has no live tracker and never will for this swap).
  * Pass `params: null` to not poll at all (e.g. before execution has produced a ref).
+ * `txHash`: the fee payment a DEPOSIT's `fee.transaction` asked for (or a two-hop route's hop-1
+ * tx). Without it the swap's status still arrives, but its fee is never proven and nothing is owed.
  */
 export function useRavnStatus(
   client: RavnClient,
-  params: { quoteToken: string; ref: string } | null,
+  params: { quoteToken: string; ref: string; txHash?: string } | null,
   intervalMs = 4_000
 ): UseRavnStatusResult {
   const [status, setStatus] = useState<StatusDTO | null>(null);
@@ -43,7 +45,7 @@ export function useRavnStatus(
     const poll = () => {
       setIsLoading(true);
       client
-        .getStatus(params.quoteToken, params.ref)
+        .getStatus(params.quoteToken, params.ref, params.txHash)
         .then((s) => {
           if (cancelled) return;
           setStatus(s);
@@ -74,7 +76,7 @@ export function useRavnStatus(
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [client, params?.quoteToken, params?.ref, intervalMs]);
+  }, [client, params?.quoteToken, params?.ref, params?.txHash, intervalMs]);
 
   return { status, isLoading, error };
 }

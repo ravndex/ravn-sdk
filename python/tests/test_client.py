@@ -84,6 +84,8 @@ class RavnClientTest(unittest.TestCase):
         self.assertEqual(seen["url"], "https://app.ravn.exchange/api/v1/status")
         self.assertEqual(seen["method"], "POST")
         self.assertEqual(json.loads(seen["body"]), {"quoteToken": "tok", "ref": "0xref"})
+        RavnClient(urlopen=_urlopen).get_status("tok", "order-id", tx_hash="0xfee")
+        self.assertEqual(json.loads(seen["body"]), {"quoteToken": "tok", "ref": "order-id", "txHash": "0xfee"})
 
     def test_submit_transaction_posts_signed_transaction(self):
         seen = {}
