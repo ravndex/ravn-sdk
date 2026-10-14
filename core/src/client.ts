@@ -16,7 +16,8 @@ export interface RavnClientConfig {
   apiKey?: string;
   /** Default: https://app.ravn.exchange/api/v1 */
   baseUrl?: string;
-  /** Swap in your own fetch (e.g. for React Native, or a test double). Defaults to global fetch. */
+  /** Swap in your own fetch (e.g. for React Native, or a test double). Defaults to global fetch.
+   * Called as a plain function (no `this`): pass fetch itself, or a plain or bound wrapper. */
   fetch?: typeof fetch;
 }
 
@@ -43,7 +44,10 @@ export class RavnClient {
   }
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    // Called unbound, never as this.fetchImpl(...): a browser's own fetch (the default, or one
+    // passed in) throws "Illegal invocation" when `this` is the client, failing every call.
+    const fetchImpl = this.fetchImpl;
+    const res = await fetchImpl(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
         "content-type": "application/json",

@@ -11,6 +11,20 @@ function fakeFetch(status: number, body: unknown): typeof fetch {
 }
 
 describe("RavnClient", () => {
+  it("calls a browser's fetch unbound (window.fetch throws Illegal invocation as a method)", async () => {
+    const browserFetch = vi.fn(function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", browserFetch);
+    try {
+      await expect(new RavnClient().getChains()).resolves.toEqual([]);
+      await expect(new RavnClient({ fetch: browserFetch }).getChains()).resolves.toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("sends x-api-key and unwraps `data` on success", async () => {
     const fetchImpl = fakeFetch(200, { data: { quoteToken: "abc" }, meta: { requestId: "r1", version: "v1" } });
     const client = new RavnClient({ apiKey: "test-key", fetch: fetchImpl });
