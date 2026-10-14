@@ -143,7 +143,24 @@ export type ExecutionDTO =
       deposit: { address: string; amount: string; chainId?: number; expiresAt?: string };
       /** Poll getStatus with this, not `deposit.address`. */
       statusRef: string;
+      /** Only when your key sets a fee and the venue has no fee of its own (today Rift). Skip it
+       * and the swap still fills on `deposit.amount`; no fee is owed to you. */
+      fee?: DepositFeeDTO;
     };
+
+/** RAVN's integrator fee beside a deposit, in the input token, paid by your user to RAVN; your
+ * share is paid out as usual. `deposit.amount` already leaves it out. */
+export interface DepositFeeDTO {
+  /** Base units of the input token. */
+  amount: string;
+  /** RAVN's fee address on the input chain. */
+  address: string;
+  chainId: number;
+  /** EVM: send this transaction too (it names the order, which ties the fee to this swap), then
+   * pass its hash as `txHash` to getStatus. Absent on Bitcoin: pay `amount` to `address` as an
+   * extra output of the SAME transaction that pays the deposit; RAVN finds it there. */
+  transaction?: { to: string; data: string; value: string; chainId: number };
+}
 
 export type SettlementStatus =
   | "pending"

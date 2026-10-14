@@ -103,11 +103,13 @@ export class RavnClient {
 
   /** POST /v1/status: pass the quoteToken execute() returned (not the quote's own), and as `ref`
    * the execution's statusRef, submitSignature's statusRef, or the origin tx hash. POST, not GET:
-   * a 2-hop quoteToken in a query string can exceed header limits and fail with 431. */
-  getStatus(quoteToken: string, ref: string): Promise<StatusDTO> {
+   * a 2-hop quoteToken in a query string can exceed header limits and fail with 431. `txHash`:
+   * a two-hop route's hop-1 transaction, or the fee payment a DEPOSIT's `fee.transaction` asked
+   * for; it's how RAVN proves the fee your share is paid from. */
+  getStatus(quoteToken: string, ref: string, txHash?: string): Promise<StatusDTO> {
     return this.request<StatusDTO>("/status", {
       method: "POST",
-      body: JSON.stringify({ quoteToken, ref }),
+      body: JSON.stringify({ quoteToken, ref, ...(txHash ? { txHash } : {}) }),
     });
   }
 

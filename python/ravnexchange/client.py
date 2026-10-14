@@ -158,11 +158,16 @@ class RavnClient:
         nothing is sent. Returns {"txHash": ...}; poll get_status with the execution's statusRef."""
         return self._request("/submit-transaction", "POST", dict(params))
 
-    def get_status(self, quote_token: str, ref: str) -> Dict[str, Any]:
+    def get_status(self, quote_token: str, ref: str, tx_hash: Optional[str] = None) -> Dict[str, Any]:
         """POST /v1/status: pass the quoteToken execute returned (not the quote's own), and as ref
         the execution's statusRef, submit_signature's statusRef, or the origin tx hash. POST, not
-        GET: a 2-hop quoteToken in a query string can exceed header limits and fail with 431."""
-        return self._request("/status", "POST", {"quoteToken": quote_token, "ref": ref})
+        GET: a 2-hop quoteToken in a query string can exceed header limits and fail with 431.
+        tx_hash: a two-hop route's hop-1 transaction, or the fee payment a DEPOSIT's
+        fee.transaction asked for; it's how RAVN proves the fee your share is paid from."""
+        body = {"quoteToken": quote_token, "ref": ref}
+        if tx_hash:
+            body["txHash"] = tx_hash
+        return self._request("/status", "POST", body)
 
     def get_tokens(self, chain_id: int) -> List[Dict[str, Any]]:
         """GET /v1/tokens: RAVN's listed token registry for one chain. Not a per-pair
