@@ -7,7 +7,25 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Stdlib unittest, like the tests themselves (no pytest dependency). Its own job, so the tests run
+  # without the publish job's OIDC token; nothing publishes unless they pass.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test
+        working-directory: python
+        run: python -m unittest discover -s tests
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

@@ -9,9 +9,9 @@ Four packages, each solving a different integrator's actual problem. None of the
 
 ## Status
 
-Real npm workspaces (root `package.json`'s `workspaces` field) plus a per-package `tsc` build (`npm run build`, emitting `dist/`). `.github/workflows/publish-sdk.yml` publishes each of `core`/`react`/`widget-connector` to npm under the `ravnexchange` org on a push to `main` that bumps its `version`, skipping any version already on the registry, using trusted publishing (OIDC) with no stored npm token.
+Real npm workspaces (root `package.json`'s `workspaces` field) plus a per-package `tsc` build (`npm run build`, emitting `dist/`). `.github/workflows/publish-sdk.yml` publishes each of `core`/`react`/`widget-connector` to npm under the `ravnexchange` org on a push to `main` that bumps its `version`, skipping any version already on the registry, using trusted publishing (OIDC) with no stored npm token. Nothing publishes unless typecheck, the full test suite and every package's build pass on that commit first.
 
-`python/` publishes separately to PyPI via `.github/workflows/publish-python-sdk.yml` on a push that bumps `python/pyproject.toml`'s version, using the same OIDC trusted-publishing model with a different toolchain (`hatchling` + `pypa/gh-action-pypi-publish`).
+`python/` publishes separately to PyPI via `.github/workflows/publish-python-sdk.yml` on a push that bumps `python/pyproject.toml`'s version, using the same OIDC trusted-publishing model with a different toolchain (`hatchling` + `pypa/gh-action-pypi-publish`), after `python/tests` pass.
 
 The widget iframe page itself, and the rest of RAVN's routing/execution engine, live in RAVN's main application, which is closed source. This repo only carries the client-side pieces an integrator embeds in their own project.
 
