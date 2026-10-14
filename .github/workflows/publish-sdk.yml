@@ -7,7 +7,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Nothing publishes unless typecheck and the whole suite pass on the merged commit. A separate
+  # job, so the three packages publish all together or not at all.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
