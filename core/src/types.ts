@@ -156,9 +156,12 @@ export interface DepositFeeDTO {
   /** RAVN's fee address on the input chain. */
   address: string;
   chainId: number;
-  /** EVM: send this transaction too (it names the order, which ties the fee to this swap), then
-   * pass its hash as `txHash` to getStatus. Absent on Bitcoin: pay `amount` to `address` as an
-   * extra output of the SAME transaction that pays the deposit; RAVN finds it there. */
+  /** EVM: send this transaction too, exactly as given and as a transaction of its own from the
+   * user's regular wallet (it names the order, which ties the fee to this swap; bundled into a
+   * smart-wallet batch it can't be proven, and nothing is owed on it), then pass its hash as
+   * `txHash` to getStatus — any time after sending it. Absent on Bitcoin: pay `amount` to `address`
+   * as an extra output of the SAME transaction that pays the deposit; RAVN finds it there once
+   * that transaction confirms. */
   transaction?: { to: string; data: string; value: string; chainId: number };
 }
 
