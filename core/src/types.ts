@@ -225,7 +225,8 @@ export interface GetQuoteParams {
    * out, including ones RAVN adds later; excludeVenues still applies on top. Matches the quote's
    * venue.id, the venue you deal with, not every venue funds pass through: RAVN's multi-step
    * routes (compose, relay quotes with hops) and venues such as Rift, Across (swapping before or
-   * after bridging) and Mayan (Jupiter first on Solana) route through others. An empty list is
+   * after bridging) and Mayan (a Solana order starting in another token swaps through Jupiter
+   * first) route through others. An empty list is
    * rejected (INVALID_REQUEST); if none of them can quote, NO_LIQUIDITY lists every left-out
    * venue in error.details.excludedVenues. */
   onlyVenues?: string[];
