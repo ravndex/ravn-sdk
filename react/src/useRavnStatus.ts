@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RavnApiError, type RavnClient, type StatusDTO } from "@ravnexchange/sdk";
+import { RavnApiError, type RavnClient, type SettlementStatus, type StatusDTO } from "@ravnexchange/sdk";
 import { isPollingTerminal } from "./polling";
 
 export interface UseRavnStatusResult {
@@ -17,12 +17,19 @@ export function isPermanentError(err: unknown): boolean {
   return err instanceof RavnApiError && PERMANENT_ERROR_CODES.has(err.code);
 }
 
+/** Whether to poll again after `status`: until it's terminal, then once more after a success when
+ * `txHash` is set, as RAVN's node may be a block behind yours on that fee tx and a success it
+ * answers before seeing it books no fee. */
+export function pollAgain(status: SettlementStatus, txHash: string | undefined, rechecked: boolean): boolean {
+  return !isPollingTerminal(status) || (status === "success" && !!txHash && !rechecked);
+}
+
 /**
  * Polls /v1/status until it reaches a terminal state (see isPollingTerminal: "unknown"
  * counts as terminal, it means the venue has no live tracker and never will for this swap).
  * Pass `params: null` to not poll at all (e.g. before execution has produced a ref).
- * `txHash`: the fee payment a DEPOSIT's `fee.transaction` asked for (or a two-hop route's hop-1
- * tx). Without it the swap's status still arrives, but its fee is never proven and nothing is owed.
+ * `txHash`: executeAndTrack's `statusTxHash`, or the fee payment a DEPOSIT's `fee.transaction`
+ * asked for (or a two-hop route's hop-1 tx). Without it the swap's status still arrives, but its fee is never proven and nothing is owed.
  */
 export function useRavnStatus(
   client: RavnClient,
@@ -40,6 +47,7 @@ export function useRavnStatus(
     }
 
     let cancelled = false;
+    let rechecked = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const poll = () => {
@@ -50,7 +58,8 @@ export function useRavnStatus(
           if (cancelled) return;
           setStatus(s);
           setError(null);
-          if (!isPollingTerminal(s.status)) {
+          if (pollAgain(s.status, params.txHash, rechecked)) {
+            rechecked ||= isPollingTerminal(s.status);
             timer = setTimeout(poll, intervalMs);
           }
         })
