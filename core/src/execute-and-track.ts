@@ -60,9 +60,10 @@ export interface ExecuteAndTrackResult {
   /** Pass to client.getStatus(quoteToken, statusRef). For TRANSACTION, the execution's own
    * statusRef when it has one (compose, Garden, Relay), else txHash: not always a tx hash. */
   statusRef?: string;
-  /** Pass as getStatus's third argument (`txHash`) on every poll you make yourself: the fee
-   * payment's transaction when one was sent, else a two-hop route's hop-1 tx. It's how RAVN proves
-   * the fee your share is paid from. */
+  /** Pass as getStatus's third argument (`txHash`) on every poll you make yourself, from the first
+   * one until a terminal status: the fee payment's transaction when one was sent (already
+   * confirmed by the time this returns), else a two-hop route's hop-1 tx. It's how RAVN proves the
+   * fee your share is paid from: the venue's own tracker saying "delivered" doesn't book it. */
   statusTxHash?: string;
   /** The transaction that carried RAVN's fee (`execution.fee.transaction`), once sent. */
   feeTxHash?: string;
@@ -75,11 +76,15 @@ export interface ExecuteAndTrackResult {
   finalStatus?: StatusDTO;
 }
 
-/** How to pay a DEPOSIT's `fee`, so it's proven against this swap. See DepositFeeDTO. */
+/** How to pay a DEPOSIT's `fee`, so it's proven against this swap. See DepositFeeDTO. Either way,
+ * poll RAVN's getStatus until a terminal status even when the venue's own tracker (e.g. Rift's API)
+ * already says delivered: RAVN books the fee on its own status polls. */
 export type DepositFeePayment =
-  /** EVM: send `transaction` exactly as given once the deposit has confirmed, then pass its hash as
-   * `txHash` to getStatus. A token fee (`value` "0") may instead ride in the deposit's own wallet
-   * batch; pass the on-chain hash of the transaction that carried it. */
+  /** EVM: send `transaction` exactly as given once the deposit has confirmed, then pass its
+   * on-chain hash as `txHash` on every getStatus poll; at least one must come after it confirmed,
+   * or nothing is owed. A token fee (`value` "0") may instead ride in the deposit's own atomic
+   * wallet batch: pass the hash of the transaction that carried it (not a batch id or userOpHash).
+   * A native-coin fee: a plain transaction of its own. */
   | { kind: "transaction"; transaction: NonNullable<DepositFeeDTO["transaction"]> }
   /** Bitcoin: an extra output paying `amount` sats to `address` in the SAME transaction that pays
    * the deposit. One deposit per transaction: a fee output proves one swap. */
@@ -93,6 +98,7 @@ export type DepositFeePayment =
 
 const BITCOIN_CHAIN_ID = -1;
 const SOLANA_CHAIN_ID = -2;
+const EVM_TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 
 /** The fee payment a DEPOSIT execution asks for beside its deposit; undefined when it has none. */
 export function depositFeePayment(execution: ExecutionDTO): DepositFeePayment | undefined {
@@ -195,9 +201,14 @@ export async function executeAndTrack(
       }
     }
     const statusRef = execution.statusRef ?? txHash;
-    // What proves the fee: its own transaction, else (a statusRef: a two-hop route) hop 1's. EVM
-    // hashes only: a Solana signature proves nothing there.
-    const statusTxHash = feeTxHash ?? (execution.statusRef && !execution.transaction.serialized ? txHash : undefined);
+    // What proves the fee, from the first poll on: its own transaction, else (a statusRef: a
+    // two-hop route) hop 1's. Only an EVM tx hash: /v1/status refuses anything else (a Solana
+    // signature, a batch id) on every poll.
+    const proof = feeTxHash ?? (execution.statusRef ? txHash : undefined);
+    const statusTxHash = proof && EVM_TX_HASH.test(proof) ? proof : undefined;
+    if (feeTxHash && !statusTxHash) {
+      feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
+    }
     return {
       execution, quoteToken, approvalTxHash, txHash, statusRef, statusTxHash, feeTxHash, feeError,
       finalStatus: await pollStatus(statusRef, statusTxHash),
@@ -228,6 +239,7 @@ export async function executeAndTrack(
   // DEPOSIT: nothing to sign or send from here; the user moves funds to execution.deposit.address
   // out-of-band, and this helper has no way to know when that happens. Returned without polling;
   // start polling yourself (getStatus / useRavnStatus) once the deposit is actually sent. Pay
-  // `feePayment` as it says, and pass an EVM fee transaction's hash as getStatus's `txHash`.
+  // `feePayment` as it says, pass an EVM fee transaction's hash as getStatus's `txHash`, and poll
+  // RAVN to a terminal status even if the venue's own tracker says delivered first.
   return { execution, quoteToken, statusRef: execution.statusRef, feePayment: depositFeePayment(execution) };
 }

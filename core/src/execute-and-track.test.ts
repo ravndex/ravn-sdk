@@ -63,15 +63,16 @@ describe("executeAndTrack: TRANSACTION", () => {
     });
     const client = new RavnClient({ fetch: fetchImpl });
     const getStatusSpy = vi.spyOn(client, "getStatus");
-    const handlers = { sendTransaction: vi.fn(async () => "0xMainHash"), waitForReceipt: vi.fn(async () => {}) };
+    const hop1 = `0x${"c".repeat(64)}`;
+    const handlers = { sendTransaction: vi.fn(async () => hop1), waitForReceipt: vi.fn(async () => {}) };
 
     const result = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
 
-    // Hop 1's tx goes along: a two-hop route's fee is proven from it.
-    expect(getStatusSpy).toHaveBeenCalledWith("qt-bound", "compose-ref", "0xMainHash");
+    // Hop 1's tx goes along from the first poll: a two-hop route's fee is proven from it.
+    expect(getStatusSpy).toHaveBeenCalledWith("qt-bound", "compose-ref", hop1);
     expect(result.statusRef).toBe("compose-ref");
-    expect(result.statusTxHash).toBe("0xMainHash");
-    expect(result.txHash).toBe("0xMainHash");
+    expect(result.statusTxHash).toBe(hop1);
+    expect(result.txHash).toBe(hop1);
   });
 
   it("skips the approval step entirely when the execution has none", async () => {
@@ -295,6 +296,7 @@ describe("executeAndTrack: TRANSACTION with submit", () => {
 // RAVN's fee beside a route that has none of its own (Eco, Layerswap, Mayan plain MCTP): sent, and
 // its hash reported, or no fee is owed to the integrator.
 describe("executeAndTrack: TRANSACTION with fee", () => {
+  const [SWAP, FEE, BATCH] = ["a", "f", "b"].map((c) => `0x${c.repeat(64)}`);
   const tokenFee = { amount: "500", address: "0xRavnFee", chainId: 8453, transaction: { to: "0xUSDC", data: "0xfeetransfer", value: "0", chainId: 8453 } };
   const coinFee = { amount: "500", address: "0xRavnFee", chainId: 8453, transaction: { to: "0xRavnFee", data: "0xtag", value: "500", chainId: 8453 } };
   const withFee = (fee: unknown, extra: Record<string, unknown> = {}) => ({
@@ -312,42 +314,42 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     const handlers = {
       sendTransaction: vi.fn(async (tx: { data?: string }) => {
         order.push(`send:${tx.data}`);
-        return tx.data === "0xswap" ? "0xSwapHash" : "0xFeeHash";
+        return tx.data === "0xswap" ? SWAP : FEE;
       }),
       waitForReceipt: vi.fn(async (hash: string, chainId?: number) => {
-        order.push(`wait:${hash}:${chainId}`);
+        order.push(`wait:${hash.slice(0, 3)}:${chainId}`);
         return { status: "success" };
       }),
     };
 
     const { result, getStatusSpy } = await run(withFee(tokenFee), handlers);
 
-    expect(order).toEqual(["send:0xswap", "wait:0xSwapHash:8453", "send:0xfeetransfer", "wait:0xFeeHash:8453"]);
+    expect(order).toEqual(["send:0xswap", "wait:0xa:8453", "send:0xfeetransfer", "wait:0xf:8453"]);
     expect(handlers.sendTransaction).toHaveBeenLastCalledWith(tokenFee.transaction);
-    expect(result).toMatchObject({ txHash: "0xSwapHash", statusRef: "0xSwapHash", feeTxHash: "0xFeeHash", statusTxHash: "0xFeeHash" });
+    expect(result).toMatchObject({ txHash: SWAP, statusRef: SWAP, feeTxHash: FEE, statusTxHash: FEE });
     expect(result.feeError).toBeUndefined();
     expect(getStatusSpy).toHaveBeenCalledTimes(2);
-    for (const call of getStatusSpy.mock.calls) expect(call).toEqual(["qt-exec", "0xSwapHash", "0xFeeHash"]);
+    for (const call of getStatusSpy.mock.calls) expect(call).toEqual(["qt-exec", SWAP, FEE]);
   });
 
   it("batches a token fee into the swap's own confirmation when the caller can send calls", async () => {
     const handlers = {
       sendTransaction: vi.fn(async () => "never"),
       waitForReceipt: vi.fn(async () => {}),
-      sendCalls: vi.fn(async () => ["0xBatchTx"]), // one atomic transaction carried both
+      sendCalls: vi.fn(async () => [BATCH]), // one atomic transaction carried both
     };
 
     const { result, getStatusSpy } = await run(withFee(tokenFee, { statusRef: "eco-ref" }), handlers);
 
     expect(handlers.sendCalls).toHaveBeenCalledWith([withFee(tokenFee).transaction, tokenFee.transaction]);
     expect(handlers.sendTransaction).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ txHash: "0xBatchTx", feeTxHash: "0xBatchTx", statusRef: "eco-ref" });
-    expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", "eco-ref", "0xBatchTx");
+    expect(result).toMatchObject({ txHash: BATCH, feeTxHash: BATCH, statusRef: "eco-ref" });
+    expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", "eco-ref", BATCH);
   });
 
   it("never batches a native-coin fee: a plain transaction of its own, after the swap", async () => {
     const handlers = {
-      sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? "0xSwapHash" : "0xFeeHash")),
+      sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? SWAP : FEE)),
       waitForReceipt: vi.fn(async () => {}),
       sendCalls: vi.fn(async () => ["never"]),
     };
@@ -357,12 +359,12 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     expect(handlers.sendCalls).not.toHaveBeenCalled();
     expect(handlers.sendTransaction).toHaveBeenCalledTimes(2);
     expect(handlers.sendTransaction).toHaveBeenLastCalledWith(coinFee.transaction);
-    expect(result.feeTxHash).toBe("0xFeeHash");
+    expect(result.feeTxHash).toBe(FEE);
   });
 
   it("doesn't send the fee on a swap whose receipt says it reverted, and still tracks the swap", async () => {
     const handlers = {
-      sendTransaction: vi.fn(async () => "0xSwapHash"),
+      sendTransaction: vi.fn(async () => SWAP),
       waitForReceipt: vi.fn(async () => ({ status: "reverted" })),
     };
 
@@ -372,7 +374,7 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     expect(result.feeTxHash).toBeUndefined();
     expect(String(result.feeError)).toMatch(/did not succeed/);
     expect(result.finalStatus?.status).toBe("success");
-    expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", "0xSwapHash", undefined);
+    expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", SWAP, undefined);
   });
 
   it("returns the swap, not an error, when the user declines the fee", async () => {
@@ -380,16 +382,27 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     const handlers = {
       sendTransaction: vi.fn(async (tx: { data?: string }) => {
         if (tx.data === "0xfeetransfer") throw declined;
-        return "0xSwapHash";
+        return SWAP;
       }),
       waitForReceipt: vi.fn(async () => {}),
     };
 
     const { result } = await run(withFee(tokenFee), handlers);
 
-    expect(result.txHash).toBe("0xSwapHash");
+    expect(result.txHash).toBe(SWAP);
     expect(result.feeError).toBe(declined);
     expect(result.finalStatus?.status).toBe("success");
+  });
+
+  it("never reports a batch id as txHash: /v1/status would refuse every poll", async () => {
+    const handlers = { sendTransaction: vi.fn(async () => "never"), waitForReceipt: vi.fn(async () => {}), sendCalls: vi.fn(async () => [SWAP, "0xbatch-id"]) };
+
+    const { result, getStatusSpy } = await run(withFee(tokenFee), handlers);
+
+    expect(result.statusTxHash).toBeUndefined();
+    expect(String(result.feeError)).toMatch(/not an on-chain transaction hash/);
+    expect(result.finalStatus?.status).toBe("success");
+    expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", SWAP, undefined);
   });
 
   it("sends nothing extra when the fee is inside a Solana transaction, and passes no Solana signature as txHash", async () => {
