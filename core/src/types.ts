@@ -125,15 +125,18 @@ export type ExecutionDTO =
       submit?: { url: string };
       /**
        * Only when your key sets a fee and the route has no fee of its own (Eco, Layerswap, Mayan's
-       * routes paying no referrer): RAVN's fee, a transfer of the input token to RAVN;
-       * `transaction` already leaves it out. Skip it and the swap still fills; no fee is owed to
-       * you. With no `statusRef` here (you poll with the swap's own tx hash), a wallet that batches
-       * atomically (EIP-5792 `wallet_sendCalls`, one transaction) may send `fee.transaction` in the
-       * same batch as `transaction`, and the swap's tx proves it (an ERC-20 sell only: a native coin
-       * batched leaves nothing to read). Otherwise — including a batch the wallet splits into
-       * several transactions — send it as a transaction of its own from the user's regular wallet
-       * once the swap has confirmed, and pass its hash as `txHash` to getStatus. A fee paid on a
-       * swap the venue refunds stays with RAVN.
+       * routes paying no referrer) from an EVM chain: RAVN's fee, a transfer of the input token to
+       * RAVN; `transaction` already leaves it out. From Solana there is none to send: the fee is a
+       * transfer inside `transaction.serialized`. Skip it and the swap still fills; no fee is owed to
+       * you. A wallet that batches (EIP-5792 `wallet_sendCalls`) or relays (smart account, 7702,
+       * 4337) may send `fee.transaction` with `transaction` in one confirmation (one fee-bearing swap
+       * per transaction: a second fee in it isn't proven), for an ERC-20 sell
+       * (a native-coin fee must be a plain transaction of its own, so a contract wallet that can't
+       * send one — a Safe, a 4337 account — can't pay it). Pass the on-chain hash of the transaction
+       * that carried the fee (not an EIP-5792 batch id or a 4337 userOpHash) as `txHash` to getStatus
+       * — not needed with no `statusRef` here, when the fee rode in the swap's own transaction. Sent
+       * on its own, send it once the swap has confirmed. A fee paid on a swap the venue refunds
+       * stays with RAVN.
        */
       fee?: DepositFeeDTO;
     }
@@ -157,9 +160,9 @@ export type ExecutionDTO =
       /** Poll getStatus with this, not `deposit.address`. */
       statusRef: string;
       /** Only when your key sets a fee and the venue has no fee of its own (Rift; private swaps from
-       * an EVM chain or Bitcoin). Skip it and the swap still fills on `deposit.amount`; no fee is
-       * owed to you. A fee paid on a swap the venue then refunds stays with RAVN and nothing is owed
-       * on it, so send an EVM fee payment once the deposit has confirmed. */
+       * an EVM chain, Bitcoin or Solana). Skip it and the swap still fills on `deposit.amount`; no
+       * fee is owed to you. A fee paid on a swap the venue then refunds stays with RAVN and nothing
+       * is owed on it, so send an EVM fee payment once the deposit has confirmed. */
       fee?: DepositFeeDTO;
     };
 
@@ -171,12 +174,28 @@ export interface DepositFeeDTO {
   /** RAVN's fee address on the input chain. */
   address: string;
   chainId: number;
-  /** EVM: send this transaction too, exactly as given and as a transaction of its own from the
-   * user's regular wallet (it names the order, which ties the fee to this swap; bundled into a
-   * smart-wallet batch it can't be proven, and nothing is owed on it), then pass its hash as
-   * `txHash` to getStatus once it has confirmed (simplest: on every poll). Absent on Bitcoin: pay `amount` to `address`
-   * as an extra output of the SAME transaction that pays the deposit; RAVN finds it there once
-   * that transaction confirms. One deposit per Bitcoin transaction: a fee output proves one swap. */
+  /** EVM: send this transaction too, exactly as given (it carries a tag naming this swap): on its
+   * own, or in the same wallet batch or relay as the deposit or swap (EIP-5792, smart account, 7702,
+   * 4337) — an ERC-20 fee anywhere; a native-coin fee only beside a NEAR Intents deposit on
+   * Ethereum, Base or Polygon (proven from those chains' internal transfers). Any other native-coin
+   * fee must be a plain transaction of its own (a contract wallet that can't send one can't pay it).
+   * Then pass the on-chain hash of the transaction that carried it (not a batch id or a userOpHash)
+   * as `txHash` to getStatus once it has confirmed (simplest: on every poll). One fee-bearing swap
+   * per transaction: a batch carrying two fees, or a fee beside another fee-bearing swap, proves only
+   * one. Batch a token deposit, or a native-coin deposit to NEAR Intents (it credits coin a smart
+   * account moves); send any other native-coin deposit as a plain transfer, as an exchange may not
+   * credit coin a contract moved. Absent on Bitcoin:
+   * pay `amount` to `address` as an extra output of the SAME transaction that pays the deposit;
+   * RAVN finds it there once that transaction confirms. One deposit per Bitcoin transaction: a fee
+   * output proves one swap. Absent on Solana too: add the fee to the SAME transaction that pays the
+   * deposit exactly `deposit.amount` (SOL as lamports to the deposit wallet, not wrapped) — SOL: a
+   * System transfer of `amount` lamports to `address`; a token: `transferChecked` of `amount` to
+   * `address`'s associated token account for the input mint (under the mint's token program), after
+   * `createAssociatedTokenAccountIdempotent` in case RAVN has none for that token yet (its rent,
+   * ~0.0015 SOL once per token, is normally in the quote's network cost). RAVN finds it there once
+   * that transaction is finalized, among the deposit address's first and latest transactions; a fee
+   * sent in a transaction of its own isn't found. One deposit per Solana transaction: a fee proves
+   * one swap. It can't be sent after the deposit, so on a swap the venue refunds it stays with RAVN. */
   transaction?: { to: string; data: string; value: string; chainId: number };
 }
 
