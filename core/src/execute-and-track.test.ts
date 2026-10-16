@@ -328,7 +328,8 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     expect(handlers.sendTransaction).toHaveBeenLastCalledWith(tokenFee.transaction);
     expect(result).toMatchObject({ txHash: SWAP, statusRef: SWAP, feeTxHash: FEE, statusTxHash: FEE });
     expect(result.feeError).toBeUndefined();
-    expect(getStatusSpy).toHaveBeenCalledTimes(2);
+    // pending, success, then one more: RAVN's node may be a block behind on the fee tx.
+    expect(getStatusSpy).toHaveBeenCalledTimes(3);
     for (const call of getStatusSpy.mock.calls) expect(call).toEqual(["qt-exec", SWAP, FEE]);
   });
 
@@ -350,7 +351,7 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
   it("never batches a native-coin fee: a plain transaction of its own, after the swap", async () => {
     const handlers = {
       sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? SWAP : FEE)),
-      waitForReceipt: vi.fn(async () => {}),
+      waitForReceipt: vi.fn(async (hash: string) => ({ status: "success", transactionHash: hash })),
       sendCalls: vi.fn(async () => ["never"]),
     };
 
@@ -362,19 +363,35 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     expect(result.feeTxHash).toBe(FEE);
   });
 
-  it("doesn't send the fee on a swap whose receipt says it reverted, and still tracks the swap", async () => {
-    const handlers = {
-      sendTransaction: vi.fn(async () => SWAP),
-      waitForReceipt: vi.fn(async () => ({ status: "reverted" })),
-    };
+  // Fail closed: only a receipt that says success and is the swap's own sends the fee.
+  it.each([
+    ["reverted (viem)", { status: "reverted" }],
+    ["reverted (ethers)", { status: 0 }],
+    ["no receipt (a void handler)", undefined],
+    ["a boolean", false],
+    ["cancelled: viem resolves with the replacement's receipt", { status: "success", transactionHash: `0x${"9".repeat(64)}` }],
+  ])("sends no fee when waitForReceipt resolves %s, and still tracks the swap", async (_, receipt) => {
+    const handlers = { sendTransaction: vi.fn(async () => SWAP), waitForReceipt: vi.fn(async () => receipt) };
 
     const { result, getStatusSpy } = await run(withFee(tokenFee), handlers);
 
     expect(handlers.sendTransaction).toHaveBeenCalledOnce();
     expect(result.feeTxHash).toBeUndefined();
-    expect(String(result.feeError)).toMatch(/did not succeed/);
+    expect(String(result.feeError)).toMatch(/no successful receipt/);
     expect(result.finalStatus?.status).toBe("success");
     expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", SWAP, undefined);
+  });
+
+  it("takes ethers v6's receipt (hash, status 1) as the swap's own", async () => {
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? SWAP : FEE)),
+      waitForReceipt: vi.fn(async (hash: string) => ({ status: 1, hash: hash.toUpperCase().replace("0X", "0x") })),
+    };
+
+    const { result } = await run(withFee(tokenFee), handlers);
+
+    expect(result.feeTxHash).toBe(FEE);
+    expect(result.feeError).toBeUndefined();
   });
 
   it("returns the swap, not an error, when the user declines the fee", async () => {
@@ -384,7 +401,7 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
         if (tx.data === "0xfeetransfer") throw declined;
         return SWAP;
       }),
-      waitForReceipt: vi.fn(async () => {}),
+      waitForReceipt: vi.fn(async () => ({ status: 1 })),
     };
 
     const { result } = await run(withFee(tokenFee), handlers);
@@ -435,6 +452,16 @@ describe("depositFeePayment", () => {
   it("nothing to pay without a fee; refuses a fee it can't describe rather than guess", () => {
     expect(depositFeePayment(deposit())).toBeUndefined();
     expect(() => depositFeePayment(deposit({ amount: "5", address: "x", chainId: 999 }))).toThrow(/chain 999/);
+  });
+
+  it("executeAndTrack reports a fee it can't describe instead of failing the deposit", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [deposit({ amount: "5", address: "x", chainId: 999 })] }) });
+
+    const result = await executeAndTrack(client, baseParams, { sendTransaction: vi.fn(), waitForReceipt: vi.fn() });
+
+    expect(result.statusRef).toBe("ref");
+    expect(result.feePayment).toBeUndefined();
+    expect(String(result.feeError)).toMatch(/chain 999/);
   });
 
   it("executeAndTrack hands it back on a DEPOSIT", async () => {

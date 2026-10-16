@@ -11,10 +11,10 @@ export interface ExecuteAndTrackHandlers {
    * Wait for a transaction hash to confirm. Called on the approval before the main tx is ever
    * sent: sending both back-to-back races the allowance and is the most common integration bug
    * this helper exists to prevent. Also called on the swap before RAVN's fee is sent on its own
-   * (`fee.transaction`), which is only ever sent on a swap that went through: reject when the
-   * transaction reverted, was dropped or was cancelled/replaced by another one, or resolve to the
-   * receipt itself (viem's `waitForTransactionReceipt` and ethers' `wait()` do), whose `status`
-   * is then checked.
+   * (`fee.transaction`): resolve to the receipt itself (viem's `waitForTransactionReceipt`,
+   * ethers' `wait()`), as the fee is only sent when it says success AND is this hash's own (a
+   * cancelled or replaced swap resolves with another transaction's). Resolving to nothing, or
+   * anything else, sends no fee: a fee on a swap that didn't run is the user's money lost.
    */
   waitForReceipt(hash: string, chainId?: number): Promise<unknown>;
   /**
@@ -23,7 +23,8 @@ export interface ExecuteAndTrackHandlers {
    * they have landed, to the on-chain hash of the transaction that carried each call, in order
    * (the same hash repeated for one transaction). Not a batch id or a 4337 userOpHash: RAVN
    * proves its fee from that transaction. When given, a token-paid RAVN fee rides in the swap's
-   * own confirmation; a native-coin fee is always a plain transaction of its own.
+   * own confirmation; a native-coin fee is always a plain transaction of its own. Reject only when
+   * nothing was sent: a rejection loses the swap's hash.
    */
   sendCalls?(txs: TxLike[]): Promise<string[]>;
   /** Sign an EIP-712 typed-data payload. Only called for SIGNATURE executions. */
@@ -45,7 +46,8 @@ export interface ExecuteAndTrackHandlers {
 }
 
 export interface ExecuteAndTrackOptions {
-  /** Default true. Set false to get a ref back immediately and poll getStatus yourself. */
+  /** Default true. Set false to get a ref back once the swap (and RAVN's fee, when one is sent) is
+   * out, and poll getStatus yourself with `statusTxHash`. */
   pollUntilTerminal?: boolean;
   pollIntervalMs?: number;
 }
@@ -61,11 +63,14 @@ export interface ExecuteAndTrackResult {
    * statusRef when it has one (compose, Garden, Relay), else txHash: not always a tx hash. */
   statusRef?: string;
   /** Pass as getStatus's third argument (`txHash`) on every poll you make yourself, from the first
-   * one until a terminal status: the fee payment's transaction when one was sent (already
-   * confirmed by the time this returns), else a two-hop route's hop-1 tx. It's how RAVN proves the
-   * fee your share is paid from: the venue's own tracker saying "delivered" doesn't book it. */
+   * one until a terminal status and once more after a success (RAVN's node may be a block behind
+   * yours): the fee payment's transaction when one was sent (already confirmed by the time this
+   * returns), else, with a statusRef, the swap's own tx (a two-hop route's hop 1 proves its fee;
+   * ignored elsewhere). It's how RAVN proves the fee your share is paid from: the venue's own
+   * tracker saying "delivered" doesn't book it. */
   statusTxHash?: string;
-  /** The transaction that carried RAVN's fee (`execution.fee.transaction`), once sent. */
+  /** The transaction that carried RAVN's fee (`execution.fee.transaction`), once sent. Sent isn't
+   * paid (a batch can revert): RAVN's status polls are what prove it. */
   feeTxHash?: string;
   /** Why RAVN's fee wasn't sent (or its receipt not seen): the swap still runs and is tracked, but
    * no fee is owed to you on it unless `feeTxHash` is set and it landed. */
@@ -110,10 +115,13 @@ export function depositFeePayment(execution: ExecutionDTO): DepositFeePayment | 
   throw new Error(`depositFeePayment: no known way to pay a fee on chain ${chainId}`);
 }
 
-// A receipt that names a status must say success: viem "success", ethers 1 (web3.js 1n/true; == on purpose).
-const receiptSucceeded = (receipt: unknown): boolean => {
-  const status = (receipt as { status?: unknown } | null | undefined)?.status;
-  return status === undefined || status === "success" || status == 1;
+// Only a receipt that says success (viem "success", ethers 1; web3.js 1n/true, so == on purpose) and
+// is `hash`'s own (viem/ethers v5 transactionHash, ethers v6 hash): viem resolves a cancelled swap
+// with the replacement's successful receipt.
+const receiptSucceeded = (receipt: unknown, hash: string): boolean => {
+  const r = receipt as { status?: unknown; transactionHash?: unknown; hash?: unknown } | null | undefined;
+  const own = r?.transactionHash ?? r?.hash;
+  return (r?.status === "success" || r?.status == 1) && (typeof own !== "string" || own.toLowerCase() === hash.toLowerCase());
 };
 
 /**
@@ -133,11 +141,18 @@ export async function executeAndTrack(
   const execution = await client.execute(params);
   const { quoteToken } = execution;
 
-  const pollStatus = async (ref: string, txHash?: string): Promise<StatusDTO | undefined> => {
+  const pollStatus = async (ref: string, txHash?: string, feeSent = false): Promise<StatusDTO | undefined> => {
     if (!pollUntilTerminal) return undefined;
-    for (;;) {
+    // A success answered before RAVN's node sees the fee tx proves nothing, and the row is then
+    // left to a cron that books no fee: one more poll after it.
+    // ponytail: one re-poll covers a block of lag; the real fix is /v1/status staying non-terminal
+    // while a given fee tx is unproven.
+    for (let recheck = feeSent; ; ) {
       const status = await client.getStatus(quoteToken, ref, txHash);
-      if (isPollingTerminal(status.status)) return status;
+      if (isPollingTerminal(status.status)) {
+        if (!recheck || status.status !== "success") return status;
+        recheck = false;
+      }
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
   };
@@ -188,8 +203,8 @@ export async function executeAndTrack(
         // On its own, only once the swap has confirmed: a reverted, dropped or replaced one pays
         // no fee. Declined or failed, the swap still runs and is tracked; no fee is owed on it.
         try {
-          if (!receiptSucceeded(await handlers.waitForReceipt(txHash, execution.transaction.chainId))) {
-            throw new Error("executeAndTrack: the swap transaction did not succeed, so RAVN's fee was not sent");
+          if (!receiptSucceeded(await handlers.waitForReceipt(txHash, execution.transaction.chainId), txHash)) {
+            throw new Error("executeAndTrack: no successful receipt for the swap transaction itself, so RAVN's fee was not sent");
           }
           feeTxHash = await handlers.sendTransaction(feeTx);
           // Confirmed before polling starts: a swap that fills first would otherwise end the
@@ -211,7 +226,7 @@ export async function executeAndTrack(
     }
     return {
       execution, quoteToken, approvalTxHash, txHash, statusRef, statusTxHash, feeTxHash, feeError,
-      finalStatus: await pollStatus(statusRef, statusTxHash),
+      finalStatus: await pollStatus(statusRef, statusTxHash, !!feeTxHash && !!statusTxHash),
     };
   }
 
@@ -241,5 +256,10 @@ export async function executeAndTrack(
   // start polling yourself (getStatus / useRavnStatus) once the deposit is actually sent. Pay
   // `feePayment` as it says, pass an EVM fee transaction's hash as getStatus's `txHash`, and poll
   // RAVN to a terminal status even if the venue's own tracker says delivered first.
-  return { execution, quoteToken, statusRef: execution.statusRef, feePayment: depositFeePayment(execution) };
+  // A fee it can't describe never stops the deposit, which fills without it.
+  try {
+    return { execution, quoteToken, statusRef: execution.statusRef, feePayment: depositFeePayment(execution) };
+  } catch (feeError) {
+    return { execution, quoteToken, statusRef: execution.statusRef, feeError };
+  }
 }
