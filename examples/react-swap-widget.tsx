@@ -13,13 +13,15 @@ const client = new RavnClient();
 // Replace with your actual wallet integration (e.g. wagmi's useSendTransaction/useSignTypedData).
 declare const signer: {
   sendTransaction(tx: { to?: string; data?: string; value?: string }): Promise<string>;
-  waitForReceipt(hash: string): Promise<void>;
+  // Resolve to the receipt (viem's waitForTransactionReceipt does): RAVN's fee is only sent on a
+  // swap whose own receipt says success.
+  waitForReceipt(hash: string): Promise<{ status: "success" | "reverted"; transactionHash: string }>;
   signTypedData(typedData: Record<string, unknown>): Promise<`0x${string}`>;
   address: string;
 };
 
 export function SwapWidget() {
-  const [statusRef, setStatusRef] = useState<{ quoteToken: string; ref: string } | null>(null);
+  const [statusRef, setStatusRef] = useState<{ quoteToken: string; ref: string; txHash?: string } | null>(null);
 
   const { quote, isLoading: quoting, isExpired } = useRavnQuote(client, {
     inputChainId: 1,
@@ -50,7 +52,8 @@ export function SwapWidget() {
     );
     if (result.statusRef) {
       // execute's own quoteToken, not quote.quoteToken: compose (2-hop) quotes are rebound at execute.
-      setStatusRef({ quoteToken: result.quoteToken, ref: result.statusRef });
+      // txHash on every poll: how RAVN proves the fee your share is paid from.
+      setStatusRef({ quoteToken: result.quoteToken, ref: result.statusRef, txHash: result.statusTxHash });
     }
   }
 
