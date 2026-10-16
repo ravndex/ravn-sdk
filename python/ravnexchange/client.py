@@ -54,6 +54,10 @@ class GetQuoteParams(TypedDict, total=False):
     allowNoMinimum: bool
     rankingMode: str
     excludeVenues: List[str]
+    # Race only these venues, e.g. ["bebop"] for RFQ only; excludeVenues still applies on top.
+    # Matches the quote's venue.id, not every venue funds pass through (see the API's /quote docs).
+    # An empty list is rejected.
+    onlyVenues: List[str]
     # Private swap: NEAR Intents + Houdini Swap only. See the API's /quote docs for Houdini's
     # compliance rules (it is sent the request's IP, user-agent and clientTimezone).
     confidential: bool

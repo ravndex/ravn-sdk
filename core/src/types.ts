@@ -221,6 +221,15 @@ export interface GetQuoteParams {
   rankingMode?: "best_output" | "fastest";
   /** Drop specific venues from this race, e.g. a risk objection to one of them. */
   excludeVenues?: string[];
+  /** Race only these venues, e.g. ["bebop"] for an RFQ-only race. Every other venue is left
+   * out, including ones RAVN adds later; excludeVenues still applies on top. Matches the quote's
+   * venue.id, the venue you deal with, not every venue funds pass through: RAVN's multi-step
+   * routes (compose, relay quotes with hops) and venues such as Rift, Across (swapping before or
+   * after bridging) and Mayan (a Solana order starting in another token swaps through Jupiter
+   * first) route through others. An empty list is
+   * rejected (INVALID_REQUEST); if none of them can quote, NO_LIQUIDITY lists every left-out
+   * venue in error.details.excludedVenues. */
+  onlyVenues?: string[];
   /** Settle privately: the race narrows to NEAR Intents (Confidential Intents) and Houdini Swap,
    * and NO_LIQUIDITY replaces a public fill if neither can quote. Houdini is sent the request's IP,
    * user-agent and clientTimezone for compliance screening; its terms bar US persons and
