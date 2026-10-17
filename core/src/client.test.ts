@@ -180,3 +180,14 @@ describe("RavnClient errors", () => {
     expect(err).toBe(controller.signal.reason);
   });
 });
+
+describe("getQuote timeoutMs", () => {
+  it("sends the race's time limit when given (ravn-mvp #418; older APIs ignore it)", async () => {
+    const fetchImpl = fakeFetch(200, { data: {} });
+    await new RavnClient({ fetch: fetchImpl }).getQuote({
+      inputChainId: 1, outputChainId: 8453, inputToken: "0xa", outputToken: "0xb", inputAmount: "1", userAddress: "0xu", timeoutMs: 3_000,
+    });
+    const [, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(init.body as string).timeoutMs).toBe(3_000);
+  });
+});

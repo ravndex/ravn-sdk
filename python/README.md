@@ -61,6 +61,7 @@ one doesn't yet:
   when it's set. Never re-submit a signature after `BUILD_FAILED`: the order may be placed.
 - **`RavnApiError` has no `status` or `retry_after_sec`.** Read `e.code` and
   `e.details.get("retryAfterSec")`.
+- **`timeoutMs` isn't in `GetQuoteParams` yet**: pass it anyway (a dict key goes through as is).
 - **A network failure raises `urllib.error.URLError`**, not a `RavnApiError` (the TS client wraps it
   as `NETWORK_ERROR`).
 

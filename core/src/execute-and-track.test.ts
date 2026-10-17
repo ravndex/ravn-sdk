@@ -1093,3 +1093,111 @@ describe("executeAndTrack: review fixes, round 2", () => {
     expect(err.code).toBe("ABORTED");
   });
 });
+
+// Review of #15, round 3.
+describe("executeAndTrack: review fixes, round 3", () => {
+  const [APPROVAL, SWAP, FEE] = ["e", "a", "f"].map((c) => `0x${c.repeat(64)}`);
+  const approval = { to: "0xToken", data: "0xapprove", value: "0", chainId: 1 };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 1 };
+  const coinFee = { amount: "5", address: "0xF", chainId: 1, transaction: { to: "0xF", data: "0xfee", value: "5", chainId: 1 } };
+  const plain = { executionType: "TRANSACTION", quoteToken: "qt-exec", transaction };
+  const wallet = () => ({
+    sendTransaction: vi.fn(async (tx: { data?: string }) => ({ "0xapprove": APPROVAL, "0xswap": SWAP })[tx.data!] ?? FEE),
+    waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+  });
+  // Unhandled rejections, collected while `run` executes and shortly after.
+  const unhandledDuring = async (run: () => Promise<unknown>): Promise<unknown[]> => {
+    const seen: unknown[] = [];
+    const onUnhandled = (reason: unknown) => seen.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await run();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    return seen;
+  };
+
+  it("a receipt that rejects after an abort is never an unhandled rejection", async () => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
+    // Plain functions, not vi.fn: a mock attaches its own handler to the promise it returns, which
+    // would hide exactly the unhandled rejection this checks for.
+    const h: ExecuteAndTrackHandlers = {
+      sendTransaction: async () => {
+        controller.abort(); // the user cancels; the wallet sends anyway
+        return APPROVAL;
+      },
+      waitForReceipt: () => new Promise((_, reject) => setTimeout(() => reject(new Error("reverted")), 10)),
+    };
+    let err: ExecuteAndTrackError | undefined;
+
+    const unhandled = await unhandledDuring(async () => {
+      err = await executeAndTrack(client, baseParams, h, { signal: controller.signal }).catch((e) => e);
+    });
+
+    expect(unhandled).toEqual([]);
+    expect(err?.code).toBe("ABORTED");
+    expect(err?.partial.approvalTxHash).toBe(APPROVAL);
+  });
+
+  it("an async onProgress that rejects is never an unhandled rejection, and never stops the swap", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [{ status: "success", venue: "relay" }] }) });
+    let txHash: string | undefined;
+
+    const unhandled = await unhandledDuring(async () => {
+      ({ txHash } = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0, onProgress: async () => { throw new Error("db down"); } }));
+    });
+
+    expect(unhandled).toEqual([]);
+    expect(txHash).toBe(SWAP);
+  });
+
+  it.each([
+    ["the swap's receipt (before the fee)", SWAP, undefined],
+    ["the fee's receipt", FEE, FEE],
+  ])("an abort ends a wait on %s that never resolves, hashes kept", async (_, stuckOn, feeTxHash) => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, fee: coinFee }] }) });
+    const h = wallet();
+    h.waitForReceipt.mockImplementation(async (hash: string) => {
+      if (hash !== stuckOn) return receipt(hash);
+      setTimeout(() => controller.abort(), 10);
+      return new Promise(() => {});
+    });
+
+    const err = await executeAndTrack(client, baseParams, h, { signal: controller.signal }).catch((e) => e);
+
+    expect(err.code).toBe("ABORTED");
+    expect(err.partial.txHash).toBe(SWAP);
+    expect(err.partial.feeTxHash).toBe(feeTxHash);
+    expect(h.sendTransaction).toHaveBeenCalledTimes(feeTxHash ? 2 : 1);
+  }, 1_000);
+
+  it("rejects ABORTED, not a feeError, when aborted before the fee with polling off", async () => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, fee: coinFee }] }) });
+    const h = wallet();
+    h.waitForReceipt.mockImplementation(async (hash: string) => {
+      controller.abort();
+      return receipt(hash);
+    });
+
+    const err = await executeAndTrack(client, baseParams, h, { signal: controller.signal, pollUntilTerminal: false }).catch((e) => e);
+
+    expect(err.code).toBe("ABORTED");
+    expect(err.partial.txHash).toBe(SWAP);
+    expect(h.sendTransaction).toHaveBeenCalledOnce();
+  });
+
+  it("an abort ends an execute that never answers", async () => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: (() => new Promise(() => {})) as unknown as typeof fetch });
+    setTimeout(() => controller.abort(), 20);
+
+    const err = await executeAndTrack(client, baseParams, wallet(), { signal: controller.signal }).catch((e) => e);
+
+    expect(err.code).toBe("ABORTED");
+  }, 1_000);
+});

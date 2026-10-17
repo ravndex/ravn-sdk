@@ -42,13 +42,16 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   if the call never returns. A failing `submitTransaction` keeps `partial.signedTransaction` (post
   it again: RAVN never sends it twice) and any `txHash` RAVN's error names; a failing
   `submitSignature` keeps `partial.signature` (the venue may hold the order: check before signing
-  a new one). Stage `swap_signed` reports either.
+  a new one). Stage `swap_signed` reports either. A hook that throws or rejects (an async database
+  write) is ignored, never an unhandled rejection.
 - `signal` (AbortSignal) and `maxWaitMs` options. Abort sends nothing more to the wallet; neither
-  withdraws a wallet prompt already open. A receipt wait or status call is cut off even when the
-  wallet or a custom `fetch` ignores the signal.
+  withdraws a wallet prompt already open. An execute, receipt wait or status call is cut off even
+  when the wallet or a custom `fetch` ignores the signal; one that rejects later is handled.
 - `RavnApiError.status` (HTTP status) and `RavnApiError.retryAfterSec`; `code` is typed
   `RavnErrorCode` (the API's codes plus `NETWORK_ERROR`), still open to new strings.
 - `getStatus(quoteToken, ref, txHash, { signal })`.
+- `GetQuoteParams.timeoutMs`: the quote race's time limit (default 6000, clamped 1000–15000; ravn-mvp
+  #418). An API that predates it ignores it.
 - With `sendCalls`, a swap's approval joins the batch that already carries a token-paid RAVN fee
   (approve + swap + fee in one confirmation). Only there: `ExecutionDTO` doesn't name its venue,
   and the first-party app never batches THORChain or Bebop, which aren't fee-beside routes.

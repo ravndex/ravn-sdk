@@ -126,8 +126,8 @@ export interface ExecuteAndTrackResult {
  * last status it saw. `signedTransaction` (broadcastViaRavn): the signed Solana swap handed to
  * submitTransaction; post it again with the same quoteToken (RAVN never sends it twice) to learn
  * whether it landed, before signing anything new. `signature` (SIGNATURE): the signed order handed
- * to submitSignature; without a `statusRef` the call got no answer and the venue may still have
- * taken the order: check before signing a new one. */
+ * to submitSignature; "swap_signed" with no "swap_sent" after it means the call got no answer and
+ * the venue may still have taken the order: check before signing a new one. */
 export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & {
   lastStatus?: StatusDTO;
   signedTransaction?: string;
@@ -216,12 +216,11 @@ const transient = (err: unknown): boolean =>
 const rateLimited = (err: unknown): boolean =>
   err instanceof RavnApiError && (err.code === "RATE_LIMITED" || err.code === "VENUE_RATE_LIMITED" || err.status === 429);
 
-// `promise`, or the signal's reason as soon as it aborts: a custom fetch may ignore the signal.
+// `promise`, or the signal's reason as soon as it aborts: a wallet or custom fetch may ignore the
+// signal. `promise` is always handled, so one that rejects after the abort is never unhandled.
 const orAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
   new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(signal.reason);
     const onAbort = () => reject(signal.reason);
-    signal.addEventListener("abort", onAbort, { once: true });
     promise.then(
       (value) => {
         signal.removeEventListener("abort", onAbort);
@@ -232,6 +231,8 @@ const orAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
         reject(err);
       }
     );
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 
 const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
@@ -271,7 +272,8 @@ export async function executeAndTrack(
   const report = (stage: ExecuteAndTrackStage, fields: ExecuteAndTrackPartial) => {
     Object.assign(partial, fields);
     try {
-      options.onProgress?.({ stage, partial: { ...partial } });
+      // An async hook (a database write) may reject: handled here too, never unhandled.
+      Promise.resolve(options.onProgress?.({ stage, partial: { ...partial } })).catch(() => {});
     } catch {
       // The swap is out either way: a failing progress hook must not stop its fee or tracking.
     }
@@ -312,7 +314,7 @@ export async function executeAndTrack(
     checkpoint();
     // Only a rate limit: a BUILD_FAILED wants a fresh quote, and a repeat can open a second order
     // at the venue (a NEAR deposit address, a Houdini or Garden order).
-    const execution = await withRetries(() => client.execute(params), rateLimited);
+    const execution = await withRetries(() => orAbort(client.execute(params), stop.signal), rateLimited);
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
 
@@ -461,6 +463,8 @@ export async function executeAndTrack(
           }
         }
       }
+      // Stopped before or during the fee: say so, even with polling off (no fee was sent on it).
+      checkpoint();
       const statusRef = execution.statusRef ?? txHash;
       const statusTxHash = proof(txHash, feeTxHash);
       if (feeTxHash && !statusTxHash) {
