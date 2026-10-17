@@ -1244,3 +1244,29 @@ describe("executeAndTrack: review fixes, round 4", () => {
     expect(result.finalStatus?.status).toBe("success");
   });
 });
+
+// Review of #15, round 5.
+describe("executeAndTrack: review fixes, round 5", () => {
+  it("calls a class-instance wallet's handlers as methods (signTypedData keeps its `this`)", async () => {
+    class Wallet {
+      private readonly signer = "0xsig" as const;
+      async sendTransaction() {
+        return `0x${"a".repeat(64)}`;
+      }
+      async waitForReceipt(hash: string) {
+        return receipt(hash);
+      }
+      async signTypedData() {
+        return this.signer;
+      }
+    }
+    const execution = { executionType: "SIGNATURE", quoteToken: "qt-exec", approvalData: { primaryType: "Permit" }, typedData: { primaryType: "Order" } };
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-signature": [{ statusRef: "cow-uid" }], status: [{ status: "success", venue: "cow" }] }) });
+    const submitSpy = vi.spyOn(client, "submitSignature");
+
+    const result = await executeAndTrack(client, baseParams, new Wallet(), { pollIntervalMs: 0 });
+
+    expect(result.statusRef).toBe("cow-uid");
+    expect(submitSpy).toHaveBeenCalledWith({ quoteToken: "qt-exec", signature: "0xsig", approvalSignature: "0xsig" });
+  });
+});

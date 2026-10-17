@@ -480,8 +480,7 @@ export async function executeAndTrack(
     }
 
     if (execution.executionType === "SIGNATURE") {
-      const { signTypedData } = handlers;
-      if (!signTypedData) {
+      if (!handlers.signTypedData) {
         throw new Error("executeAndTrack: this execution requires signTypedData, none was provided");
       }
       if (!execution.typedData) {
@@ -493,9 +492,10 @@ export async function executeAndTrack(
       // accepted and simply never fills, with no error to explain why.
       const approvalTxHash = await maybeSendApproval(execution.approval);
       checkpoint();
-      const approvalSignature = execution.approvalData ? await signTypedData(execution.approvalData) : undefined;
+      // Called as methods: a class-instance wallet needs its `this`.
+      const approvalSignature = execution.approvalData ? await handlers.signTypedData(execution.approvalData) : undefined;
       checkpoint();
-      const signature = await signTypedData(execution.typedData);
+      const signature = await handlers.signTypedData(execution.typedData);
       checkpoint();
       // From here the venue may take the order even when the call fails (BUILD_FAILED, no answer),
       // so only a rate limit, refused before anything was placed, is retried.

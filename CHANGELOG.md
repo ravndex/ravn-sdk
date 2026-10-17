@@ -25,8 +25,10 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   `refunded`, `failed`; `unknown` still stops: it never changes). `expired`: a refund is due and
   the status turns `refunded` when it lands (Across: hours later); `executeAndTrack` polls it once
   a minute (`expiredPollIntervalMs`), as does `useRavnStatus` (react 0.1.7). `not_found`: the venue
-  has no record of the swap yet; polled at the normal interval. A swap that never landed (a dropped
-  transaction) is polled until `signal` or `maxWaitMs` stops it, like one stuck `pending`.
+  has no record of this swap, brief right after sending (Relay indexes seconds behind: 0.1.15
+  ended most Relay swaps on their first poll), otherwise permanent (the fill isn't this quote's
+  swap); polled at the normal interval until `signal` or `maxWaitMs` stops it, like one stuck
+  `pending`. Set `maxWaitMs` on a backend.
 - **A network failure is a `RavnApiError`** with `code: "NETWORK_ERROR"` and the fetch error as
   `cause`, never a raw `TypeError`.
 - **@ravnexchange/react 0.1.7 needs @ravnexchange/sdk >=0.2.0** (peer): with an older sdk,
