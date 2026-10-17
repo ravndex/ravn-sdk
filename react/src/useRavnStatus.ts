@@ -24,9 +24,18 @@ export function pollAgain(status: SettlementStatus, txHash: string | undefined, 
   return !isPollingTerminal(status) || (status === "success" && !!txHash && !rechecked);
 }
 
+/** How long to wait before the next poll after `status`: an expired swap's refund can take hours
+ * (Across: a later settlement bundle), so it's asked about once a minute, not every few seconds. */
+export function nextPollMs(status: SettlementStatus, intervalMs: number): number {
+  return status === "expired" ? Math.max(intervalMs, 60_000) : intervalMs;
+}
+
 /**
  * Polls /v1/status until it reaches a terminal state (see isPollingTerminal: "unknown"
- * counts as terminal, it means the venue has no live tracker and never will for this swap).
+ * counts as terminal, it means the venue has no live tracker and never will for this swap;
+ * "expired" doesn't, a refund is due, and is polled once a minute until it lands; nor does
+ * "not_found", the venue has no record of this swap: brief right after sending, otherwise it
+ * stays so while mounted).
  * Pass `params: null` to not poll at all (e.g. before execution has produced a ref).
  * `txHash`: executeAndTrack's `statusTxHash`, or the fee payment a DEPOSIT's `fee.transaction`
  * asked for (or a two-hop route's hop-1 tx). Without it the swap's status still arrives, but its fee is never proven and nothing is owed.
@@ -60,7 +69,7 @@ export function useRavnStatus(
           setError(null);
           if (pollAgain(s.status, params.txHash, rechecked)) {
             rechecked ||= isPollingTerminal(s.status);
-            timer = setTimeout(poll, intervalMs);
+            timer = setTimeout(poll, nextPollMs(s.status, intervalMs));
           }
         })
         .catch((err) => {

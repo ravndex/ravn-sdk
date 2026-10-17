@@ -47,27 +47,37 @@ export class RavnClient {
     // Called unbound, never as this.fetchImpl(...): a browser's own fetch (the default, or one
     // passed in) throws "Illegal invocation" when `this` is the client, failing every call.
     const fetchImpl = this.fetchImpl;
-    const res = await fetchImpl(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        "content-type": "application/json",
-        ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
-        ...init.headers,
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetchImpl(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: {
+          "content-type": "application/json",
+          ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
+          ...init.headers,
+        },
+      });
+    } catch (err) {
+      // The caller's own abort is theirs, as is; anything else is the one error type this client
+      // promises, never a raw fetch TypeError.
+      if (init.signal?.aborted) throw err;
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new RavnApiError("NETWORK_ERROR", `No response from ${path}: ${reason}`, undefined, undefined, { cause: err });
+    }
 
     let body: Envelope<T>;
     try {
       body = (await res.json()) as Envelope<T>;
-    } catch {
+    } catch (err) {
+      if (init.signal?.aborted) throw err;
       // A non-JSON body (an intermediary's HTML error page, an empty 204/502/504) must still
       // surface as the one error type this client promises, never a raw SyntaxError.
-      throw new RavnApiError("INTERNAL", `HTTP ${res.status}: response was not valid JSON`, undefined, undefined);
+      throw new RavnApiError("INTERNAL", `HTTP ${res.status}: response was not valid JSON`, undefined, undefined, { status: res.status });
     }
 
     if (!res.ok || body.error) {
       const err = body.error ?? { code: "INTERNAL", message: `HTTP ${res.status}` };
-      throw new RavnApiError(err.code, err.message, err.details, body.meta);
+      throw new RavnApiError(err.code, err.message, err.details, body.meta, { status: res.status });
     }
 
     return body.data as T;
@@ -105,11 +115,12 @@ export class RavnClient {
    * the execution's statusRef, submitSignature's statusRef, or the origin tx hash. POST, not GET:
    * a 2-hop quoteToken in a query string can exceed header limits and fail with 431. `txHash`:
    * a two-hop route's hop-1 transaction, or the fee payment a DEPOSIT's `fee.transaction` asked
-   * for; it's how RAVN proves the fee your share is paid from. */
-  getStatus(quoteToken: string, ref: string, txHash?: string): Promise<StatusDTO> {
+   * for; it's how RAVN proves the fee your share is paid from. `signal` aborts the request. */
+  getStatus(quoteToken: string, ref: string, txHash?: string, options: { signal?: AbortSignal } = {}): Promise<StatusDTO> {
     return this.request<StatusDTO>("/status", {
       method: "POST",
       body: JSON.stringify({ quoteToken, ref, ...(txHash ? { txHash } : {}) }),
+      signal: options.signal,
     });
   }
 

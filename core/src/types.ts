@@ -24,7 +24,12 @@ export interface QuoteDTO {
   input: { token: TokenDTO; amount: string };
   output: { token: TokenDTO; amount: string };
   /** `supported: false` means the venue has no fee mechanism at all (bps will be 0 either
-   * way); distinct from `supported: true, bps: 0`, a real, intentional zero fee. */
+   * way); distinct from `supported: true, bps: 0`, a real, intentional zero fee. On NEAR Intents
+   * `bps`/`amount` include 1Click's own fee, taken from the input on every swap with or without
+   * yours (the output already reflects it): 20 bps with no fee set (1 bp when both tokens are
+   * USDC, USDT or DAI, or the same asset), with yours half of it plus the larger of that half and
+   * 20 (1) bps, and its 20 (1) bps on top of RAVN's own fee beside a private swap: NEAR never
+   * shows `bps: 0`. */
   fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
   /** False means this is a preview-only price; see RavnClient.getQuote's destinationAddress note. */
   executable: boolean;
@@ -101,11 +106,18 @@ export interface ApprovalDTO {
   spender?: string;
   amount: string;
   unlimitedRecommended?: boolean;
+  /** Send this first and wait for it to be mined, then the approval: `approve(spender, 0)`. Only on
+   * a token whose approve reverts on a change from one non-zero allowance to another (Ethereum
+   * USDT) when the sender holds a partial one. executeAndTrack does this. */
+  reset?: { to: string; data: string; value: string };
 }
 
 export type ExecutionDTO =
   | {
       executionType: "TRANSACTION";
+      /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
+       * it. executeAndTrack broadcasts nothing for one. */
+      sandbox?: true;
       /** Pass this, not the quote's own token, to getStatus. Compose: the post-bind token. */
       quoteToken: string;
       /** The venue's own tracking key (compose hop-2 handle, Garden order id, Relay request id).
@@ -142,6 +154,9 @@ export type ExecutionDTO =
     }
   | {
       executionType: "SIGNATURE";
+      /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
+       * it. executeAndTrack broadcasts nothing for one. */
+      sandbox?: true;
       /** Pass this, not the quote's own token, to submitSignature and getStatus. */
       quoteToken: string;
       statusRef?: string;
@@ -152,6 +167,9 @@ export type ExecutionDTO =
     }
   | {
       executionType: "DEPOSIT";
+      /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
+       * it. executeAndTrack broadcasts nothing for one. */
+      sandbox?: true;
       /** Pass this, not the quote's own token, to getStatus. */
       quoteToken: string;
       /** `expiresAt` (ISO 8601), when set, is when the deposit must have ARRIVED (confirmed on
@@ -238,6 +256,11 @@ export interface GetQuoteParams {
    * carry slippage.noMinimum: true and guaranteedMin: null; slippageBps does not protect them. */
   allowNoMinimum?: boolean;
   rankingMode?: "best_output" | "fastest";
+  /** The race's time limit in ms, counted from its start: once it has passed and some venue has
+   * priced the swap, slower venues are left out (with none priced yet, the first price ends the
+   * wait; a quote with slippage.noMinimum counts only 2000 ms past the limit). A positive integer;
+   * default 6000, clamped to 1000–15000. An API that predates it ignores it. */
+  timeoutMs?: number;
   /** Drop specific venues from this race, e.g. a risk objection to one of them. */
   excludeVenues?: string[];
   /** Race only these venues, e.g. ["bebop"] for an RFQ-only race. Every other venue is left
@@ -298,15 +321,50 @@ export interface ErrorMeta {
   version: string;
 }
 
-/** Thrown for every non-2xx response. `code` is the stable, machine-readable string from the API. */
+/** Every `code` the API sends (see the API's Errors page), plus NETWORK_ERROR: no response came
+ * back at all (offline, DNS, CORS, a dropped connection). New codes can appear: compare against
+ * these, don't switch on them exhaustively. */
+export type RavnErrorCode =
+  | "INVALID_REQUEST"
+  | "UNSUPPORTED_TOKEN"
+  | "UNSUPPORTED_CHAIN"
+  | "NO_LIQUIDITY"
+  | "QUOTE_EXPIRED"
+  | "QUOTE_INVALID"
+  | "QUOTE_NOT_EXECUTABLE"
+  | "RATE_LIMITED"
+  | "UNAUTHORIZED"
+  | "NOT_CONFIGURED"
+  | "NOT_FOUND"
+  | "BUILD_FAILED"
+  | "VENUE_RATE_LIMITED"
+  | "ORDER_REJECTED"
+  | "INTERNAL"
+  | "NETWORK_ERROR";
+
+/** Thrown for every failed call: a non-2xx response, or none at all (NETWORK_ERROR). `code` is the
+ * stable, machine-readable string from the API. */
 export class RavnApiError extends Error {
+  /** The HTTP status; undefined when no response came back (NETWORK_ERROR). */
+  readonly status?: number;
+  /** Seconds the API asked you to wait before trying the same call again (`details.retryAfterSec`,
+   * sent with RATE_LIMITED and VENUE_RATE_LIMITED). */
+  readonly retryAfterSec?: number;
+  /** NETWORK_ERROR: the fetch error underneath. */
+  declare readonly cause?: unknown;
+
   constructor(
-    public readonly code: string,
+    public readonly code: RavnErrorCode | (string & {}),
     message: string,
     public readonly details: unknown,
-    public readonly meta: ErrorMeta | undefined
+    public readonly meta: ErrorMeta | undefined,
+    init: { status?: number; cause?: unknown } = {}
   ) {
     super(message);
     this.name = "RavnApiError";
+    this.status = init.status;
+    const retryAfterSec = (details as { retryAfterSec?: unknown } | null | undefined)?.retryAfterSec;
+    this.retryAfterSec = typeof retryAfterSec === "number" ? retryAfterSec : undefined;
+    if (init.cause !== undefined) this.cause = init.cause;
   }
 }

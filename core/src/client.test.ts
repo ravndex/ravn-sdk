@@ -143,3 +143,51 @@ describe("RavnClient", () => {
     expect(url).toBe("http://localhost:3000/api/v1/execute");
   });
 });
+
+// Claim 4 (audit 2026-10-17): one typed error, with the HTTP status and when to retry.
+describe("RavnClient errors", () => {
+  it("a network failure is a RavnApiError (NETWORK_ERROR), never a raw fetch TypeError", async () => {
+    const cause = new TypeError("fetch failed");
+    const client = new RavnClient({ fetch: vi.fn(async () => { throw cause; }) as unknown as typeof fetch });
+
+    const err = await client.getChains().catch((e) => e);
+
+    expect(err).toBeInstanceOf(RavnApiError);
+    expect(err).toMatchObject({ code: "NETWORK_ERROR", status: undefined, cause });
+  });
+
+  it("carries the HTTP status and details.retryAfterSec", async () => {
+    const limited = fakeFetch(429, { error: { code: "RATE_LIMITED", message: "slow down", details: { retryAfterSec: 7 } } });
+    const notJson = vi.fn(async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError("<html>"); } })) as unknown as typeof fetch;
+
+    const err = await new RavnClient({ fetch: limited }).getStatus("t", "r").catch((e) => e);
+    const gateway = await new RavnClient({ fetch: notJson }).getStatus("t", "r").catch((e) => e);
+
+    expect(err).toMatchObject({ code: "RATE_LIMITED", status: 429, retryAfterSec: 7 });
+    expect(gateway).toMatchObject({ code: "INTERNAL", status: 502, retryAfterSec: undefined });
+  });
+
+  it("passes a signal to fetch and lets the caller's own abort through as is", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.signal?.aborted) throw init.signal.reason;
+      return { ok: true, status: 200, json: async () => ({ data: { status: "success", venue: "relay" } }) };
+    }) as unknown as typeof fetch;
+
+    const err = await new RavnClient({ fetch: fetchImpl }).getStatus("t", "r", undefined, { signal: controller.signal }).catch((e) => e);
+
+    expect(err).toBe(controller.signal.reason);
+  });
+});
+
+describe("getQuote timeoutMs", () => {
+  it("sends the race's time limit when given (ravn-mvp #418; older APIs ignore it)", async () => {
+    const fetchImpl = fakeFetch(200, { data: {} });
+    await new RavnClient({ fetch: fetchImpl }).getQuote({
+      inputChainId: 1, outputChainId: 8453, inputToken: "0xa", outputToken: "0xb", inputAmount: "1", userAddress: "0xu", timeoutMs: 3_000,
+    });
+    const [, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(init.body as string).timeoutMs).toBe(3_000);
+  });
+});
