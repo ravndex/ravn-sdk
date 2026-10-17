@@ -189,6 +189,9 @@ const MAX_BACKOFF_MS = 60_000;
 // ponytail: a fixed cap, ~4 min of backoff at the default interval; past it the call rejects with
 // every hash to resume from. Make it an option if integrators need to ride out longer outages.
 const MAX_ATTEMPTS = 8;
+// An execute asked again with its Idempotency-Key: ~30 s at the default interval, so a call that
+// can't get through fails in about that rather than four minutes.
+const EXECUTE_ATTEMPTS = 4;
 
 /** The fee payment a DEPOSIT execution asks for beside its deposit; undefined when it has none. */
 export function depositFeePayment(execution: ExecutionDTO): DepositFeePayment | undefined {
@@ -216,6 +219,13 @@ const transient = (err: unknown): boolean =>
 // a BUILD_FAILED (submit-signature: the venue may have taken the order).
 const rateLimited = (err: unknown): boolean =>
   err instanceof RavnApiError && (err.code === "RATE_LIMITED" || err.code === "VENUE_RATE_LIMITED" || err.status === 429);
+
+// An execute sent with an Idempotency-Key answers a repeat with its first answer, so one whose answer
+// was lost (no response, a gateway timeout) or is still being built (UNAVAILABLE) can be asked again.
+// Never a BUILD_FAILED (re-quote) or an unexpected error, which may have half-built an order.
+const answerLost = (err: unknown): boolean =>
+  rateLimited(err) ||
+  (err instanceof RavnApiError && (err.code === "NETWORK_ERROR" || err.code === "UNAVAILABLE" || err.status === 504));
 
 // `promise`, or the signal's reason as soon as it aborts: a wallet or custom fetch may ignore the
 // signal. `promise` is always handled, so one that rejects after the abort is never unhandled.
@@ -257,8 +267,9 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
  * stays wallet-agnostic (no RPC dependency); this just gets the ORDER right, which quickstart's
  * own docs flag as the most common integration failure: sending the main tx before the approval
  * has confirmed. A failed API call is retried where repeating it is safe (status polls and
- * submitTransaction on a 429, 5xx or no response; execute and submitSignature only when rate
- * limited), waiting the API's retryAfterSec. Once anything
+ * submitTransaction on a 429, 5xx or no response; execute, sent with an Idempotency-Key, also when its
+ * answer was lost or is still being built, up to 4 tries; submitSignature only when rate limited),
+ * waiting the API's retryAfterSec. Once anything
  * is sent, it rejects only with an ExecuteAndTrackError carrying every hash; `onProgress` hears
  * each one first.
  */
@@ -299,13 +310,13 @@ export async function executeAndTrack(
   };
 
   // Calls `call` until it succeeds, fails in a way `retryable` says repeating can't fix, or
-  // MAX_ATTEMPTS: waiting the API's retryAfterSec, else an interval doubling from pollIntervalMs.
-  const withRetries = async <T>(call: () => Promise<T>, retryable: (err: unknown) => boolean): Promise<T> => {
+  // `attempts`: waiting the API's retryAfterSec, else an interval doubling from pollIntervalMs.
+  const withRetries = async <T>(call: () => Promise<T>, retryable: (err: unknown) => boolean, attempts = MAX_ATTEMPTS): Promise<T> => {
     for (let attempt = 1; ; attempt++) {
       try {
         return await call();
       } catch (err) {
-        if (attempt >= MAX_ATTEMPTS || !retryable(err)) throw err;
+        if (attempt >= attempts || !retryable(err)) throw err;
         const askedMs = ((err as RavnApiError).retryAfterSec ?? 0) * 1_000;
         await sleep(Math.max(askedMs, Math.min(pollIntervalMs * 2 ** (attempt - 1), MAX_BACKOFF_MS)), stop.signal);
       }
@@ -314,9 +325,15 @@ export async function executeAndTrack(
 
   const run = async (): Promise<ExecuteAndTrackResult> => {
     checkpoint();
-    // Only a rate limit: a BUILD_FAILED wants a fresh quote, and a repeat can open a second order
-    // at the venue (a NEAR deposit address, a Houdini or Garden order).
-    const execution = await withRetries(() => orAbort(client.execute(params), stop.signal), rateLimited);
+    // One Idempotency-Key for every try, so a repeat can't open a second order at the venue (a NEAR
+    // deposit address, a Houdini or Garden order). Without one (no crypto.randomUUID), only a rate
+    // limit is repeated. A BUILD_FAILED wants a fresh quote either way.
+    const key = params.idempotencyKey ?? globalThis.crypto?.randomUUID?.();
+    const execution = await withRetries(
+      () => orAbort(client.execute({ ...params, ...(key ? { idempotencyKey: key } : {}) }), stop.signal),
+      key ? answerLost : rateLimited,
+      key ? EXECUTE_ATTEMPTS : MAX_ATTEMPTS
+    );
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
 

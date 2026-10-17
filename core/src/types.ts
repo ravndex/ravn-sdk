@@ -118,6 +118,8 @@ export type ExecutionDTO =
       /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
        * it. executeAndTrack broadcasts nothing for one. */
       sandbox?: true;
+      /** This swap's id in RAVN's ledger: settlement webhooks name it (`swapId`). Absent on a sandbox quote. */
+      swapId?: string;
       /** Pass this, not the quote's own token, to getStatus. Compose: the post-bind token. */
       quoteToken: string;
       /** The venue's own tracking key (compose hop-2 handle, Garden order id, Relay request id).
@@ -157,6 +159,8 @@ export type ExecutionDTO =
       /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
        * it. executeAndTrack broadcasts nothing for one. */
       sandbox?: true;
+      /** This swap's id in RAVN's ledger: settlement webhooks name it (`swapId`). Absent on a sandbox quote. */
+      swapId?: string;
       /** Pass this, not the quote's own token, to submitSignature and getStatus. */
       quoteToken: string;
       statusRef?: string;
@@ -170,6 +174,8 @@ export type ExecutionDTO =
       /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
        * it. executeAndTrack broadcasts nothing for one. */
       sandbox?: true;
+      /** This swap's id in RAVN's ledger: settlement webhooks name it (`swapId`). Absent on a sandbox quote. */
+      swapId?: string;
       /** Pass this, not the quote's own token, to getStatus. */
       quoteToken: string;
       /** `expiresAt` (ISO 8601), when set, is when the deposit must have ARRIVED (confirmed on
@@ -301,6 +307,11 @@ export interface ExecuteParams {
   refundAddress?: string;
   /** Your end user's IANA timezone, forwarded only to Houdini. Default UTC. */
   clientTimezone?: string;
+  /** Sent as the Idempotency-Key header: any unique value per swap attempt (e.g. a UUID), 1–255
+   * printable ASCII characters, no spaces (execute throws INVALID_REQUEST otherwise). Calling execute again with the same key and request (quoteToken and any addresses) within a day
+   * returns the first answer instead of building again (at a deposit venue, a second deposit
+   * address). executeAndTrack sends one itself when you don't. */
+  idempotencyKey?: string;
 }
 
 export interface SubmitSignatureParams {
@@ -338,6 +349,7 @@ export type RavnErrorCode =
   | "NOT_FOUND"
   | "BUILD_FAILED"
   | "VENUE_RATE_LIMITED"
+  | "UNAVAILABLE"
   | "ORDER_REJECTED"
   | "INTERNAL"
   | "NETWORK_ERROR";
@@ -348,7 +360,7 @@ export class RavnApiError extends Error {
   /** The HTTP status; undefined when no response came back (NETWORK_ERROR). */
   readonly status?: number;
   /** Seconds the API asked you to wait before trying the same call again (`details.retryAfterSec`,
-   * sent with RATE_LIMITED and VENUE_RATE_LIMITED). */
+   * sent with RATE_LIMITED, VENUE_RATE_LIMITED and UNAVAILABLE). */
   readonly retryAfterSec?: number;
   /** NETWORK_ERROR: the fetch error underneath. */
   declare readonly cause?: unknown;

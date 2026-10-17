@@ -142,6 +142,27 @@ describe("RavnClient", () => {
     const [url] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe("http://localhost:3000/api/v1/execute");
   });
+
+  it("sends execute's idempotencyKey as the Idempotency-Key header, not in the body", async () => {
+    const fetchImpl = fakeFetch(200, { data: {} });
+    const client = new RavnClient({ apiKey: "rvn_live_x", fetch: fetchImpl });
+
+    await client.execute({ quoteToken: "x", idempotencyKey: "swap-attempt-1" });
+
+    const [, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers).toMatchObject({ "Idempotency-Key": "swap-attempt-1", "x-api-key": "rvn_live_x" });
+    expect(JSON.parse(init.body)).toEqual({ quoteToken: "x" });
+  });
+
+  it("refuses an idempotencyKey RAVN would refuse, without sending anything", async () => {
+    const fetchImpl = fakeFetch(200, { data: {} });
+    const client = new RavnClient({ fetch: fetchImpl });
+
+    for (const bad of ["a b", "a\nb", "ключ", "", "k".repeat(256)]) {
+      await expect(client.execute({ quoteToken: "x", idempotencyKey: bad })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 // Claim 4 (audit 2026-10-17): one typed error, with the HTTP status and when to retry.

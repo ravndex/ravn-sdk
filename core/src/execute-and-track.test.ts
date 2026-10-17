@@ -914,6 +914,47 @@ describe("executeAndTrack: review fixes", () => {
     expect(events[0]).toBe("swap_signed");
   });
 
+  it("asks execute again, with the same Idempotency-Key, when its answer was lost or is still being built", async () => {
+    const fetchImpl = scriptedFetch({
+      execute: [new TypeError("fetch failed"), httpError(503, "UNAVAILABLE", { retryAfterSec: 0 }), plain],
+      status: [success],
+    });
+    const client = new RavnClient({ fetch: fetchImpl });
+
+    const outcome = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 });
+
+    expect(outcome.txHash).toBe(SWAP);
+    const keys = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([url]) => String(url).endsWith("/execute"))
+      .map(([, init]) => (init as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"]);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("asks again after a gateway timeout, and gives up on a lost execute after 4 tries", async () => {
+    const fetchImpl = scriptedFetch({ execute: [httpError(504, "INTERNAL"), plain], status: [success] });
+    const outcome = await executeAndTrack(new RavnClient({ fetch: fetchImpl }), baseParams, wallet(), { pollIntervalMs: 0 });
+    expect(outcome.txHash).toBe(SWAP);
+
+    const offline = scriptedFetch({ execute: [new TypeError("fetch failed")] });
+    const err = await executeAndTrack(new RavnClient({ fetch: offline }), baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+    expect(err.code).toBe("NETWORK_ERROR");
+    expect(offline).toHaveBeenCalledTimes(4);
+  });
+
+  it("uses the caller's own Idempotency-Key, and never repeats an unexpected execute error", async () => {
+    const fetchImpl = scriptedFetch({ execute: [httpError(500, "INTERNAL"), plain] });
+    const client = new RavnClient({ fetch: fetchImpl });
+
+    const err = await executeAndTrack(client, { ...baseParams, idempotencyKey: "mine-1" }, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+
+    expect(err.code).toBe("INTERNAL");
+    const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect((calls[0][1] as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"]).toBe("mine-1");
+  });
+
   it("never repeats an execute that failed to build: re-quoting is the fix, and a repeat can open a second venue order", async () => {
     const client = new RavnClient({ fetch: scriptedFetch({ execute: [httpError(502, "BUILD_FAILED"), plain] }) });
     const executeSpy = vi.spyOn(client, "execute");
@@ -1055,14 +1096,19 @@ describe("executeAndTrack: review fixes, round 2", () => {
     expect(outcome.txHash).toBe(SWAP);
   });
 
-  it("never repeats an execute that got no answer: the first may have opened a venue order", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [new TypeError("fetch failed"), plain] }) });
-    const executeSpy = vi.spyOn(client, "execute");
+  it("never repeats an execute that got no answer without an Idempotency-Key: the first may have opened a venue order", async () => {
+    vi.stubGlobal("crypto", {}); // no crypto.randomUUID to make one with
+    try {
+      const client = new RavnClient({ fetch: scriptedFetch({ execute: [new TypeError("fetch failed"), plain] }) });
+      const executeSpy = vi.spyOn(client, "execute");
 
-    const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+      const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
 
-    expect(executeSpy).toHaveBeenCalledOnce();
-    expect(err.code).toBe("NETWORK_ERROR");
+      expect(executeSpy).toHaveBeenCalledOnce();
+      expect(err.code).toBe("NETWORK_ERROR");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("reports a batched approval.reset's hash", async () => {
