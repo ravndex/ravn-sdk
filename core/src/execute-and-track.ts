@@ -57,8 +57,9 @@ export interface ExecuteAndTrackHandlers {
   hasAllowance?(approval: ApprovalDTO): Promise<boolean>;
 }
 
-/** What just happened: a transaction's hash is known (sent, not yet confirmed), or a status poll answered. */
-export type ExecuteAndTrackStage = "approval_sent" | "swap_sent" | "fee_sent" | "status";
+/** What just happened: a transaction's hash is known (sent, not yet confirmed), a Solana swap was
+ * signed for RAVN to send (`signedTransaction`), or a status poll answered. */
+export type ExecuteAndTrackStage = "reset_sent" | "approval_sent" | "swap_signed" | "swap_sent" | "fee_sent" | "status";
 
 export interface ExecuteAndTrackProgress {
   stage: ExecuteAndTrackStage;
@@ -91,6 +92,8 @@ export interface ExecuteAndTrackOptions {
 
 export interface ExecuteAndTrackResult {
   execution: ExecutionDTO;
+  /** The `approval.reset` (approve to 0) sent before the approval, when the token needed one. */
+  resetTxHash?: string;
   approvalTxHash?: string;
   txHash?: string;
   /** Pass to client.getStatus(quoteToken, statusRef). Same as `execution.quoteToken`, NOT the
@@ -119,8 +122,10 @@ export interface ExecuteAndTrackResult {
 }
 
 /** What executeAndTrack knew when it reported progress or stopped: every hash sent so far, and the
- * last status it saw. */
-export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & { lastStatus?: StatusDTO };
+ * last status it saw. `signedTransaction` (broadcastViaRavn): the signed Solana swap handed to
+ * submitTransaction; post it again with the same quoteToken (RAVN never sends it twice) to learn
+ * whether it landed, before signing anything new. */
+export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & { lastStatus?: StatusDTO; signedTransaction?: string };
 
 /**
  * How executeAndTrack rejects once anything has been sent or signed (an approval, the swap, a
@@ -173,7 +178,7 @@ const EVM_TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 const SANDBOX_REF = "sandbox";
 const EXPIRED_POLL_INTERVAL_MS = 60_000;
 const MAX_BACKOFF_MS = 60_000;
-// ponytail: a fixed cap, ~5 min of backoff at the default interval; past it the call rejects with
+// ponytail: a fixed cap, ~4 min of backoff at the default interval; past it the call rejects with
 // every hash to resume from. Make it an option if integrators need to ride out longer outages.
 const MAX_ATTEMPTS = 8;
 
@@ -204,6 +209,24 @@ const transient = (err: unknown): boolean =>
 const rateLimited = (err: unknown): boolean =>
   err instanceof RavnApiError && (err.code === "RATE_LIMITED" || err.code === "VENUE_RATE_LIMITED");
 
+// `promise`, or the signal's reason as soon as it aborts: a custom fetch may ignore the signal.
+const orAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      }
+    );
+  });
+
 const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
@@ -223,8 +246,9 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
  * payment (if any) → status polling, using caller-supplied signing/sending functions. The SDK
  * stays wallet-agnostic (no RPC dependency); this just gets the ORDER right, which quickstart's
  * own docs flag as the most common integration failure: sending the main tx before the approval
- * has confirmed. A failed API call is retried where repeating it is safe (status polls, a
- * rate-limited or 5xx execute, submitTransaction), waiting the API's retryAfterSec. Once anything
+ * has confirmed. A failed API call is retried where repeating it is safe (status polls and
+ * submitTransaction on a 429, 5xx or no response; execute and submitSignature only when rate
+ * limited), waiting the API's retryAfterSec. Once anything
  * is sent, it rejects only with an ExecuteAndTrackError carrying every hash; `onProgress` hears
  * each one first.
  */
@@ -279,7 +303,9 @@ export async function executeAndTrack(
 
   const run = async (): Promise<ExecuteAndTrackResult> => {
     checkpoint();
-    const execution = await withRetries(() => client.execute(params), transient);
+    // Only a rate limit: a BUILD_FAILED wants a fresh quote, and a repeat can open a second order
+    // at the venue (a NEAR deposit address, a Houdini or Garden order).
+    const execution = await withRetries(() => client.execute(params), rateLimited);
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
 
@@ -294,7 +320,7 @@ export async function executeAndTrack(
       // reported fee tx is unreadable (ravn-mvp #411).
       for (let recheck = feeSent; ; ) {
         checkpoint();
-        const status = await withRetries(() => client.getStatus(quoteToken, ref, txHash, { signal: stop.signal }), transient);
+        const status = await withRetries(() => orAbort(client.getStatus(quoteToken, ref, txHash, { signal: stop.signal }), stop.signal), transient);
         report("status", { lastStatus: status });
         if (isPollingTerminal(status.status)) {
           if (!recheck || status.status !== "success") return status;
@@ -304,14 +330,18 @@ export async function executeAndTrack(
       }
     };
 
-    // A sandbox execution is never real: nothing in it is ever broadcast. RAVN never forwards a
-    // sandbox signature or sends a sandbox Solana transaction, and answers its status synthetically.
-    const live = !execution.sandbox;
+    // A sandbox execution is never real, but a venue with no sandbox stand-in returns its live
+    // payload: nothing in it is signed or sent (a signed order or Solana payment is a live
+    // instrument even though RAVN drops it). RAVN answers its status synthetically, for any ref.
+    if (execution.sandbox && execution.executionType !== "DEPOSIT") {
+      const statusRef = execution.statusRef ?? SANDBOX_REF;
+      return { execution, quoteToken, statusRef, finalStatus: await pollStatus(statusRef) };
+    }
 
     // The approval to send, if any: none when the caller already knows it's covered (see
-    // ExecuteAndTrackHandlers.hasAllowance), and never in sandbox.
+    // ExecuteAndTrackHandlers.hasAllowance).
     const neededApproval = async (approval: ApprovalDTO | undefined): Promise<ApprovalDTO | undefined> =>
-      approval && live && !(await handlers.hasAllowance?.(approval)) ? approval : undefined;
+      approval && !(await handlers.hasAllowance?.(approval)) ? approval : undefined;
 
     // Sends and confirms it, after its reset (approve to 0) when the token needs one first.
     const maybeSendApproval = async (approval: ApprovalDTO | undefined): Promise<string | undefined> => {
@@ -323,6 +353,7 @@ export async function executeAndTrack(
         hash = await handlers.sendTransaction(tx);
         sent = true;
         if (tx === needed) report("approval_sent", { approvalTxHash: hash });
+        else report("reset_sent", { resetTxHash: hash });
         await handlers.waitForReceipt(hash, needed.chainId);
       }
       return hash;
@@ -342,9 +373,20 @@ export async function executeAndTrack(
       const signedTransaction = await handlers.signSolanaTransaction(serialized);
       checkpoint();
       // From here RAVN may have sent it, even on a failed call. A retry with the same signed
-      // transaction never sends it twice, so retrying is how to find out.
+      // transaction never sends it twice, so retrying is how to find out; a failure that names
+      // the signature (BUILD_FAILED's details.txHash) is kept too.
       sent = true;
-      const { txHash } = await withRetries(() => client.submitTransaction({ quoteToken, signedTransaction }), transient);
+      report("swap_signed", { signedTransaction });
+      const submit = async () => {
+        try {
+          return await client.submitTransaction({ quoteToken, signedTransaction });
+        } catch (err) {
+          const named = err instanceof RavnApiError ? (err.details as { txHash?: unknown } | undefined)?.txHash : undefined;
+          if (typeof named === "string") Object.assign(partial, { txHash: named, statusRef: execution.statusRef ?? named });
+          throw err;
+        }
+      };
+      const { txHash } = await withRetries(submit, transient);
       const statusRef = execution.statusRef ?? txHash;
       report("swap_sent", { txHash, statusRef });
       return { execution, quoteToken, txHash, statusRef, finalStatus: await pollStatus(statusRef) };
@@ -362,10 +404,6 @@ export async function executeAndTrack(
         const hash = feeHash ?? (execution.statusRef ? swapHash : undefined);
         return hash && EVM_TX_HASH.test(hash) ? hash : undefined;
       };
-      if (!live) {
-        const statusRef = execution.statusRef ?? SANDBOX_REF;
-        return { execution, quoteToken, statusRef, finalStatus: await pollStatus(statusRef) };
-      }
       let txHash: string;
       let feeTxHash: string | undefined;
       let feeError: unknown;
@@ -376,15 +414,18 @@ export async function executeAndTrack(
         // deposit whose tx.to is the user's own 7702 account) or Bebop (its settlement needs gas
         // headroom a batch leaves to the wallet); fee-beside routes are neither.
         const batchApproval = await neededApproval(approval);
-        const approvals = batchApproval ? [...(batchApproval.reset ? [batchApproval.reset] : []), batchApproval] : [];
+        const reset = batchApproval?.reset && { ...batchApproval.reset, chainId: batchApproval.chainId };
+        const approvals = batchApproval ? [...(reset ? [reset] : []), batchApproval] : [];
         checkpoint();
         const hashes = await handlers.sendCalls([...approvals, transaction, feeTx]);
+        // The wallet resolved, so something may be out: from here an error carries what's known.
+        sent = true;
         // Fewer hashes back than calls: the last one carried the rest.
         const carrier = (i: number) => hashes[Math.min(i, hashes.length - 1)];
         if (!carrier(0)) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
-        sent = true;
         txHash = carrier(approvals.length);
         feeTxHash = carrier(approvals.length + 1);
+        if (reset) report("reset_sent", { resetTxHash: carrier(0) });
         if (batchApproval) report("approval_sent", { approvalTxHash: carrier(approvals.length - 1) });
         report("swap_sent", { txHash, statusRef: execution.statusRef ?? txHash, statusTxHash: proof(txHash) });
         report("fee_sent", { feeTxHash, statusTxHash: proof(txHash, feeTxHash) });
@@ -420,7 +461,7 @@ export async function executeAndTrack(
       }
       partial.feeError = feeError;
       return {
-        execution, quoteToken, approvalTxHash: partial.approvalTxHash, txHash, statusRef, statusTxHash, feeTxHash, feeError,
+        execution, quoteToken, resetTxHash: partial.resetTxHash, approvalTxHash: partial.approvalTxHash, txHash, statusRef, statusTxHash, feeTxHash, feeError,
         finalStatus: await pollStatus(statusRef, statusTxHash, !!feeTxHash && !!statusTxHash),
       };
     }
@@ -440,6 +481,7 @@ export async function executeAndTrack(
       const approvalTxHash = await maybeSendApproval(execution.approval);
       checkpoint();
       const approvalSignature = execution.approvalData ? await signTypedData(execution.approvalData) : undefined;
+      checkpoint();
       const signature = await signTypedData(execution.typedData);
       checkpoint();
       // From here the venue may take the order even when the call fails (BUILD_FAILED), so only a
@@ -447,7 +489,7 @@ export async function executeAndTrack(
       sent = true;
       const { statusRef } = await withRetries(() => client.submitSignature({ quoteToken, signature, approvalSignature }), rateLimited);
       report("swap_sent", { statusRef });
-      return { execution, quoteToken, approvalTxHash, statusRef, finalStatus: await pollStatus(statusRef) };
+      return { execution, quoteToken, resetTxHash: partial.resetTxHash, approvalTxHash, statusRef, finalStatus: await pollStatus(statusRef) };
     }
 
     // DEPOSIT: nothing to sign or send from here; the user moves funds to execution.deposit.address

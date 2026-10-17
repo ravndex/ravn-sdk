@@ -837,16 +837,25 @@ describe("executeAndTrack: sandbox executions and approval resets", () => {
     expect(statusSpy).toHaveBeenCalledWith("qt-exec", "sandbox", undefined, expect.anything());
   });
 
-  it("signs a sandbox order (RAVN never forwards it) but sends no on-chain approval for it", async () => {
-    const h = wallet();
-    const execution = { executionType: "SIGNATURE", sandbox: true, quoteToken: "qt-exec", approval, typedData: { primaryType: "Order" } };
-    const { done } = run(execution, h, { "submit-signature": [{ statusRef: "sandbox-ref" }] });
+  // A venue with no sandbox stand-in returns its live payload: a signature over a real order, or a
+  // signed real Solana payment, is a live instrument even though RAVN never forwards it.
+  it.each([
+    ["a SIGNATURE order", { executionType: "SIGNATURE", sandbox: true, quoteToken: "qt-exec", approval, typedData: { primaryType: "Order" } }],
+    ["a broadcastViaRavn Solana payment", { executionType: "TRANSACTION", sandbox: true, quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" }, submit: { url: "/api/v1/submit-transaction" } }],
+  ])("never asks the wallet to sign %s in sandbox, and submits nothing", async (_, execution) => {
+    const h = { ...wallet(), signSolanaTransaction: vi.fn(async (tx: string) => `signed:${tx}`) };
+    const { client, done } = run(execution, h, { "submit-signature": [{ statusRef: "never" }], "submit-transaction": [{ txHash: "never" }] });
+    const submitSignature = vi.spyOn(client, "submitSignature");
+    const submitTransaction = vi.spyOn(client, "submitTransaction");
 
     const result = await done;
 
     expect(h.sendTransaction).not.toHaveBeenCalled();
-    expect(h.signTypedData).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ statusRef: "sandbox-ref", finalStatus: sandboxStatus });
+    expect(h.signTypedData).not.toHaveBeenCalled();
+    expect(h.signSolanaTransaction).not.toHaveBeenCalled();
+    expect(submitSignature).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ statusRef: "sandbox", finalStatus: sandboxStatus });
   });
 
   it("sends and confirms approval.reset (approve to 0, Ethereum USDT) before the approval", async () => {
@@ -874,7 +883,126 @@ describe("executeAndTrack: sandbox executions and approval resets", () => {
     const { done } = run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, fee: tokenFee }, h);
     const result = await done;
 
-    expect(h.sendCalls).toHaveBeenCalledWith([reset, approval, transaction, tokenFee.transaction]);
+    expect(h.sendCalls).toHaveBeenCalledWith([{ ...reset, chainId: 1 }, approval, transaction, tokenFee.transaction]);
     expect(result).toMatchObject({ approvalTxHash: BATCH, txHash: BATCH, feeTxHash: BATCH });
+  });
+});
+
+// Review of #15, round 1.
+describe("executeAndTrack: review fixes", () => {
+  const [APPROVAL, SWAP, RESET] = ["e", "a", "d"].map((c) => `0x${c.repeat(64)}`);
+  const approval = { to: "0xToken", data: "0xapprove", value: "0", chainId: 1 };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 1 };
+  const plain = { executionType: "TRANSACTION", quoteToken: "qt-exec", transaction };
+  const success = { status: "success", venue: "relay" };
+  const wallet = () => ({
+    sendTransaction: vi.fn(async (tx: { data?: string }) => ({ "0xapprove0": RESET, "0xapprove": APPROVAL })[tx.data!] ?? SWAP),
+    waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+  });
+
+  it("keeps the signed Solana transaction, and any txHash RAVN names, when submitTransaction keeps failing", async () => {
+    const execution = { executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" }, submit: { url: "/api/v1/submit-transaction" } };
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-transaction": [httpError(502, "BUILD_FAILED", { txHash: "5igSig" })] }) });
+    const events: string[] = [];
+
+    const err = await executeAndTrack(client, baseParams, { ...wallet(), signSolanaTransaction: async (tx) => `signed:${tx}` }, {
+      pollIntervalMs: 0,
+      onProgress: (e) => events.push(e.stage),
+    }).catch((e) => e);
+
+    expect(err.partial).toMatchObject({ signedTransaction: "signed:AQID", txHash: "5igSig", statusRef: "5igSig" });
+    expect(events[0]).toBe("swap_signed");
+  });
+
+  it("never repeats an execute that failed to build: re-quoting is the fix, and a repeat can open a second venue order", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [httpError(502, "BUILD_FAILED"), plain] }) });
+    const executeSpy = vi.spyOn(client, "execute");
+
+    const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+
+    expect(executeSpy).toHaveBeenCalledOnce();
+    expect(err).toBeInstanceOf(RavnApiError);
+    expect(err.code).toBe("BUILD_FAILED");
+  });
+
+  it("keeps what it knows when sendCalls resolves with no hash", async () => {
+    const fee = { amount: "5", address: "0xF", chainId: 1, transaction: { to: "0xUSDC", data: "0xfee", value: "0", chainId: 1 } };
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, statusRef: "eco-ref", fee }] }) });
+
+    const err = await executeAndTrack(client, baseParams, { ...wallet(), sendCalls: async () => [] }, { pollIntervalMs: 0 }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ExecuteAndTrackError);
+    expect(err.partial).toMatchObject({ quoteToken: "qt-exec", statusRef: "eco-ref" });
+  });
+
+  it("asks for no second signature once aborted during the first", async () => {
+    const controller = new AbortController();
+    const execution = { executionType: "SIGNATURE", quoteToken: "qt-exec", approvalData: { primaryType: "Permit" }, typedData: { primaryType: "Order" } };
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution] }) });
+    const signTypedData = vi.fn(async () => {
+      controller.abort();
+      return "0xsig" as const;
+    });
+
+    const err = await executeAndTrack(client, baseParams, { ...wallet(), signTypedData }, { signal: controller.signal }).catch((e) => e);
+
+    expect(signTypedData).toHaveBeenCalledOnce();
+    expect(err.code).toBe("ABORTED");
+  });
+
+  it("records approval.reset's hash the moment it's sent", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval: { ...approval, reset: { to: "0xToken", data: "0xapprove0", value: "0" } } }] }) });
+    const h = wallet();
+    h.waitForReceipt.mockRejectedValueOnce(new Error("RPC down"));
+
+    const err = await executeAndTrack(client, baseParams, h, { pollIntervalMs: 0 }).catch((e) => e);
+
+    expect(err.partial.resetTxHash).toBe(RESET);
+    expect(err.cause.message).toBe("RPC down");
+  });
+
+  it("gives up after maxWaitMs even when a custom fetch ignores the abort signal", async () => {
+    let calls = 0;
+    const deaf = (async (url: string) => {
+      if (url.endsWith("/execute")) return { ok: true, status: 200, json: async () => ({ data: plain }) };
+      return calls++ === 0 ? { ok: true, status: 200, json: async () => ({ data: { status: "pending", venue: "relay" } }) } : new Promise(() => {});
+    }) as unknown as typeof fetch;
+    const client = new RavnClient({ fetch: deaf });
+
+    const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 5, maxWaitMs: 50 }).catch((e) => e);
+
+    expect(err.code).toBe("TIMEOUT");
+    expect(err.partial.txHash).toBe(SWAP);
+  }, 1_000);
+
+  it("sends no swap when aborted while the approval confirms", async () => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }], status: [success] }) });
+    const h = wallet();
+    h.waitForReceipt.mockImplementation(async (hash: string) => {
+      controller.abort();
+      return receipt(hash);
+    });
+
+    const err = await executeAndTrack(client, baseParams, h, { signal: controller.signal }).catch((e) => e);
+
+    expect(h.sendTransaction).toHaveBeenCalledOnce(); // the approval only
+    expect(err.code).toBe("ABORTED");
+    expect(err.partial.approvalTxHash).toBe(APPROVAL);
+  });
+
+  it("keeps the swap's hash when aborted while the wallet's swap prompt was open", async () => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [success] }) });
+    const h = wallet();
+    h.sendTransaction.mockImplementation(async () => {
+      controller.abort();
+      return SWAP;
+    });
+
+    const err = await executeAndTrack(client, baseParams, h, { signal: controller.signal }).catch((e) => e);
+
+    expect(err.code).toBe("ABORTED");
+    expect(err.partial).toMatchObject({ txHash: SWAP, statusRef: SWAP });
   });
 });

@@ -24,7 +24,12 @@ export interface QuoteDTO {
   input: { token: TokenDTO; amount: string };
   output: { token: TokenDTO; amount: string };
   /** `supported: false` means the venue has no fee mechanism at all (bps will be 0 either
-   * way); distinct from `supported: true, bps: 0`, a real, intentional zero fee. */
+   * way); distinct from `supported: true, bps: 0`, a real, intentional zero fee. On NEAR Intents
+   * `bps`/`amount` include 1Click's own fee, taken from the input on every swap with or without
+   * yours (the output already reflects it): 20 bps with no fee set (1 bp when both tokens are
+   * USDC, USDT or DAI, or the same asset), with yours half of it plus the larger of that half and
+   * 20 (1) bps, and its 20 (1) bps on top of RAVN's own fee beside a private swap: NEAR never
+   * shows `bps: 0`. */
   fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
   /** False means this is a preview-only price; see RavnClient.getQuote's destinationAddress note. */
   executable: boolean;

@@ -24,3 +24,13 @@ describe("isPollingTerminal", () => {
     }
   });
 });
+
+describe("@ravnexchange/sdk peer range", () => {
+  // isPollingTerminal is re-exported from whichever sdk is installed: before 0.2.0 it stops on
+  // "expired", and this package's once-a-minute expired polling would never run.
+  it("requires an sdk that keeps polling past expired", async () => {
+    const { readFileSync } = await import("node:fs");
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(pkg.peerDependencies["@ravnexchange/sdk"]).toBe(">=0.2.0");
+  });
+});

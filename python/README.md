@@ -52,8 +52,8 @@ one doesn't yet:
 
 - **No `execute_and_track`.** You sequence approval, swap, RAVN's fee and status polling yourself.
   Do it the way the TS helper does: wait for the approval's receipt before the swap; send
-  `approval.reset` (when present) and wait for it before the approval; never send anything from an
-  execution with `sandbox: True`; send `fee["transaction"]` only once the swap's own receipt says
+  `approval.reset` (when present) and wait for it before the approval; never sign or send anything
+  from an execution with `sandbox: True`; send `fee["transaction"]` only once the swap's own receipt says
   success; pass its hash as `tx_hash` on every `get_status` poll; keep polling past `expired`
   (a refund is due), about once a minute, until `refunded`.
 - **No retries.** Retry a status poll yourself on `RATE_LIMITED`, a 5xx (`INTERNAL`,

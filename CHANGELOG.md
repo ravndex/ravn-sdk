@@ -25,18 +25,24 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   expired swap once a minute (`expiredPollIntervalMs`), as does `useRavnStatus` (react 0.1.7).
 - **A network failure is a `RavnApiError`** with `code: "NETWORK_ERROR"` and the fetch error as
   `cause`, never a raw `TypeError`.
+- **@ravnexchange/react 0.1.7 needs @ravnexchange/sdk >=0.2.0** (peer): with an older sdk,
+  `isPollingTerminal` still stops on `expired`.
 
 ### Added
 
-- Retries: status polls, `execute` and `submitTransaction` retry a 429, a 5xx or a network failure
-  (backoff doubling from `pollIntervalMs` up to a minute, or the API's `details.retryAfterSec`,
-  up to 8 attempts); `submitSignature` retries only a rate limit, as a `BUILD_FAILED` order may
-  already be placed.
-- `onProgress({ stage, partial })`: every hash the moment it exists (`approval_sent`, `swap_sent`
-  with `statusRef`, `fee_sent`) and every status poll (`status`). Persist `partial` to resume
-  tracking if the call never returns.
+- Retries: status polls and `submitTransaction` retry a 429, a 5xx or a network failure (backoff
+  doubling from `pollIntervalMs` up to a minute, or the API's `details.retryAfterSec`, up to 8
+  attempts). `execute` and `submitSignature` retry only a rate limit: a `BUILD_FAILED` execute
+  wants a fresh quote (and a repeat can open a second venue order), and a `BUILD_FAILED` signature
+  may already be placed.
+- `onProgress({ stage, partial })`: every hash the moment it exists (`reset_sent`, `approval_sent`,
+  `swap_signed` with the signed Solana transaction for broadcastViaRavn, `swap_sent` with
+  `statusRef`, `fee_sent`) and every status poll (`status`). Persist `partial` to resume tracking
+  if the call never returns. A failing `submitTransaction` keeps `partial.signedTransaction` (post
+  it again: RAVN never sends it twice) and any `txHash` RAVN's error names.
 - `signal` (AbortSignal) and `maxWaitMs` options. Abort sends nothing more to the wallet; neither
-  withdraws a wallet prompt already open.
+  withdraws a wallet prompt already open. A status call is cut off even when a custom `fetch`
+  ignores the signal.
 - `RavnApiError.status` (HTTP status) and `RavnApiError.retryAfterSec`; `code` is typed
   `RavnErrorCode` (the API's codes plus `NETWORK_ERROR`), still open to new strings.
 - `getStatus(quoteToken, ref, txHash, { signal })`.
@@ -44,9 +50,11 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   (approve + swap + fee in one confirmation). Only there: `ExecutionDTO` doesn't name its venue,
   and the first-party app never batches THORChain or Bebop, which aren't fee-beside routes.
 - Mirrors ravn-mvp's new execute fields: `ApprovalDTO.reset` (`approve(spender, 0)` first, Ethereum
-  USDT), sent and confirmed before the approval (first in a batch); `ExecutionDTO.sandbox`, for
-  which `executeAndTrack` broadcasts nothing (no approval, swap or fee) and polls RAVN's synthetic
-  sandbox status.
+  USDT), sent and confirmed before the approval (first in a batch), its hash as `resetTxHash`;
+  `ExecutionDTO.sandbox`, for which `executeAndTrack` asks the wallet for nothing (no approval,
+  swap, fee or signature: a venue with no sandbox stand-in returns its live payload) and submits
+  nothing, and polls RAVN's synthetic sandbox status.
+- `QuoteDTO.fee` doc: on NEAR Intents it includes 1Click's own fee (comment only).
 
 ### Python (`ravnexchange`)
 
