@@ -1,0 +1,65 @@
+# Changelog
+
+`@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
+to npm (see `.github/workflows/publish-sdk.yml`).
+
+## @ravnexchange/sdk 0.2.0, @ravnexchange/react 0.1.7
+
+`executeAndTrack` no longer loses a swap it has sent, and never fails silently.
+
+### Breaking
+
+- **`waitForReceipt` must resolve to the receipt.** It's typed
+  `Promise<TransactionReceiptLike | null>` (`{ status, transactionHash }` or ethers v6's
+  `{ status, hash }`), so an adapter resolving to nothing no longer compiles: since 0.1.15 such an
+  adapter silently never got RAVN's fee sent. viem/wagmi `waitForTransactionReceipt`, ethers v5/v6
+  `tx.wait()` / `provider.waitForTransaction` and web3.js receipts fit as they are: return them.
+- **Once anything is sent or signed, `executeAndTrack` rejects only with an
+  `ExecuteAndTrackError`**: `code` (`"FAILED"`, `"ABORTED"`, `"TIMEOUT"`), `partial` (every hash
+  sent so far: `quoteToken`, `approvalTxHash`, `txHash`, `statusRef`, `statusTxHash`, `feeTxHash`,
+  `lastStatus`) and `cause` (the error underneath). That includes the wallet declining the swap
+  after an approval was sent: read `err.cause` for the wallet's own error. Before anything is sent,
+  errors come as before.
+- **`expired` is no longer terminal.** `isPollingTerminal("expired")` is `false`: a refund is due
+  and the status turns `refunded` when it lands (Across: hours later). `executeAndTrack` polls an
+  expired swap once a minute (`expiredPollIntervalMs`), as does `useRavnStatus` (react 0.1.7).
+- **A network failure is a `RavnApiError`** with `code: "NETWORK_ERROR"` and the fetch error as
+  `cause`, never a raw `TypeError`.
+
+### Added
+
+- Retries: status polls, `execute` and `submitTransaction` retry a 429, a 5xx or a network failure
+  (backoff doubling from `pollIntervalMs` up to a minute, or the API's `details.retryAfterSec`,
+  up to 8 attempts); `submitSignature` retries only a rate limit, as a `BUILD_FAILED` order may
+  already be placed.
+- `onProgress({ stage, partial })`: every hash the moment it exists (`approval_sent`, `swap_sent`
+  with `statusRef`, `fee_sent`) and every status poll (`status`). Persist `partial` to resume
+  tracking if the call never returns.
+- `signal` (AbortSignal) and `maxWaitMs` options. Abort sends nothing more to the wallet; neither
+  withdraws a wallet prompt already open.
+- `RavnApiError.status` (HTTP status) and `RavnApiError.retryAfterSec`; `code` is typed
+  `RavnErrorCode` (the API's codes plus `NETWORK_ERROR`), still open to new strings.
+- `getStatus(quoteToken, ref, txHash, { signal })`.
+- With `sendCalls`, a swap's approval joins the batch that already carries a token-paid RAVN fee
+  (approve + swap + fee in one confirmation). Only there: `ExecutionDTO` doesn't name its venue,
+  and the first-party app never batches THORChain or Bebop, which aren't fee-beside routes.
+- Mirrors ravn-mvp's new execute fields: `ApprovalDTO.reset` (`approve(spender, 0)` first, Ethereum
+  USDT), sent and confirmed before the approval (first in a batch); `ExecutionDTO.sandbox`, for
+  which `executeAndTrack` broadcasts nothing (no approval, swap or fee) and polls RAVN's synthetic
+  sandbox status.
+
+### Python (`ravnexchange`)
+
+Unchanged and not republished; see its README's "Parity" section for what it lacks.
+
+## Earlier
+
+- **0.1.15**: `executeAndTrack` sends a TRANSACTION's `fee.transaction` once the swap's own receipt
+  says success (batchable via `sendCalls`) and reports its `txHash` on every poll;
+  `depositFeePayment()`. Before it, `executeAndTrack` never paid RAVN's fee.
+- **0.1.14**: TRANSACTION `fee` (Eco, Layerswap). **0.1.13**: DEPOSIT `fee`, `getStatus` `txHash`.
+- **0.1.12**: `RavnClient` works in browsers without a custom fetch. Up to 0.1.11 every browser
+  call failed ("Illegal invocation").
+- **0.1.11**: `allowNoMinimum`. **0.1.10**: `broadcastViaRavn`, `submitTransaction`.
+  **0.1.7–0.1.9**: mirror the /v1 API (noMinimum, hops, execution quoteToken/statusRef,
+  request params, status over POST, alternatives' expiresAt).

@@ -44,6 +44,26 @@ Pass `"sandbox": True` on `get_quote` to test the full quote → execute → sta
 real funds; see the API's own docs for per-venue exceptions (THORChain BTC-source,
 Chainflip, and Houdini Swap can't be sandboxed).
 
+## Parity with `@ravnexchange/sdk` 0.2.0
+
+Same calls and the same wire shapes: responses are plain dicts, so new API fields such as an
+execution's `sandbox` and `approval.reset` pass through as they are. What the TS client has and this
+one doesn't yet:
+
+- **No `execute_and_track`.** You sequence approval, swap, RAVN's fee and status polling yourself.
+  Do it the way the TS helper does: wait for the approval's receipt before the swap; send
+  `approval.reset` (when present) and wait for it before the approval; never send anything from an
+  execution with `sandbox: True`; send `fee["transaction"]` only once the swap's own receipt says
+  success; pass its hash as `tx_hash` on every `get_status` poll; keep polling past `expired`
+  (a refund is due), about once a minute, until `refunded`.
+- **No retries.** Retry a status poll yourself on `RATE_LIMITED`, a 5xx (`INTERNAL`,
+  `BUILD_FAILED`, `VENUE_RATE_LIMITED`) or a network error, waiting `e.details["retryAfterSec"]`
+  when it's set. Never re-submit a signature after `BUILD_FAILED`: the order may be placed.
+- **`RavnApiError` has no `status` or `retry_after_sec`.** Read `e.code` and
+  `e.details.get("retryAfterSec")`.
+- **A network failure raises `urllib.error.URLError`**, not a `RavnApiError` (the TS client wraps it
+  as `NETWORK_ERROR`).
+
 ## Status
 
 Published to PyPI via `.github/workflows/publish-python-sdk.yml` using trusted publishing
