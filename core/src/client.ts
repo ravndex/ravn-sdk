@@ -90,6 +90,12 @@ export class RavnClient {
 
   /** POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT). */
   execute({ idempotencyKey, ...params }: ExecuteParams): Promise<ExecutionDTO> {
+    // The API's own rule: anything else fetch refuses to send (a reported NETWORK_ERROR) or RAVN answers 400.
+    if (idempotencyKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
+      return Promise.reject(
+        new RavnApiError("INVALID_REQUEST", "idempotencyKey must be 1–255 printable ASCII characters, no spaces", undefined, undefined)
+      );
+    }
     return this.request<ExecutionDTO>("/execute", {
       method: "POST",
       body: JSON.stringify(params),

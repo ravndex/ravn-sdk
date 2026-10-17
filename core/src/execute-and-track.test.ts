@@ -932,6 +932,17 @@ describe("executeAndTrack: review fixes", () => {
     expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it("asks again after a gateway timeout, and gives up on a lost execute after 4 tries", async () => {
+    const fetchImpl = scriptedFetch({ execute: [httpError(504, "INTERNAL"), plain], status: [success] });
+    const outcome = await executeAndTrack(new RavnClient({ fetch: fetchImpl }), baseParams, wallet(), { pollIntervalMs: 0 });
+    expect(outcome.txHash).toBe(SWAP);
+
+    const offline = scriptedFetch({ execute: [new TypeError("fetch failed")] });
+    const err = await executeAndTrack(new RavnClient({ fetch: offline }), baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+    expect(err.code).toBe("NETWORK_ERROR");
+    expect(offline).toHaveBeenCalledTimes(4);
+  });
+
   it("uses the caller's own Idempotency-Key, and never repeats an unexpected execute error", async () => {
     const fetchImpl = scriptedFetch({ execute: [httpError(500, "INTERNAL"), plain] });
     const client = new RavnClient({ fetch: fetchImpl });
