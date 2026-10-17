@@ -1006,3 +1006,90 @@ describe("executeAndTrack: review fixes", () => {
     expect(err.partial).toMatchObject({ txHash: SWAP, statusRef: SWAP });
   });
 });
+
+// Review of #15, round 2.
+describe("executeAndTrack: review fixes, round 2", () => {
+  const [APPROVAL, SWAP, RESET, BATCH] = ["e", "a", "d", "b"].map((c) => `0x${c.repeat(64)}`);
+  const approval = { to: "0xToken", data: "0xapprove", value: "0", chainId: 1 };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 1 };
+  const plain = { executionType: "TRANSACTION", quoteToken: "qt-exec", transaction };
+  const wallet = () => ({
+    sendTransaction: vi.fn(async (tx: { data?: string }) => ({ "0xapprove": APPROVAL })[tx.data!] ?? SWAP),
+    waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+  });
+
+  it("an abort ends a receipt wait that never resolves (a dropped approval), hash kept", async () => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
+    const h = wallet();
+    h.waitForReceipt.mockImplementation(() => new Promise(() => {}));
+    setTimeout(() => controller.abort(), 20);
+
+    const err = await executeAndTrack(client, baseParams, h, { signal: controller.signal }).catch((e) => e);
+
+    expect(err.code).toBe("ABORTED");
+    expect(err.partial.approvalTxHash).toBe(APPROVAL);
+    expect(h.sendTransaction).toHaveBeenCalledOnce();
+  }, 1_000);
+
+  it("keeps the signed order when submitSignature gets no answer: the venue may hold it", async () => {
+    const execution = { executionType: "SIGNATURE", quoteToken: "qt-exec", typedData: { primaryType: "Order" } };
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-signature": [new TypeError("fetch failed")] }) });
+    const stages: string[] = [];
+
+    const err = await executeAndTrack(client, baseParams, { ...wallet(), signTypedData: async () => "0xsig" }, {
+      onProgress: (e) => stages.push(e.stage),
+    }).catch((e) => e);
+
+    expect(err.partial).toMatchObject({ quoteToken: "qt-exec", signature: "0xsig" });
+    expect(err.cause.code).toBe("NETWORK_ERROR");
+    expect(stages).toEqual(["swap_signed"]);
+  });
+
+  it("retries an execute 429 even without RAVN's error body (a proxy's page)", async () => {
+    const page429 = { [FAIL]: { status: 429, code: "INTERNAL" } };
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [page429, plain], status: [{ status: "success", venue: "relay" }] }) });
+
+    const outcome = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+
+    expect(outcome.txHash).toBe(SWAP);
+  });
+
+  it("never repeats an execute that got no answer: the first may have opened a venue order", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [new TypeError("fetch failed"), plain] }) });
+    const executeSpy = vi.spyOn(client, "execute");
+
+    const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+
+    expect(executeSpy).toHaveBeenCalledOnce();
+    expect(err.code).toBe("NETWORK_ERROR");
+  });
+
+  it("reports a batched approval.reset's hash", async () => {
+    const fee = { amount: "5", address: "0xF", chainId: 1, transaction: { to: "0xUSDT", data: "0xfee", value: "0", chainId: 1 } };
+    const reset = { to: "0xUSDT", data: "0xapprove0", value: "0" };
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval: { ...approval, reset }, fee }], status: [{ status: "success", venue: "eco" }] }) });
+    const stages: string[] = [];
+
+    const result = await executeAndTrack(client, baseParams, { ...wallet(), sendCalls: async () => [RESET, APPROVAL, BATCH] }, {
+      pollIntervalMs: 0,
+      onProgress: (e) => stages.push(e.stage),
+    });
+
+    expect(result).toMatchObject({ resetTxHash: RESET, approvalTxHash: APPROVAL, txHash: BATCH, feeTxHash: BATCH });
+    expect(stages.slice(0, 2)).toEqual(["reset_sent", "approval_sent"]);
+  });
+
+  it("a DEPOSIT honours an abort that arrived during execute", async () => {
+    const controller = new AbortController();
+    const deposit = { executionType: "DEPOSIT", quoteToken: "qt-exec", deposit: { address: "dep", amount: "1" } };
+    const fetchImpl = (async () => {
+      controller.abort();
+      return { ok: true, status: 200, json: async () => ({ data: deposit }) };
+    }) as unknown as typeof fetch;
+
+    const err = await executeAndTrack(new RavnClient({ fetch: fetchImpl }), baseParams, wallet(), { signal: controller.signal }).catch((e) => e);
+
+    expect(err.code).toBe("ABORTED");
+  });
+});

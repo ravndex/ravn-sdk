@@ -15,9 +15,10 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   adapter silently never got RAVN's fee sent. viem/wagmi `waitForTransactionReceipt`, ethers v5/v6
   `tx.wait()` / `provider.waitForTransaction` and web3.js receipts fit as they are: return them.
 - **Once anything is sent or signed, `executeAndTrack` rejects only with an
-  `ExecuteAndTrackError`**: `code` (`"FAILED"`, `"ABORTED"`, `"TIMEOUT"`), `partial` (every hash
-  sent so far: `quoteToken`, `approvalTxHash`, `txHash`, `statusRef`, `statusTxHash`, `feeTxHash`,
-  `lastStatus`) and `cause` (the error underneath). That includes the wallet declining the swap
+  `ExecuteAndTrackError`**: `code` (`"FAILED"`, `"ABORTED"`, `"TIMEOUT"`), `partial` (everything
+  sent or signed so far: `quoteToken`, `resetTxHash`, `approvalTxHash`, `txHash`, `statusRef`,
+  `statusTxHash`, `feeTxHash`, `signedTransaction`, `signature`, `lastStatus`) and `cause` (the
+  error underneath). That includes the wallet declining the swap
   after an approval was sent: read `err.cause` for the wallet's own error. Before anything is sent,
   errors come as before.
 - **`expired` is no longer terminal.** `isPollingTerminal("expired")` is `false`: a refund is due
@@ -39,10 +40,12 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   `swap_signed` with the signed Solana transaction for broadcastViaRavn, `swap_sent` with
   `statusRef`, `fee_sent`) and every status poll (`status`). Persist `partial` to resume tracking
   if the call never returns. A failing `submitTransaction` keeps `partial.signedTransaction` (post
-  it again: RAVN never sends it twice) and any `txHash` RAVN's error names.
+  it again: RAVN never sends it twice) and any `txHash` RAVN's error names; a failing
+  `submitSignature` keeps `partial.signature` (the venue may hold the order: check before signing
+  a new one). Stage `swap_signed` reports either.
 - `signal` (AbortSignal) and `maxWaitMs` options. Abort sends nothing more to the wallet; neither
-  withdraws a wallet prompt already open. A status call is cut off even when a custom `fetch`
-  ignores the signal.
+  withdraws a wallet prompt already open. A receipt wait or status call is cut off even when the
+  wallet or a custom `fetch` ignores the signal.
 - `RavnApiError.status` (HTTP status) and `RavnApiError.retryAfterSec`; `code` is typed
   `RavnErrorCode` (the API's codes plus `NETWORK_ERROR`), still open to new strings.
 - `getStatus(quoteToken, ref, txHash, { signal })`.
@@ -51,9 +54,10 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   and the first-party app never batches THORChain or Bebop, which aren't fee-beside routes.
 - Mirrors ravn-mvp's new execute fields: `ApprovalDTO.reset` (`approve(spender, 0)` first, Ethereum
   USDT), sent and confirmed before the approval (first in a batch), its hash as `resetTxHash`;
-  `ExecutionDTO.sandbox`, for which `executeAndTrack` asks the wallet for nothing (no approval,
-  swap, fee or signature: a venue with no sandbox stand-in returns its live payload) and submits
-  nothing, and polls RAVN's synthetic sandbox status.
+  `ExecutionDTO.sandbox`: on a sandbox TRANSACTION or SIGNATURE, `executeAndTrack` asks the
+  wallet for nothing (no approval, swap, fee or signature: a venue with no sandbox stand-in returns
+  its live payload), submits nothing, and polls RAVN's synthetic sandbox status. A sandbox DEPOSIT
+  returns like any DEPOSIT (nothing is sent from here either way).
 - `QuoteDTO.fee` doc: on NEAR Intents it includes 1Click's own fee (comment only).
 
 ### Python (`ravnexchange`)

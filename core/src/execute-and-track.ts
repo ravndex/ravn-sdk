@@ -57,8 +57,9 @@ export interface ExecuteAndTrackHandlers {
   hasAllowance?(approval: ApprovalDTO): Promise<boolean>;
 }
 
-/** What just happened: a transaction's hash is known (sent, not yet confirmed), a Solana swap was
- * signed for RAVN to send (`signedTransaction`), or a status poll answered. */
+/** What just happened: a transaction's hash is known (sent, not yet confirmed), a swap was signed
+ * for RAVN to submit (`signedTransaction` for a Solana swap, `signature` for an order), or a status
+ * poll answered. */
 export type ExecuteAndTrackStage = "reset_sent" | "approval_sent" | "swap_signed" | "swap_sent" | "fee_sent" | "status";
 
 export interface ExecuteAndTrackProgress {
@@ -124,8 +125,14 @@ export interface ExecuteAndTrackResult {
 /** What executeAndTrack knew when it reported progress or stopped: every hash sent so far, and the
  * last status it saw. `signedTransaction` (broadcastViaRavn): the signed Solana swap handed to
  * submitTransaction; post it again with the same quoteToken (RAVN never sends it twice) to learn
- * whether it landed, before signing anything new. */
-export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & { lastStatus?: StatusDTO; signedTransaction?: string };
+ * whether it landed, before signing anything new. `signature` (SIGNATURE): the signed order handed
+ * to submitSignature; without a `statusRef` the call got no answer and the venue may still have
+ * taken the order: check before signing a new one. */
+export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & {
+  lastStatus?: StatusDTO;
+  signedTransaction?: string;
+  signature?: `0x${string}`;
+};
 
 /**
  * How executeAndTrack rejects once anything has been sent or signed (an approval, the swap, a
@@ -207,7 +214,7 @@ const transient = (err: unknown): boolean =>
 // Refused before anything was done, so safe to repeat even a call that isn't safe to repeat after
 // a BUILD_FAILED (submit-signature: the venue may have taken the order).
 const rateLimited = (err: unknown): boolean =>
-  err instanceof RavnApiError && (err.code === "RATE_LIMITED" || err.code === "VENUE_RATE_LIMITED");
+  err instanceof RavnApiError && (err.code === "RATE_LIMITED" || err.code === "VENUE_RATE_LIMITED" || err.status === 429);
 
 // `promise`, or the signal's reason as soon as it aborts: a custom fetch may ignore the signal.
 const orAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
@@ -354,7 +361,7 @@ export async function executeAndTrack(
         sent = true;
         if (tx === needed) report("approval_sent", { approvalTxHash: hash });
         else report("reset_sent", { resetTxHash: hash });
-        await handlers.waitForReceipt(hash, needed.chainId);
+        await orAbort(handlers.waitForReceipt(hash, needed.chainId), stop.signal);
       }
       return hash;
     };
@@ -440,7 +447,7 @@ export async function executeAndTrack(
           // no fee. Declined or failed (or stopped first), the swap still runs and is tracked; no
           // fee is owed on it.
           try {
-            if (!receiptSucceeded(await handlers.waitForReceipt(txHash, transaction.chainId), txHash)) {
+            if (!receiptSucceeded(await orAbort(handlers.waitForReceipt(txHash, transaction.chainId), stop.signal), txHash)) {
               throw new Error("executeAndTrack: no successful receipt for the swap transaction itself, so RAVN's fee was not sent");
             }
             checkpoint();
@@ -448,7 +455,7 @@ export async function executeAndTrack(
             report("fee_sent", { feeTxHash, statusTxHash: proof(txHash, feeTxHash) });
             // Confirmed before polling starts: a swap that fills first would otherwise end the
             // polling on the one poll that had to prove the fee.
-            await handlers.waitForReceipt(feeTxHash, feeTx.chainId);
+            await orAbort(handlers.waitForReceipt(feeTxHash, feeTx.chainId), stop.signal);
           } catch (err) {
             feeError = err;
           }
@@ -484,9 +491,10 @@ export async function executeAndTrack(
       checkpoint();
       const signature = await signTypedData(execution.typedData);
       checkpoint();
-      // From here the venue may take the order even when the call fails (BUILD_FAILED), so only a
-      // rate limit, refused before anything was placed, is retried.
+      // From here the venue may take the order even when the call fails (BUILD_FAILED, no answer),
+      // so only a rate limit, refused before anything was placed, is retried.
       sent = true;
+      report("swap_signed", { signature });
       const { statusRef } = await withRetries(() => client.submitSignature({ quoteToken, signature, approvalSignature }), rateLimited);
       report("swap_sent", { statusRef });
       return { execution, quoteToken, resetTxHash: partial.resetTxHash, approvalTxHash, statusRef, finalStatus: await pollStatus(statusRef) };
@@ -498,6 +506,7 @@ export async function executeAndTrack(
     // `feePayment` as it says, pass an EVM fee transaction's hash as getStatus's `txHash`, and poll
     // RAVN to a terminal status even if the venue's own tracker says delivered first.
     // A fee it can't describe never stops the deposit, which fills without it.
+    checkpoint();
     try {
       return { execution, quoteToken, statusRef: execution.statusRef, feePayment: depositFeePayment(execution) };
     } catch (feeError) {
