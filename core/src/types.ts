@@ -308,7 +308,7 @@ export interface ExecuteParams {
   /** Your end user's IANA timezone, forwarded only to Houdini. Default UTC. */
   clientTimezone?: string;
   /** Sent as the Idempotency-Key header: any unique value per swap attempt (e.g. a UUID), 1–255
-   * printable ASCII characters, no spaces (execute throws INVALID_REQUEST otherwise). Calling execute again with the same key and quoteToken within a day
+   * printable ASCII characters, no spaces (execute throws INVALID_REQUEST otherwise). Calling execute again with the same key and request (quoteToken and any addresses) within a day
    * returns the first answer instead of building again (at a deposit venue, a second deposit
    * address). executeAndTrack sends one itself when you don't. */
   idempotencyKey?: string;

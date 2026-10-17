@@ -14,9 +14,9 @@ the swap RAVN's settlement webhooks are about.
   `swap.refunded`, `swap.failed`) carry the same `swapId`, now for every final swap and retried
   for about a day. Absent on a sandbox quote.
 - **`ExecuteParams.idempotencyKey`**, sent as the `Idempotency-Key` header: calling `execute` again
-  with the same key and quoteToken within a day returns the first answer instead of building again
-  (at a deposit venue, a second deposit address). The same key with another quoteToken is
-  `INVALID_REQUEST`; a repeat while the first call is still running is `UNAVAILABLE` (retry after
+  with the same key and request (quoteToken and any addresses) within a day returns the first answer instead of building again
+  (at a deposit venue, a second deposit address). The same key with another quoteToken or other
+  addresses is `INVALID_REQUEST`; a repeat while the first call is still running is `UNAVAILABLE` (retry after
   `retryAfterSec`).
 - `executeAndTrack` sends one per call (yours, or a `crypto.randomUUID()`), and so now asks
   `execute` again when its answer was lost (`NETWORK_ERROR`, a 504) or is still being built
