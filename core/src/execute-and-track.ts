@@ -217,6 +217,13 @@ const transient = (err: unknown): boolean =>
 const rateLimited = (err: unknown): boolean =>
   err instanceof RavnApiError && (err.code === "RATE_LIMITED" || err.code === "VENUE_RATE_LIMITED" || err.status === 429);
 
+// An execute sent with an Idempotency-Key answers a repeat with its first answer, so one whose answer
+// was lost (no response, a gateway timeout) or is still being built (UNAVAILABLE) can be asked again.
+// Never a BUILD_FAILED (re-quote) or an unexpected error, which may have half-built an order.
+const answerLost = (err: unknown): boolean =>
+  rateLimited(err) ||
+  (err instanceof RavnApiError && (err.code === "NETWORK_ERROR" || err.code === "UNAVAILABLE" || err.status === 504));
+
 // `promise`, or the signal's reason as soon as it aborts: a wallet or custom fetch may ignore the
 // signal. `promise` is always handled, so one that rejects after the abort is never unhandled.
 const orAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
@@ -314,9 +321,14 @@ export async function executeAndTrack(
 
   const run = async (): Promise<ExecuteAndTrackResult> => {
     checkpoint();
-    // Only a rate limit: a BUILD_FAILED wants a fresh quote, and a repeat can open a second order
-    // at the venue (a NEAR deposit address, a Houdini or Garden order).
-    const execution = await withRetries(() => orAbort(client.execute(params), stop.signal), rateLimited);
+    // One Idempotency-Key for every try, so a repeat can't open a second order at the venue (a NEAR
+    // deposit address, a Houdini or Garden order). Without one (no crypto.randomUUID), only a rate
+    // limit is repeated. A BUILD_FAILED wants a fresh quote either way.
+    const key = params.idempotencyKey ?? globalThis.crypto?.randomUUID?.();
+    const execution = await withRetries(
+      () => orAbort(client.execute({ ...params, ...(key ? { idempotencyKey: key } : {}) }), stop.signal),
+      key ? answerLost : rateLimited
+    );
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
 

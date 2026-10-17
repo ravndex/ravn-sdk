@@ -89,8 +89,12 @@ export class RavnClient {
   }
 
   /** POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT). */
-  execute(params: ExecuteParams): Promise<ExecutionDTO> {
-    return this.request<ExecutionDTO>("/execute", { method: "POST", body: JSON.stringify(params) });
+  execute({ idempotencyKey, ...params }: ExecuteParams): Promise<ExecutionDTO> {
+    return this.request<ExecutionDTO>("/execute", {
+      method: "POST",
+      body: JSON.stringify(params),
+      ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
+    });
   }
 
   /** POST /v1/submit-signature: for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */

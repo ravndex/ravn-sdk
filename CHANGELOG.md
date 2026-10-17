@@ -3,6 +3,27 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.2.1
+
+`executeAndTrack` can no longer lose a swap to a dropped `execute` answer, and every execution names
+the swap RAVN's settlement webhooks are about.
+
+### Added
+
+- **`ExecutionDTO.swapId`**: this swap's id in RAVN's ledger. Settlement webhooks (`swap.settled`,
+  `swap.refunded`, `swap.failed`) carry the same `swapId`, now for every final swap and retried
+  for about a day. Absent on a sandbox quote.
+- **`ExecuteParams.idempotencyKey`**, sent as the `Idempotency-Key` header: calling `execute` again
+  with the same key and quoteToken within a day returns the first answer instead of building again
+  (at a deposit venue, a second deposit address). The same key with another quoteToken is
+  `INVALID_REQUEST`; a repeat while the first call is still running is `UNAVAILABLE` (retry after
+  `retryAfterSec`).
+- `executeAndTrack` sends one per call (yours, or a `crypto.randomUUID()`), and so now asks
+  `execute` again when its answer was lost (`NETWORK_ERROR`, a 504) or is still being built
+  (`UNAVAILABLE`), getting the same execution back. A `BUILD_FAILED` or an unexpected error is never
+  repeated. Without `crypto.randomUUID`, only a rate limit is repeated, as before.
+- `"UNAVAILABLE"` in `RavnErrorCode` (the API has answered it since 2026-10-17).
+
 ## @ravnexchange/sdk 0.2.0, @ravnexchange/react 0.1.7
 
 `executeAndTrack` no longer loses a swap it has sent, and never fails silently.
