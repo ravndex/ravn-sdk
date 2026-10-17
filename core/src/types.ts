@@ -258,8 +258,8 @@ export interface GetQuoteParams {
   rankingMode?: "best_output" | "fastest";
   /** The race's time limit in ms, counted from its start: once it has passed and some venue has
    * priced the swap, slower venues are left out (with none priced yet, the first price ends the
-   * wait; a quote with slippage.noMinimum counts only 2000 ms past the limit). Default 6000,
-   * clamped to 1000–15000. An API that predates it ignores it. */
+   * wait; a quote with slippage.noMinimum counts only 2000 ms past the limit). A positive integer;
+   * default 6000, clamped to 1000–15000. An API that predates it ignores it. */
   timeoutMs?: number;
   /** Drop specific venues from this race, e.g. a risk objection to one of them. */
   excludeVenues?: string[];

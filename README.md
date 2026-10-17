@@ -18,7 +18,7 @@ The widget iframe page itself, and the rest of RAVN's routing/execution engine, 
 ## Reading a quote
 
 - **`slippage.noMinimum`**: `true` means the venue enforces no minimum output (today: Rift, which fills at its own best rate once the deposit lands). `slippage.bps` is then not a protection and the user can receive more or less than `output.amount`. Show this before the user sends funds. Alternatives carry the same field. Setting `slippageBps` keeps such venues out of the race; pass `allowNoMinimum: true` (0.1.11+) to let them race beside it.
-- **`expired`** is not final: a refund is due and the status becomes `refunded` when it lands (Across: hours later). Keep polling, about once a minute; `isPollingTerminal`, `executeAndTrack` and `useRavnStatus` do (0.2.0 / react 0.1.7).
+- **`expired` and `not_found`** are not final: `expired` means a refund is due and the status becomes `refunded` when it lands (Across: hours later; poll about once a minute), `not_found` that the venue hasn't seen the swap yet. Only `success`, `refunded` and `failed` are. `isPollingTerminal`, `executeAndTrack` and `useRavnStatus` keep polling both (0.2.0 / react 0.1.7).
 - **Errors**: every failed call throws a `RavnApiError` with `code`, `status` (HTTP; undefined for `NETWORK_ERROR`, no response at all) and `retryAfterSec` (0.2.0+).
 - **`hops`**: present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. The user signs hop 1 only.
 - **After `execute()`**: poll `getStatus` with the `quoteToken` that `execute()` returned, not the quote's own (compose rebinds it), and the execution's `statusRef` when present. `executeAndTrack()` does both and returns them.

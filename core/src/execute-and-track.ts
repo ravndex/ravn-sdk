@@ -84,7 +84,8 @@ export interface ExecuteAndTrackOptions {
   maxWaitMs?: number;
   /** Stop: nothing more goes to the wallet and polling ends, rejecting with an
    * ExecuteAndTrackError ("ABORTED"). A wallet prompt already open isn't withdrawn; whatever it
-   * sends is in the error's `partial`. */
+   * sends is in the error's `partial`. A submitSignature or submitTransaction call already under
+   * way is awaited first: its answer is the swap's only handle. */
   signal?: AbortSignal;
   /** Called with every hash the moment it exists (approval, swap with its statusRef, fee) and with
    * every status poll. An error it throws is ignored: it never stops a swap that's out. */
@@ -126,8 +127,8 @@ export interface ExecuteAndTrackResult {
  * last status it saw. `signedTransaction` (broadcastViaRavn): the signed Solana swap handed to
  * submitTransaction; post it again with the same quoteToken (RAVN never sends it twice) to learn
  * whether it landed, before signing anything new. `signature` (SIGNATURE): the signed order handed
- * to submitSignature; "swap_signed" with no "swap_sent" after it means the call got no answer and
- * the venue may still have taken the order: check before signing a new one. */
+ * to submitSignature; "swap_signed" with no "swap_sent" after it means the call failed or got no
+ * answer, and the venue may still have taken the order: check before signing a new one. */
 export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & {
   lastStatus?: StatusDTO;
   signedTransaction?: string;
@@ -221,7 +222,8 @@ const rateLimited = (err: unknown): boolean =>
 const orAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
   new Promise((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
-    promise.then(
+    // Promise.resolve: a JS handler may hand back the value itself rather than a promise.
+    Promise.resolve(promise).then(
       (value) => {
         signal.removeEventListener("abort", onAbort);
         resolve(value);
@@ -350,7 +352,7 @@ export async function executeAndTrack(
     // The approval to send, if any: none when the caller already knows it's covered (see
     // ExecuteAndTrackHandlers.hasAllowance).
     const neededApproval = async (approval: ApprovalDTO | undefined): Promise<ApprovalDTO | undefined> =>
-      approval && !(await handlers.hasAllowance?.(approval)) ? approval : undefined;
+      approval && !(handlers.hasAllowance && (await orAbort(handlers.hasAllowance(approval), stop.signal))) ? approval : undefined;
 
     // Sends and confirms it, after its reset (approve to 0) when the token needs one first.
     const maybeSendApproval = async (approval: ApprovalDTO | undefined): Promise<string | undefined> => {

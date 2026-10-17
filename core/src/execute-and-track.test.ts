@@ -1201,3 +1201,46 @@ describe("executeAndTrack: review fixes, round 3", () => {
     expect(err.code).toBe("ABORTED");
   }, 1_000);
 });
+
+// Review of #15, round 4, and not_found (RAVN's server treats only success/refunded/failed as final).
+describe("executeAndTrack: review fixes, round 4", () => {
+  const SWAP = `0x${"a".repeat(64)}`;
+  const approval = { to: "0xToken", data: "0xapprove", value: "0", chainId: 1 };
+  const plain = { executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xRouter", data: "0xswap", value: "0", chainId: 1 } };
+
+  it("an abort ends an allowance read that never answers, nothing sent", async () => {
+    const controller = new AbortController();
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
+    const sendTransaction = vi.fn(async () => SWAP);
+    setTimeout(() => controller.abort(), 20);
+
+    const err = await executeAndTrack(client, baseParams, {
+      sendTransaction,
+      waitForReceipt: async (hash) => receipt(hash),
+      hasAllowance: () => new Promise(() => {}),
+    }, { signal: controller.signal }).catch((e) => e);
+
+    expect(err.code).toBe("ABORTED");
+    expect(sendTransaction).not.toHaveBeenCalled();
+  }, 1_000);
+
+  it("takes a JS waitForReceipt that returns the receipt itself, not a promise", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }], status: [{ status: "success", venue: "relay" }] }) });
+    const sendTransaction = vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? `0x${"e".repeat(64)}` : SWAP));
+
+    const result = await executeAndTrack(client, baseParams, {
+      sendTransaction,
+      waitForReceipt: ((hash: string) => receipt(hash)) as never,
+    }, { pollIntervalMs: 0 });
+
+    expect(result.txHash).toBe(SWAP);
+  });
+
+  it("keeps polling past not_found: the venue may not have seen the swap yet", async () => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [{ status: "not_found", venue: "relay" }, { status: "success", venue: "relay" }] }) });
+
+    const result = await executeAndTrack(client, baseParams, { sendTransaction: async () => SWAP, waitForReceipt: async (hash) => receipt(hash) }, { pollIntervalMs: 0 });
+
+    expect(result.finalStatus?.status).toBe("success");
+  });
+});

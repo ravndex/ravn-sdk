@@ -21,9 +21,12 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   error underneath). That includes the wallet declining the swap
   after an approval was sent: read `err.cause` for the wallet's own error. Before anything is sent,
   errors come as before.
-- **`expired` is no longer terminal.** `isPollingTerminal("expired")` is `false`: a refund is due
-  and the status turns `refunded` when it lands (Across: hours later). `executeAndTrack` polls an
-  expired swap once a minute (`expiredPollIntervalMs`), as does `useRavnStatus` (react 0.1.7).
+- **`expired` and `not_found` are no longer terminal**, matching RAVN's own final states (`success`,
+  `refunded`, `failed`; `unknown` still stops: it never changes). `expired`: a refund is due and
+  the status turns `refunded` when it lands (Across: hours later); `executeAndTrack` polls it once
+  a minute (`expiredPollIntervalMs`), as does `useRavnStatus` (react 0.1.7). `not_found`: the venue
+  has no record of the swap yet; polled at the normal interval. A swap that never landed (a dropped
+  transaction) is polled until `signal` or `maxWaitMs` stops it, like one stuck `pending`.
 - **A network failure is a `RavnApiError`** with `code: "NETWORK_ERROR"` and the fetch error as
   `cause`, never a raw `TypeError`.
 - **@ravnexchange/react 0.1.7 needs @ravnexchange/sdk >=0.2.0** (peer): with an older sdk,
@@ -45,8 +48,10 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   a new one). Stage `swap_signed` reports either. A hook that throws or rejects (an async database
   write) is ignored, never an unhandled rejection.
 - `signal` (AbortSignal) and `maxWaitMs` options. Abort sends nothing more to the wallet; neither
-  withdraws a wallet prompt already open. An execute, receipt wait or status call is cut off even
-  when the wallet or a custom `fetch` ignores the signal; one that rejects later is handled.
+  withdraws a wallet prompt already open. An execute, allowance read, receipt wait or status call is
+  cut off even when the wallet or a custom `fetch` ignores the signal; one that rejects later is
+  handled. A submitSignature/submitTransaction already under way is awaited: its answer is the
+  swap's only handle.
 - `RavnApiError.status` (HTTP status) and `RavnApiError.retryAfterSec`; `code` is typed
   `RavnErrorCode` (the API's codes plus `NETWORK_ERROR`), still open to new strings.
 - `getStatus(quoteToken, ref, txHash, { signal })`.
