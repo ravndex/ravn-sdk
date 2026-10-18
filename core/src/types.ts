@@ -154,10 +154,12 @@ export type ExecutionDTO =
        */
       fee?: DepositFeeDTO;
       /** EVM: everything to send, in order (approval.reset, approval, the swap or the deposit
-       * transfer, RAVN's fee). Each once the one before is mined, or all in one atomic wallet batch
-       * (EIP-5792 `wallet_sendCalls`, `atomicRequired: true`) when `batch` is true. */
+       * transfer, RAVN's fee). Each once the one before has succeeded (stop if one reverts), or, when
+       * `batch` is true, all in one atomic wallet batch (EIP-5792 `wallet_sendCalls`,
+       * `atomicRequired: true`): simulate it first, and send them one by one if that fails or the
+       * last call needs more than ~400k gas. */
       calls?: CallDTO[];
-      /** Whether `calls` may go in one atomic wallet batch. */
+      /** Whether `calls` (more than one) may go in one atomic wallet batch. */
       batch?: boolean;
     }
   | {
@@ -191,11 +193,12 @@ export type ExecutionDTO =
         amount: string;
         chainId?: number;
         expiresAt?: string;
-        /** Bitcoin: the deposit (and RAVN's fee as a second output) as a ready-to-sign PSBT, base64,
-         * from your user's address, change back to it. Absent when it can't be built. */
+        /** Bitcoin, from a native SegWit (bc1q…) userAddress: the deposit (and RAVN's fee as a second
+         * output) as a ready-to-sign PSBT, base64, change back to it. Absent when it can't be built. */
         psbt?: string;
         /** Solana, when the deposit carries RAVN's fee: deposit and fee as one unsigned transaction,
-         * base64. Sign and send it within a minute (its blockhash expires). */
+         * base64. Sign and send it within a minute (its blockhash expires; a retry with the same
+         * Idempotency-Key returns this same one). */
         transaction?: string;
       };
       /** Poll getStatus with this, not `deposit.address`. */
@@ -206,10 +209,12 @@ export type ExecutionDTO =
        * is owed on it, so send an EVM fee payment once the deposit has confirmed. */
       fee?: DepositFeeDTO;
       /** EVM: everything to send, in order (approval.reset, approval, the swap or the deposit
-       * transfer, RAVN's fee). Each once the one before is mined, or all in one atomic wallet batch
-       * (EIP-5792 `wallet_sendCalls`, `atomicRequired: true`) when `batch` is true. */
+       * transfer, RAVN's fee). Each once the one before has succeeded (stop if one reverts), or, when
+       * `batch` is true, all in one atomic wallet batch (EIP-5792 `wallet_sendCalls`,
+       * `atomicRequired: true`): simulate it first, and send them one by one if that fails or the
+       * last call needs more than ~400k gas. */
       calls?: CallDTO[];
-      /** Whether `calls` may go in one atomic wallet batch. */
+      /** Whether `calls` (more than one) may go in one atomic wallet batch. */
       batch?: boolean;
     };
 

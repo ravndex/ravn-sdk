@@ -13,9 +13,11 @@ behaviour change in the client.
 - **`calls` and `batch`** on EVM `TRANSACTION` and `DEPOSIT` executions: every transaction to send,
   in order (`approval.reset`, `approval`, the swap, or the transfer of `deposit.amount` to
   `deposit.address`, then RAVN's fee), as `CallDTO` (`to`, `data`, `value`, `chainId`). Send each once
-  the one before is mined, or all in one atomic wallet batch when `batch` is true.
-- **`deposit.psbt`** on a Bitcoin `DEPOSIT`: the deposit, RAVN's fee as a second output, and change
-  back to your user's address, as a ready-to-sign PSBT (base64). Absent when it can't be built.
+  the one before has succeeded (stop if one reverts), or all in one atomic wallet batch when `batch`
+  is true (simulate first; send them one by one if that fails or the last call needs over ~400k gas).
+- **`deposit.psbt`** on a Bitcoin `DEPOSIT` from a native SegWit (bc1q…) address: the deposit, RAVN's
+  fee as a second output, and change back to your user's address, as a ready-to-sign PSBT (base64).
+  Absent when it can't be built.
 - **`deposit.transaction`** on a Solana `DEPOSIT` carrying RAVN's fee: the deposit and the fee as one
   unsigned transaction (base64), to sign and send within a minute.
 
