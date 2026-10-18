@@ -3,6 +3,22 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.2.2
+
+Executions come ready to sign, so you never build RAVN's fee payment yourself. Types only: no
+behaviour change in the client.
+
+### Added
+
+- **`calls` and `batch`** on EVM `TRANSACTION` and `DEPOSIT` executions: every transaction to send,
+  in order (`approval.reset`, `approval`, the swap, or the transfer of `deposit.amount` to
+  `deposit.address`, then RAVN's fee), as `CallDTO` (`to`, `data`, `value`, `chainId`). Send each once
+  the one before is mined, or all in one atomic wallet batch when `batch` is true.
+- **`deposit.psbt`** on a Bitcoin `DEPOSIT`: the deposit, RAVN's fee as a second output, and change
+  back to your user's address, as a ready-to-sign PSBT (base64). Absent when it can't be built.
+- **`deposit.transaction`** on a Solana `DEPOSIT` carrying RAVN's fee: the deposit and the fee as one
+  unsigned transaction (base64), to sign and send within a minute.
+
 ## @ravnexchange/sdk 0.2.1
 
 `executeAndTrack` can no longer lose a swap to a dropped `execute` answer, and every execution names

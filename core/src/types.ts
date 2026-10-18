@@ -153,6 +153,12 @@ export type ExecutionDTO =
        * stays with RAVN.
        */
       fee?: DepositFeeDTO;
+      /** EVM: everything to send, in order (approval.reset, approval, the swap or the deposit
+       * transfer, RAVN's fee). Each once the one before is mined, or all in one atomic wallet batch
+       * (EIP-5792 `wallet_sendCalls`, `atomicRequired: true`) when `batch` is true. */
+      calls?: CallDTO[];
+      /** Whether `calls` may go in one atomic wallet batch. */
+      batch?: boolean;
     }
   | {
       executionType: "SIGNATURE";
@@ -180,7 +186,18 @@ export type ExecutionDTO =
       quoteToken: string;
       /** `expiresAt` (ISO 8601), when set, is when the deposit must have ARRIVED (confirmed on
        * the origin chain) by. A later deposit lands at an expired order. */
-      deposit: { address: string; amount: string; chainId?: number; expiresAt?: string };
+      deposit: {
+        address: string;
+        amount: string;
+        chainId?: number;
+        expiresAt?: string;
+        /** Bitcoin: the deposit (and RAVN's fee as a second output) as a ready-to-sign PSBT, base64,
+         * from your user's address, change back to it. Absent when it can't be built. */
+        psbt?: string;
+        /** Solana, when the deposit carries RAVN's fee: deposit and fee as one unsigned transaction,
+         * base64. Sign and send it within a minute (its blockhash expires). */
+        transaction?: string;
+      };
       /** Poll getStatus with this, not `deposit.address`. */
       statusRef: string;
       /** Only when your key sets a fee and the venue has no fee of its own (Rift; private swaps from
@@ -188,7 +205,21 @@ export type ExecutionDTO =
        * fee is owed to you. A fee paid on a swap the venue then refunds stays with RAVN and nothing
        * is owed on it, so send an EVM fee payment once the deposit has confirmed. */
       fee?: DepositFeeDTO;
+      /** EVM: everything to send, in order (approval.reset, approval, the swap or the deposit
+       * transfer, RAVN's fee). Each once the one before is mined, or all in one atomic wallet batch
+       * (EIP-5792 `wallet_sendCalls`, `atomicRequired: true`) when `batch` is true. */
+      calls?: CallDTO[];
+      /** Whether `calls` may go in one atomic wallet batch. */
+      batch?: boolean;
     };
+
+/** One EVM transaction to send, as given. */
+export interface CallDTO {
+  to: string;
+  data: string;
+  value: string;
+  chainId: number;
+}
 
 /** RAVN's integrator fee beside a deposit (or a transaction), in the input token, paid by your user
  * to RAVN; your share is paid out as usual. `deposit.amount` (the transaction) already leaves it out. */
