@@ -22,10 +22,11 @@ payment by hand on any route. Opt-in: without the new option nothing changes.
     minute of execute.
   A deposit it can't send comes back exactly as without the option (`feePayment`), with
   **`depositNotSent`** saying why: today a Bitcoin sender that isn't bc1q… (no PSBT), a Solana
-  deposit with no RAVN fee (no transaction), a payload RAVN couldn't build in time, or no handler
-  for its chain. A sandbox deposit is never sent: its status is polled like any sandbox swap.
-- **Turning it on**: stop sending deposits yourself when the result has `txHash`, or the user pays
-  twice.
+  deposit with no RAVN fee (no transaction), a payload RAVN couldn't build in time, calls that
+  aren't the deposit then the fee as given, or no handler for its chain. A sandbox deposit is never sent: its status is polled like any sandbox swap.
+- **Turning it on**: send a deposit yourself only when the result has `depositNotSent`, or the user
+  pays twice (a sandbox deposit has neither it nor `txHash`: it's never sent). Your
+  `sendBitcoinPsbt` / `sendSolanaTransaction` should reject only when nothing was broadcast.
 
 ## @ravnexchange/sdk 0.2.3
 

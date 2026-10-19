@@ -279,11 +279,14 @@ describe("executeAndTrack: DEPOSIT", () => {
 // #426), RAVN's fee inside it, so an integrator never builds the fee payment by hand.
 describe("executeAndTrack: DEPOSIT with sendDeposit", () => {
   const [DEP, FEE] = ["d", "f"].map((c) => `0x${c.repeat(64)}`);
-  const depositCall = { to: "0xUSDC", data: "0xdeposittransfer", value: "0", chainId: 8453 };
+  const DEPOSIT_ADDRESS = `0x${"de".repeat(20)}`;
+  // transfer(deposit.address, deposit.amount), as RAVN builds it.
+  const transferData = `0xa9059cbb${DEPOSIT_ADDRESS.slice(2).padStart(64, "0")}${(995000).toString(16).padStart(64, "0")}`;
+  const depositCall = { to: "0xUSDC", data: transferData, value: "0", chainId: 8453 };
   const feeTx = { to: "0xUSDC", data: "0xfeetransfer", value: "0", chainId: 8453 };
   const evm = {
     executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "rift-order-1",
-    deposit: { address: "0xDeposit", amount: "995000", chainId: 8453 },
+    deposit: { address: DEPOSIT_ADDRESS, amount: "995000", chainId: 8453 },
     fee: { amount: "5000", address: "0xRavnFee", chainId: 8453, transaction: feeTx },
     calls: [depositCall, feeTx],
     batch: true,
@@ -337,7 +340,7 @@ describe("executeAndTrack: DEPOSIT with sendDeposit", () => {
   });
 
   it("EVM, not batchable (a native-coin deposit): the deposit, its receipt, then the fee, then tracked with the fee tx", async () => {
-    const coinDeposit = { to: "0xDeposit", data: "0x", value: "995000", chainId: 8453 };
+    const coinDeposit = { to: DEPOSIT_ADDRESS, data: "0x", value: "995000", chainId: 8453 };
     const coinFee = { to: "0xRavnFee", data: "0xtag", value: "5000", chainId: 8453 };
     const execution = { ...evm, fee: { ...evm.fee, transaction: coinFee }, calls: [coinDeposit, coinFee], batch: false };
     const { order, handlers } = evmHandlers({
@@ -376,6 +379,27 @@ describe("executeAndTrack: DEPOSIT with sendDeposit", () => {
     const r = await run({ ...evm, batch: false }, handlers).result;
     expect(String(r.feeError)).toMatch(/rejected/);
     expect(r).toMatchObject({ txHash: DEP, finalStatus: success });
+  });
+
+  it("EVM: a deposit call that doesn't pay deposit.amount to deposit.address is not sent", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn() });
+    const wrongAmount = { ...depositCall, data: transferData.replace(/f2eb8$/, "f2eb9") };
+    const wrongCoin = { to: `0x${"ab".repeat(20)}`, data: "0x", value: "995000", chainId: 8453 };
+    for (const call of [wrongAmount, wrongCoin]) {
+      const r = await run({ ...evm, calls: [call, feeTx] }, handlers).result;
+      expect(r.depositNotSent).toMatch(/deposit/);
+    }
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+  });
+
+  it("an execution type this version doesn't know is never sent", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn() });
+    const r = await run({ ...evm, executionType: "INTENT" }, handlers).result;
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(r.txHash).toBeUndefined();
+    expect(r.depositNotSent).toMatch(/INTENT/);
   });
 
   it("EVM: calls that don't end in the fee as given are not sent: handed back to pay as today", async () => {

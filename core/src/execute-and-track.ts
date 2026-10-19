@@ -34,7 +34,8 @@ export interface ExecuteAndTrackHandlers {
    * (the same hash repeated, or just one, for one transaction). Not a batch id or a 4337
    * userOpHash: RAVN proves its fee from that transaction. When given, a token-paid RAVN fee rides
    * in the swap's own confirmation, and so does the swap's approval when it needs one; a
-   * native-coin fee is always a plain transaction of its own. The batch's gas limit is your
+   * TRANSACTION's native-coin fee is always a plain transaction of its own (with sendDeposit, a
+   * DEPOSIT's calls go together only when its `batch` says so). The batch's gas limit is your
    * wallet's (EIP-5792 carries none): give it headroom, as a wallet estimating it tight reverts
    * the whole batch. Reject only when nothing was sent: a rejection loses the swap's hash.
    */
@@ -49,13 +50,15 @@ export interface ExecuteAndTrackHandlers {
   /**
    * With `sendDeposit`: sign a Bitcoin DEPOSIT's ready-made PSBT (`deposit.psbt`, base64: the
    * deposit, RAVN's fee as a second output, change back to the sender), finalize and broadcast it,
-   * and return its txid.
+   * and return its txid. Reject only when nothing was broadcast: a rejection loses its hash, and
+   * executeAndTrack called again builds a new deposit.
    */
   sendBitcoinPsbt?(psbt: string): Promise<string>;
   /**
    * With `sendDeposit`: sign a Solana DEPOSIT's ready-made transaction (`deposit.transaction`,
    * base64: the deposit and RAVN's fee) and send it, returning its signature. It must land within
-   * about a minute of execute (its blockhash expires).
+   * about a minute of execute (its blockhash expires). Reject only when nothing was sent: a
+   * rejection loses its signature, and executeAndTrack called again builds a new deposit.
    */
   sendSolanaTransaction?(serialized: string): Promise<string>;
   /**
@@ -106,8 +109,8 @@ export interface ExecuteAndTrackOptions {
    * (sendSolanaTransaction). A deposit it can't send (no such payload, e.g. a Bitcoin sender that
    * isn't bc1q…, or no handler for its chain) comes back unsent, as without this option, with
    * `depositNotSent` saying why: send that one and `feePayment` yourself. Default false: a deposit
-   * is never sent from here. Turning it on, stop sending deposits yourself when `txHash` is set, or
-   * the user pays twice.
+   * is never sent from here. Turning it on, send a deposit yourself only when `depositNotSent` is
+   * set, or the user pays twice (a sandbox one has neither it nor `txHash`: it's never sent).
    */
   sendDeposit?: boolean;
   /** Called with every hash the moment it exists (approval, swap with its statusRef, fee) and with
@@ -145,7 +148,7 @@ export interface ExecuteAndTrackResult {
   feePayment?: DepositFeePayment;
   /** With sendDeposit, a DEPOSIT it didn't send, and why: send it and `feePayment` yourself. */
   depositNotSent?: string;
-  /** Set once pollUntilTerminal reaches a terminal status. Absent for DEPOSIT (see below) or when polling is turned off. */
+  /** Set once pollUntilTerminal reaches a terminal status. Absent for a DEPOSIT this didn't send, or when polling is turned off. */
   finalStatus?: StatusDTO;
 }
 
@@ -426,7 +429,7 @@ export async function executeAndTrack(
       let feeTxHash: string | undefined;
       try {
         if (!receiptSucceeded(await orAbort(handlers.waitForReceipt(hash, chainId), stop.signal), hash)) {
-          throw new Error("executeAndTrack: no successful receipt for the swap transaction itself, so RAVN's fee was not sent");
+          throw new Error("executeAndTrack: no successful receipt for the swap (or deposit) transaction itself, so RAVN's fee was not sent");
         }
         checkpoint();
         feeTxHash = await handlers.sendTransaction(fee);
@@ -574,16 +577,26 @@ export async function executeAndTrack(
     };
     checkpoint();
     if (!options.sendDeposit) return unsent();
+    // Typed away, but a newer API can answer with a type this version doesn't know: never sent.
+    const type = (execution as { executionType: string }).executionType;
+    if (type !== "DEPOSIT") return unsent(`executionType ${type} isn't one this SDK version can send`);
 
     // sendDeposit: from the payload RAVN built, RAVN's fee inside it.
     if (calls?.length) {
       const feeTx = fee?.transaction;
       const [depositTx, ...rest] = calls;
-      // As RAVN builds them: the transfer of deposit.amount, then the fee exactly as given.
+      // As RAVN builds them: deposit.amount to deposit.address (the coin, or the token's
+      // transfer(address,uint256) call), then the fee exactly as given.
       const same = (a: TxLike, b: TxLike) =>
         a.to?.toLowerCase() === b.to?.toLowerCase() && a.data?.toLowerCase() === b.data?.toLowerCase() && BigInt(a.value ?? "0") === BigInt(b.value ?? "0");
-      if (feeTx ? !(rest.length === 1 && same(rest[0], feeTx)) : rest.length !== 0) {
-        return unsent("its calls aren't the deposit then RAVN's fee as given");
+      const to = deposit.address.toLowerCase();
+      const amount = BigInt(deposit.amount);
+      const value = BigInt(depositTx.value ?? "0");
+      const paysDeposit =
+        (value === amount && depositTx.to?.toLowerCase() === to && (depositTx.data ?? "0x") === "0x") ||
+        (value === 0n && depositTx.data?.toLowerCase() === `0xa9059cbb${to.slice(2).padStart(64, "0")}${amount.toString(16).padStart(64, "0")}`);
+      if (!paysDeposit || (feeTx ? !(rest.length === 1 && same(rest[0], feeTx)) : rest.length !== 0)) {
+        return unsent("its calls aren't the deposit of deposit.amount to deposit.address, then RAVN's fee as given");
       }
       const evmHash = (hash: string) => (EVM_TX_HASH.test(hash) ? hash : undefined);
       let txHash: string;
@@ -622,9 +635,9 @@ export async function executeAndTrack(
       const chainId = deposit.chainId ?? fee?.chainId;
       return unsent(
         chainId === BITCOIN_CHAIN_ID
-          ? "RAVN returned no PSBT for it (built only from a bc1q… userAddress)"
+          ? "RAVN returned no PSBT for it (it builds one only from a bc1q… userAddress, when it can within a few seconds)"
           : chainId === SOLANA_CHAIN_ID
-            ? "RAVN returned no transaction for it (built only for a deposit carrying RAVN's fee)"
+            ? "RAVN returned no transaction for it (it builds one only for a deposit carrying RAVN's fee, when it can within a few seconds)"
             : "RAVN returned nothing ready to sign for it"
       );
     }
