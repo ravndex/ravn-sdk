@@ -3,6 +3,32 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.2.4
+
+`executeAndTrack` can send a DEPOSIT itself, RAVN's fee inside it, so you never build the fee
+payment by hand on any route. Opt-in: without the new option nothing changes.
+
+### Added
+
+- **`ExecuteAndTrackOptions.sendDeposit`**: send a DEPOSIT from the ready-to-sign payload RAVN
+  returns (0.2.2), then track it like any swap (polled to a terminal status, `txHash` set):
+  - EVM `calls`: in one wallet confirmation through `sendCalls` when `batch` is true, else the
+    deposit, its receipt, then RAVN's fee (a deposit that didn't succeed gets no fee). The fee's
+    transaction is reported as `getStatus`'s `txHash`, as on a TRANSACTION.
+  - Bitcoin `deposit.psbt` (the deposit and RAVN's fee output) through the new handler
+    **`sendBitcoinPsbt(psbt)`**: sign, finalize, broadcast, return the txid.
+  - Solana `deposit.transaction` (the deposit and RAVN's fee) through the new handler
+    **`sendSolanaTransaction(serialized)`**: sign and send, return the signature, within about a
+    minute of execute.
+  A deposit it can't send comes back exactly as without the option (`feePayment`), with
+  **`depositNotSent`** saying why: today a Bitcoin sender that isn't bc1q… (no PSBT), a Solana
+  deposit with no RAVN fee (no transaction), a payload RAVN couldn't build in time, calls that
+  aren't the deposit then the fee as given, no handler for its chain, or an execution type this
+  version doesn't know. A sandbox deposit is never sent: its status is polled like any sandbox swap.
+- **Turning it on**: send a deposit yourself only when the result has `depositNotSent`, or the user
+  pays twice (a sandbox deposit has neither it nor `txHash`: it's never sent). Your
+  `sendBitcoinPsbt` / `sendSolanaTransaction` should reject only when nothing was broadcast.
+
 ## @ravnexchange/sdk 0.2.3
 
 `excludeVenues` and `onlyVenues` now cover every venue RAVN routes your funds through

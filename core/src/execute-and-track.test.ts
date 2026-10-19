@@ -275,6 +275,214 @@ describe("executeAndTrack: DEPOSIT", () => {
   });
 });
 
+// sendDeposit: the SDK sends a DEPOSIT itself from the ready-to-sign payload RAVN returns (ravn-mvp
+// #426), RAVN's fee inside it, so an integrator never builds the fee payment by hand.
+describe("executeAndTrack: DEPOSIT with sendDeposit", () => {
+  const [DEP, FEE] = ["d", "f"].map((c) => `0x${c.repeat(64)}`);
+  const DEPOSIT_ADDRESS = `0x${"de".repeat(20)}`;
+  // transfer(deposit.address, deposit.amount), as RAVN builds it.
+  const transferData = `0xa9059cbb${DEPOSIT_ADDRESS.slice(2).padStart(64, "0")}${(995000).toString(16).padStart(64, "0")}`;
+  const depositCall = { to: "0xUSDC", data: transferData, value: "0", chainId: 8453 };
+  const feeTx = { to: "0xUSDC", data: "0xfeetransfer", value: "0", chainId: 8453 };
+  const evm = {
+    executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "rift-order-1",
+    deposit: { address: DEPOSIT_ADDRESS, amount: "995000", chainId: 8453 },
+    fee: { amount: "5000", address: "0xRavnFee", chainId: 8453, transaction: feeTx },
+    calls: [depositCall, feeTx],
+    batch: true,
+  };
+  const success = { status: "success", venue: "rift" };
+  const evmHandlers = (over: Partial<ExecuteAndTrackHandlers> = {}) => {
+    const order: string[] = [];
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => {
+        order.push(`send:${tx.data}`);
+        return tx.data === "0xfeetransfer" ? FEE : DEP;
+      }),
+      waitForReceipt: vi.fn(async (hash: string) => {
+        order.push(`wait:${hash}`);
+        return receipt(hash);
+      }),
+      ...over,
+    };
+    return { order, handlers };
+  };
+  const run = (execution: unknown, handlers: ExecuteAndTrackHandlers, options = {}) => {
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], status: [success] }) });
+    const getStatus = vi.spyOn(client, "getStatus");
+    return { getStatus, result: executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true, ...options }) };
+  };
+
+  it("without sendDeposit nothing is sent, even with the deposit ready to sign (no change for today's integrators)", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn() });
+    const { result, getStatus } = run(evm, handlers, { sendDeposit: undefined });
+    const r = await result;
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(getStatus).not.toHaveBeenCalled();
+    expect(r.feePayment).toEqual({ kind: "transaction", transaction: feeTx });
+    expect(r.txHash).toBeUndefined();
+  });
+
+  it("EVM, batchable: deposit and RAVN's fee in one wallet confirmation, then tracked with the tx that carried the fee", async () => {
+    const sendCalls = vi.fn(async () => [DEP]);
+    const { handlers } = evmHandlers({ sendCalls });
+    const { result, getStatus } = run(evm, handlers);
+    const r = await result;
+    expect(sendCalls).toHaveBeenCalledWith([depositCall, feeTx]);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ txHash: DEP, feeTxHash: DEP, statusRef: "rift-order-1", statusTxHash: DEP, finalStatus: success });
+    expect(r.feePayment).toBeUndefined();
+    expect(r.depositNotSent).toBeUndefined();
+    expect(getStatus).toHaveBeenCalledWith("qt-exec", "rift-order-1", DEP, expect.anything());
+    // A success answered before RAVN's node sees the fee proves nothing: one more poll.
+    expect(getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("EVM, not batchable (a native-coin deposit): the deposit, its receipt, then the fee, then tracked with the fee tx", async () => {
+    const coinDeposit = { to: DEPOSIT_ADDRESS, data: "0x", value: "995000", chainId: 8453 };
+    const coinFee = { to: "0xRavnFee", data: "0xtag", value: "5000", chainId: 8453 };
+    const execution = { ...evm, fee: { ...evm.fee, transaction: coinFee }, calls: [coinDeposit, coinFee], batch: false };
+    const { order, handlers } = evmHandlers({
+      sendCalls: vi.fn(),
+      sendTransaction: vi.fn(async (tx: { data?: string }) => {
+        order.push(`send:${tx.data}`);
+        return tx.data === "0xtag" ? FEE : DEP;
+      }),
+    });
+    const { result, getStatus } = run(execution, handlers);
+    const r = await result;
+    expect(order).toEqual(["send:0x", `wait:${DEP}`, "send:0xtag", `wait:${FEE}`]);
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ txHash: DEP, feeTxHash: FEE, statusTxHash: FEE, finalStatus: success });
+    expect(getStatus).toHaveBeenCalledWith("qt-exec", "rift-order-1", FEE, expect.anything());
+  });
+
+  it("EVM: a deposit that didn't succeed gets no fee; it is still tracked", async () => {
+    const { handlers } = evmHandlers({ waitForReceipt: vi.fn(async (hash: string) => ({ status: "reverted", transactionHash: hash })) });
+    const { result, getStatus } = run({ ...evm, batch: false }, handlers);
+    const r = await result;
+    expect(handlers.sendTransaction).toHaveBeenCalledTimes(1);
+    expect(r.feeTxHash).toBeUndefined();
+    expect(String(r.feeError)).toMatch(/receipt/);
+    expect(r.txHash).toBe(DEP);
+    expect(getStatus).toHaveBeenCalledWith("qt-exec", "rift-order-1", undefined, expect.anything());
+  });
+
+  it("EVM: a declined fee never fails the deposit, which is still tracked", async () => {
+    const { handlers } = evmHandlers({
+      sendTransaction: vi.fn(async (tx: { data?: string }) => {
+        if (tx.data === "0xfeetransfer") throw new Error("User rejected the request");
+        return DEP;
+      }),
+    });
+    const r = await run({ ...evm, batch: false }, handlers).result;
+    expect(String(r.feeError)).toMatch(/rejected/);
+    expect(r).toMatchObject({ txHash: DEP, finalStatus: success });
+  });
+
+  it("EVM: a deposit call that doesn't pay deposit.amount to deposit.address is not sent", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn() });
+    const wrongAmount = { ...depositCall, data: transferData.replace(/f2eb8$/, "f2eb9") };
+    const wrongCoin = { to: `0x${"ab".repeat(20)}`, data: "0x", value: "995000", chainId: 8453 };
+    for (const call of [wrongAmount, wrongCoin]) {
+      const r = await run({ ...evm, calls: [call, feeTx] }, handlers).result;
+      expect(r.depositNotSent).toMatch(/deposit/);
+    }
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+  });
+
+  it("an execution type this version doesn't know is never sent", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn() });
+    const r = await run({ ...evm, executionType: "INTENT" }, handlers).result;
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(r.txHash).toBeUndefined();
+    expect(r.depositNotSent).toMatch(/INTENT/);
+  });
+
+  it("EVM: calls that don't end in the fee as given are not sent: handed back to pay as today", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn() });
+    const r = await run({ ...evm, calls: [feeTx, depositCall] }, handlers).result;
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(r.depositNotSent).toMatch(/fee/);
+    expect(r.feePayment).toEqual({ kind: "transaction", transaction: feeTx });
+    expect(r.finalStatus).toBeUndefined();
+  });
+
+  const btcFee = { amount: "600", address: "bc1qravn", chainId: -1 };
+  const btc = { executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "near-dep-1", deposit: { address: "bc1qdeposit", amount: "99400", chainId: -1, psbt: "cHNidP8B" }, fee: btcFee };
+
+  it("Bitcoin: the PSBT RAVN built (its fee a second output) goes to sendBitcoinPsbt, then the swap is tracked", async () => {
+    const sendBitcoinPsbt = vi.fn(async () => "a".repeat(64));
+    const { handlers } = evmHandlers({ sendBitcoinPsbt });
+    const { result, getStatus } = run(btc, handlers);
+    const r = await result;
+    expect(sendBitcoinPsbt).toHaveBeenCalledWith("cHNidP8B");
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ txHash: "a".repeat(64), statusRef: "near-dep-1", finalStatus: success });
+    expect(r.feePayment).toBeUndefined();
+    // Not an EVM hash: /v1/status refuses it as txHash, and RAVN finds the fee from the deposit.
+    expect(getStatus).toHaveBeenCalledWith("qt-exec", "near-dep-1", undefined, expect.anything());
+  });
+
+  it("Bitcoin without a PSBT (a sender that isn't bc1q…): nothing sent, handed back to pay as today", async () => {
+    const sendBitcoinPsbt = vi.fn();
+    const { handlers } = evmHandlers({ sendBitcoinPsbt });
+    const r = await run({ ...btc, deposit: { ...btc.deposit, psbt: undefined } }, handlers).result;
+    expect(sendBitcoinPsbt).not.toHaveBeenCalled();
+    expect(r.depositNotSent).toMatch(/PSBT/);
+    expect(r.feePayment).toEqual({ kind: "bitcoin_output", address: "bc1qravn", amount: "600" });
+    expect(r.txHash).toBeUndefined();
+  });
+
+  const sol = {
+    executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "houdini-1",
+    deposit: { address: "DepSol", amount: "4975000", chainId: -2, transaction: "AQIDsol" },
+    fee: { amount: "25000", address: "RavnSol", chainId: -2 },
+  };
+
+  it("Solana: the deposit+fee transaction goes to sendSolanaTransaction, then the swap is tracked", async () => {
+    const sendSolanaTransaction = vi.fn(async () => "5igSolanaSig");
+    const signSolanaTransaction = vi.fn();
+    const { handlers } = evmHandlers({ sendSolanaTransaction, signSolanaTransaction });
+    const { result, getStatus } = run(sol, handlers);
+    const r = await result;
+    expect(sendSolanaTransaction).toHaveBeenCalledWith("AQIDsol");
+    expect(signSolanaTransaction).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ txHash: "5igSolanaSig", statusRef: "houdini-1", finalStatus: success });
+    expect(getStatus).toHaveBeenCalledWith("qt-exec", "houdini-1", undefined, expect.anything());
+  });
+
+  it("Solana with no sendSolanaTransaction handler: nothing sent, the reason names the handler", async () => {
+    const { handlers } = evmHandlers();
+    const r = await run(sol, handlers).result;
+    expect(r.depositNotSent).toMatch(/sendSolanaTransaction/);
+    expect(r.feePayment).toEqual({ kind: "solana_transfer", address: "RavnSol", amount: "25000" });
+  });
+
+  it("a sandbox deposit is never sent: its status is polled like any sandbox swap", async () => {
+    const sendCalls = vi.fn();
+    const { handlers } = evmHandlers({ sendCalls });
+    const { result, getStatus } = run({ ...evm, sandbox: true }, handlers);
+    const r = await result;
+    expect(sendCalls).not.toHaveBeenCalled();
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(r.finalStatus).toEqual(success);
+    expect(getStatus).toHaveBeenCalledWith("qt-exec", "rift-order-1", undefined, expect.anything());
+  });
+
+  it("once the deposit is out, a failure carries its hash", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn(async () => [DEP]) });
+    const client = new RavnClient({ fetch: scriptedFetch({ execute: [evm], status: [httpError(400, "INVALID_REQUEST")] }) });
+    const err = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true }).catch((e) => e);
+    expect(err).toBeInstanceOf(ExecuteAndTrackError);
+    expect(err.partial).toMatchObject({ txHash: DEP, feeTxHash: DEP, statusRef: "rift-order-1", statusTxHash: DEP });
+  });
+});
+
 // broadcastViaRavn: a Layerswap memo payment must reach the chain through RAVN's check, never
 // through the caller's own sendTransaction.
 describe("executeAndTrack: TRANSACTION with submit", () => {

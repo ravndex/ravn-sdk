@@ -34,7 +34,8 @@ export interface ExecuteAndTrackHandlers {
    * (the same hash repeated, or just one, for one transaction). Not a batch id or a 4337
    * userOpHash: RAVN proves its fee from that transaction. When given, a token-paid RAVN fee rides
    * in the swap's own confirmation, and so does the swap's approval when it needs one; a
-   * native-coin fee is always a plain transaction of its own. The batch's gas limit is your
+   * TRANSACTION's native-coin fee is always a plain transaction of its own (with sendDeposit, a
+   * DEPOSIT's calls go together only when its `batch` says so). The batch's gas limit is your
    * wallet's (EIP-5792 carries none): give it headroom, as a wallet estimating it tight reverts
    * the whole batch. Reject only when nothing was sent: a rejection loses the swap's hash.
    */
@@ -46,6 +47,20 @@ export interface ExecuteAndTrackHandlers {
    * TRANSACTION carrying `submit` (broadcastViaRavn quotes), which RAVN checks and sends itself.
    */
   signSolanaTransaction?(serialized: string): Promise<string>;
+  /**
+   * With `sendDeposit`: sign a Bitcoin DEPOSIT's ready-made PSBT (`deposit.psbt`, base64: the
+   * deposit, RAVN's fee as a second output, change back to the sender), finalize and broadcast it,
+   * and return its txid. Reject only when nothing was broadcast: a rejection loses its hash, and
+   * executeAndTrack called again builds a new deposit.
+   */
+  sendBitcoinPsbt?(psbt: string): Promise<string>;
+  /**
+   * With `sendDeposit`: sign a Solana DEPOSIT's ready-made transaction (`deposit.transaction`,
+   * base64: the deposit and RAVN's fee) and send it, returning its signature. It must land within
+   * about a minute of execute (its blockhash expires). Reject only when nothing was sent: a
+   * rejection loses its signature, and executeAndTrack called again builds a new deposit.
+   */
+  sendSolanaTransaction?(serialized: string): Promise<string>;
   /**
    * The API sends `approval` whenever the venue generically needs an allowance: it deliberately
    * never reads the chain to check whether the caller already has one (that's an RPC round-trip
@@ -87,6 +102,17 @@ export interface ExecuteAndTrackOptions {
    * sends is in the error's `partial`. A submitSignature or submitTransaction call already under
    * way is awaited first: its answer is the swap's only handle. */
   signal?: AbortSignal;
+  /**
+   * Send a DEPOSIT too, from the ready-to-sign payload RAVN returns with RAVN's fee inside it, then
+   * track it like any swap: EVM `calls` (sendCalls when `batch` allows, else the deposit, its
+   * receipt, then the fee), Bitcoin `deposit.psbt` (sendBitcoinPsbt), Solana `deposit.transaction`
+   * (sendSolanaTransaction). A deposit it can't send (no such payload, e.g. a Bitcoin sender that
+   * isn't bc1q…, or no handler for its chain) comes back unsent, as without this option, with
+   * `depositNotSent` saying why: send that one and `feePayment` yourself. Default false: a deposit
+   * is never sent from here. Turning it on, send a deposit yourself only when `depositNotSent` is
+   * set, or the user pays twice (a sandbox one has neither it nor `txHash`: it's never sent).
+   */
+  sendDeposit?: boolean;
   /** Called with every hash the moment it exists (approval, swap with its statusRef, fee) and with
    * every status poll. An error it throws is ignored: it never stops a swap that's out. */
   onProgress?(progress: ExecuteAndTrackProgress): void;
@@ -117,9 +143,12 @@ export interface ExecuteAndTrackResult {
   /** Why RAVN's fee wasn't sent (or its receipt not seen): the swap still runs and is tracked, but
    * no fee is owed to you on it unless `feeTxHash` is set and it landed. */
   feeError?: unknown;
-  /** DEPOSIT only: the fee payment to make beside the deposit (see depositFeePayment). */
+  /** DEPOSIT only: the fee payment to make beside the deposit (see depositFeePayment). Absent once
+   * sendDeposit sent the deposit: its fee went with it. */
   feePayment?: DepositFeePayment;
-  /** Set once pollUntilTerminal reaches a terminal status. Absent for DEPOSIT (see below) or when polling is turned off. */
+  /** With sendDeposit, a DEPOSIT it didn't send, and why: send it and `feePayment` yourself. */
+  depositNotSent?: string;
+  /** Set once pollUntilTerminal reaches a terminal status. Absent for a DEPOSIT this didn't send, or when polling is turned off. */
   finalStatus?: StatusDTO;
 }
 
@@ -361,7 +390,7 @@ export async function executeAndTrack(
     // A sandbox execution is never real, but a venue with no sandbox stand-in returns its live
     // payload: nothing in it is signed or sent (a signed order or Solana payment is a live
     // instrument even though RAVN drops it). RAVN answers its status synthetically, for any ref.
-    if (execution.sandbox && execution.executionType !== "DEPOSIT") {
+    if (execution.sandbox && (execution.executionType !== "DEPOSIT" || options.sendDeposit)) {
       const statusRef = execution.statusRef ?? SANDBOX_REF;
       return { execution, quoteToken, statusRef, finalStatus: await pollStatus(statusRef) };
     }
@@ -385,6 +414,31 @@ export async function executeAndTrack(
         await orAbort(handlers.waitForReceipt(hash, needed.chainId), stop.signal);
       }
       return hash;
+    };
+
+    // RAVN's fee on its own, only once `hash` (the swap, or the deposit) has confirmed: a reverted,
+    // dropped or replaced one pays no fee. Declined or failed (or stopped first), the swap still
+    // runs and is tracked; no fee is owed on it. Confirmed before polling starts: a swap that fills
+    // first would otherwise end the polling on the one poll that had to prove the fee.
+    const sendFeeAfter = async (
+      hash: string,
+      chainId: number | undefined,
+      fee: TxLike,
+      statusTxHash: (feeHash: string) => string | undefined
+    ): Promise<{ feeTxHash?: string; feeError?: unknown }> => {
+      let feeTxHash: string | undefined;
+      try {
+        if (!receiptSucceeded(await orAbort(handlers.waitForReceipt(hash, chainId), stop.signal), hash)) {
+          throw new Error("executeAndTrack: no successful receipt for the swap (or deposit) transaction itself, so RAVN's fee was not sent");
+        }
+        checkpoint();
+        feeTxHash = await handlers.sendTransaction(fee);
+        report("fee_sent", { feeTxHash, statusTxHash: statusTxHash(feeTxHash) });
+        await orAbort(handlers.waitForReceipt(feeTxHash, fee.chainId), stop.signal);
+        return { feeTxHash };
+      } catch (feeError) {
+        return { feeTxHash, feeError };
+      }
     };
 
     if (execution.executionType === "TRANSACTION" && execution.submit) {
@@ -463,24 +517,7 @@ export async function executeAndTrack(
         txHash = await handlers.sendTransaction(transaction);
         sent = true;
         report("swap_sent", { txHash, statusRef: execution.statusRef ?? txHash, statusTxHash: proof(txHash) });
-        if (feeTx) {
-          // On its own, only once the swap has confirmed: a reverted, dropped or replaced one pays
-          // no fee. Declined or failed (or stopped first), the swap still runs and is tracked; no
-          // fee is owed on it.
-          try {
-            if (!receiptSucceeded(await orAbort(handlers.waitForReceipt(txHash, transaction.chainId), stop.signal), txHash)) {
-              throw new Error("executeAndTrack: no successful receipt for the swap transaction itself, so RAVN's fee was not sent");
-            }
-            checkpoint();
-            feeTxHash = await handlers.sendTransaction(feeTx);
-            report("fee_sent", { feeTxHash, statusTxHash: proof(txHash, feeTxHash) });
-            // Confirmed before polling starts: a swap that fills first would otherwise end the
-            // polling on the one poll that had to prove the fee.
-            await orAbort(handlers.waitForReceipt(feeTxHash, feeTx.chainId), stop.signal);
-          } catch (err) {
-            feeError = err;
-          }
-        }
+        if (feeTx) ({ feeTxHash, feeError } = await sendFeeAfter(txHash, transaction.chainId, feeTx, (f) => proof(txHash, f)));
       }
       // Stopped before or during the fee: say so, even with polling off (no fee was sent on it).
       checkpoint();
@@ -523,18 +560,95 @@ export async function executeAndTrack(
       return { execution, quoteToken, resetTxHash: partial.resetTxHash, approvalTxHash, statusRef, finalStatus: await pollStatus(statusRef) };
     }
 
-    // DEPOSIT: nothing to sign or send from here; the user moves funds to execution.deposit.address
-    // out-of-band, and this helper has no way to know when that happens. Returned without polling;
-    // start polling yourself (getStatus / useRavnStatus) once the deposit is actually sent. Pay
-    // `feePayment` as it says, pass an EVM fee transaction's hash as getStatus's `txHash`, and poll
-    // RAVN to a terminal status even if the venue's own tracker says delivered first.
+    // DEPOSIT, unsent: the user moves funds to execution.deposit.address out-of-band, and this
+    // helper has no way to know when that happens. Returned without polling; start polling yourself
+    // (getStatus / useRavnStatus) once the deposit is actually sent. Pay `feePayment` as it says,
+    // pass an EVM fee transaction's hash as getStatus's `txHash`, and poll RAVN to a terminal status
+    // even if the venue's own tracker says delivered first.
     // A fee it can't describe never stops the deposit, which fills without it.
+    const { statusRef, deposit, calls, fee } = execution;
+    const unsent = (depositNotSent?: string): ExecuteAndTrackResult => {
+      const base = { execution, quoteToken, statusRef, ...(depositNotSent ? { depositNotSent } : {}) };
+      try {
+        return { ...base, feePayment: depositFeePayment(execution) };
+      } catch (feeError) {
+        return { ...base, feeError };
+      }
+    };
     checkpoint();
-    try {
-      return { execution, quoteToken, statusRef: execution.statusRef, feePayment: depositFeePayment(execution) };
-    } catch (feeError) {
-      return { execution, quoteToken, statusRef: execution.statusRef, feeError };
+    if (!options.sendDeposit) return unsent();
+    // Typed away, but a newer API can answer with a type this version doesn't know: never sent.
+    const type = (execution as { executionType: string }).executionType;
+    if (type !== "DEPOSIT") return unsent(`executionType ${type} isn't one this SDK version can send`);
+
+    // sendDeposit: from the payload RAVN built, RAVN's fee inside it.
+    if (calls?.length) {
+      const feeTx = fee?.transaction;
+      const [depositTx, ...rest] = calls;
+      // As RAVN builds them: deposit.amount to deposit.address (the coin, or the token's
+      // transfer(address,uint256) call), then the fee exactly as given.
+      const same = (a: TxLike, b: TxLike) =>
+        a.to?.toLowerCase() === b.to?.toLowerCase() && a.data?.toLowerCase() === b.data?.toLowerCase() && BigInt(a.value ?? "0") === BigInt(b.value ?? "0");
+      const to = deposit.address.toLowerCase();
+      const amount = BigInt(deposit.amount);
+      const value = BigInt(depositTx.value ?? "0");
+      const paysDeposit =
+        (value === amount && depositTx.to?.toLowerCase() === to && (depositTx.data ?? "0x") === "0x") ||
+        (value === 0n && depositTx.data?.toLowerCase() === `0xa9059cbb${to.slice(2).padStart(64, "0")}${amount.toString(16).padStart(64, "0")}`);
+      if (!paysDeposit || (feeTx ? !(rest.length === 1 && same(rest[0], feeTx)) : rest.length !== 0)) {
+        return unsent("its calls aren't the deposit of deposit.amount to deposit.address, then RAVN's fee as given");
+      }
+      const evmHash = (hash: string) => (EVM_TX_HASH.test(hash) ? hash : undefined);
+      let txHash: string;
+      let feeTxHash: string | undefined;
+      let feeError: unknown;
+      checkpoint();
+      if (feeTx && execution.batch && handlers.sendCalls) {
+        const hashes = await handlers.sendCalls(calls);
+        sent = true;
+        // Fewer hashes back than calls: the last one carried the rest.
+        if (!hashes[0]) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
+        txHash = hashes[0];
+        feeTxHash = hashes[Math.min(1, hashes.length - 1)];
+        report("swap_sent", { txHash, statusRef });
+        report("fee_sent", { feeTxHash, statusTxHash: evmHash(feeTxHash) });
+      } else {
+        txHash = await handlers.sendTransaction(depositTx);
+        sent = true;
+        report("swap_sent", { txHash, statusRef });
+        if (feeTx) ({ feeTxHash, feeError } = await sendFeeAfter(txHash, depositTx.chainId, feeTx, evmHash));
+      }
+      checkpoint();
+      const statusTxHash = feeTxHash && evmHash(feeTxHash);
+      if (feeTxHash && !statusTxHash) {
+        feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
+      }
+      partial.feeError = feeError;
+      return {
+        execution, quoteToken, txHash, statusRef, statusTxHash, feeTxHash, feeError,
+        finalStatus: await pollStatus(statusRef, statusTxHash, !!statusTxHash),
+      };
     }
+    // Bitcoin and Solana: one transaction pays the deposit and RAVN's fee; RAVN finds the fee there.
+    const payload = deposit.psbt ?? deposit.transaction;
+    if (!payload) {
+      const chainId = deposit.chainId ?? fee?.chainId;
+      return unsent(
+        chainId === BITCOIN_CHAIN_ID
+          ? "RAVN returned no PSBT for it (it builds one only from a bc1q… userAddress, when it can within a few seconds)"
+          : chainId === SOLANA_CHAIN_ID
+            ? "RAVN returned no transaction for it (it builds one only for a deposit carrying RAVN's fee, when it can within a few seconds)"
+            : "RAVN returned nothing ready to sign for it"
+      );
+    }
+    const handler = deposit.psbt ? "sendBitcoinPsbt" : "sendSolanaTransaction";
+    if (!handlers[handler]) return unsent(`no ${handler} handler was provided`);
+    checkpoint();
+    // Called as a method: a class-instance wallet needs its `this`.
+    const txHash = await handlers[handler]!(payload);
+    sent = true;
+    report("swap_sent", { txHash, statusRef });
+    return { execution, quoteToken, txHash, statusRef, finalStatus: await pollStatus(statusRef) };
   };
 
   try {
