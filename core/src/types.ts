@@ -48,7 +48,8 @@ export interface QuoteDTO {
    * minimum shown can no longer be met). */
   expiresAt: number;
   /** Present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. Sign hop 1; hop 2 is
-   * a unique deposit, not a second wallet tx. */
+   * a unique deposit, not a second wallet tx. The stablecoin route also sweeps its leftover through
+   * 0x (`0x_swap`), which isn't listed here. */
   hops?: { id: string; name: string }[];
   /** Every other venue that raced and produced a usable quote, best output first. */
   alternatives: AlternativeQuoteDTO[];

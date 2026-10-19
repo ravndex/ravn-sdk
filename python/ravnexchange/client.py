@@ -57,8 +57,9 @@ class GetQuoteParams(TypedDict, total=False):
     excludeVenues: List[str]
     # Race only these venues, e.g. ["bebop"] for RFQ only; excludeVenues still applies on top.
     # It covers every venue RAVN routes funds through: a multi-step route needs its venue.id and
-    # every venue in its hops listed, e.g. ["compose", "jupiter", "relay"]. Venues that swap for
-    # you may route on their own (see the API's /quote docs). An empty list is rejected.
+    # every venue in its hops listed, e.g. ["compose", "jupiter", "relay"]; the stablecoin route
+    # also needs "0x_swap". Venues that swap for you may route on their own (see the API's /quote
+    # docs). An empty list is rejected.
     onlyVenues: List[str]
     # Private swap: NEAR Intents + Houdini Swap only. See the API's /quote docs for Houdini's
     # compliance rules (it is sent the request's IP, user-agent and clientTimezone).
