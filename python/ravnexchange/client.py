@@ -53,10 +53,13 @@ class GetQuoteParams(TypedDict, total=False):
     # slippage.noMinimum True and guaranteedMin None: slippageBps does not protect them.
     allowNoMinimum: bool
     rankingMode: str
+    # Venues never to use, also kept out of the steps of RAVN's multi-step routes.
     excludeVenues: List[str]
     # Race only these venues, e.g. ["bebop"] for RFQ only; excludeVenues still applies on top.
-    # Matches the quote's venue.id, not every venue funds pass through (see the API's /quote docs).
-    # An empty list is rejected.
+    # It covers every venue RAVN routes funds through: a multi-step route needs its venue.id and
+    # every venue in its hops listed, e.g. ["compose", "jupiter", "relay"]; the stablecoin route
+    # also needs "0x_swap". Venues that swap for you may route on their own (see the API's /quote
+    # docs). An empty list is rejected.
     onlyVenues: List[str]
     # Private swap: NEAR Intents + Houdini Swap only. See the API's /quote docs for Houdini's
     # compliance rules (it is sent the request's IP, user-agent and clientTimezone).
