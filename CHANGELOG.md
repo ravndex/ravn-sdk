@@ -3,6 +3,28 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.2.3
+
+`excludeVenues` and `onlyVenues` now cover every venue RAVN routes your funds through
+(ravn-mvp #434). Types and docs only: no behaviour change in the client.
+
+### Changed
+
+- **`excludeVenues`**: an excluded venue is used nowhere in the route, including the steps of
+  RAVN's multi-step routes (`compose`, and `relay` quotes with `hops`). A multi-step route that
+  needs it isn't offered.
+- **`onlyVenues`** no longer matches only the quote's `venue.id`: a multi-step route is offered
+  only when its own id and every venue in its `hops` are listed, e.g. `["compose", "jupiter",
+  "relay"]` or `["relay", "kyberswap"]`. RAVN's stablecoin route also needs `"0x_swap"` beside its
+  hops (it sweeps the leftover). `["compose"]` alone now returns `NO_LIQUIDITY`.
+- Venues that swap for you may still route through other venues of their own choosing, which
+  neither list can reach: Layerswap (a Solana token often goes through Jupiter first), Relay,
+  Rift, Across (when it swaps before or after bridging) and Mayan.
+
+### Python (`ravnexchange`)
+
+The same two comments updated in `client.py`; not republished (PyPI 0.1.6 predates `onlyVenues`).
+
 ## @ravnexchange/sdk 0.2.2
 
 Executions come ready to sign, so you never build RAVN's fee payment yourself. Types only: no

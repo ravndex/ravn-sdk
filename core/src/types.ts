@@ -303,16 +303,22 @@ export interface GetQuoteParams {
    * wait; a quote with slippage.noMinimum counts only 2000 ms past the limit). A positive integer;
    * default 6000, clamped to 1000–15000. An API that predates it ignores it. */
   timeoutMs?: number;
-  /** Drop specific venues from this race, e.g. a risk objection to one of them. */
+  /** Venues never to use, e.g. a risk objection to one of them. An excluded venue is used
+   * nowhere in the route, including the steps of RAVN's multi-step routes (compose, relay quotes
+   * with hops); a multi-step route that needs it isn't offered. Venues that swap for you may still
+   * route through it on their own (see onlyVenues). */
   excludeVenues?: string[];
   /** Race only these venues, e.g. ["bebop"] for an RFQ-only race. Every other venue is left
-   * out, including ones RAVN adds later; excludeVenues still applies on top. Matches the quote's
-   * venue.id, the venue you deal with, not every venue funds pass through: RAVN's multi-step
-   * routes (compose, relay quotes with hops) and venues such as Rift, Across (swapping before or
-   * after bridging) and Mayan (a Solana order starting in another token swaps through Jupiter
-   * first) route through others. An empty list is
-   * rejected (INVALID_REQUEST); if none of them can quote, NO_LIQUIDITY lists every left-out
-   * venue in error.details.excludedVenues. */
+   * out, including ones RAVN adds later; excludeVenues still applies on top. It covers every
+   * venue RAVN routes funds through: a multi-step route is offered only when its own venue.id and
+   * every venue in its hops are listed, e.g. ["compose", "jupiter", "relay"] or
+   * ["relay", "kyberswap"]. RAVN's stablecoin route also needs "0x_swap" beside its hops: it
+   * sweeps the leftover. Venues that swap for you may route through other venues of their own
+   * choosing, which neither list can reach: Layerswap (a Solana token often goes through Jupiter
+   * first), Relay, Rift, Across (when it swaps before or after bridging) and Mayan (Jupiter on
+   * Solana, other DEXs such as Nordstern on EVM). An empty list is rejected (INVALID_REQUEST); if
+   * none of them can quote, NO_LIQUIDITY lists every left-out venue in
+   * error.details.excludedVenues. */
   onlyVenues?: string[];
   /** Settle privately: the race narrows to NEAR Intents (Confidential Intents) and Houdini Swap,
    * and NO_LIQUIDITY replaces a public fill if neither can quote. Houdini is sent the request's IP,
