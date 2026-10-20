@@ -3,9 +3,9 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## Unreleased (@ravnexchange/sdk)
+## @ravnexchange/sdk 0.2.6
 
-Not published yet: merging this changes no package version.
+Show prices while RAVN's race runs. Nothing changes for code that doesn't call the new method.
 
 ### Added
 
