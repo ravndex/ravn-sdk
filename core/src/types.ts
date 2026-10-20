@@ -17,7 +17,8 @@ export interface TokenDTO {
 }
 
 export interface QuoteDTO {
-  /** Opaque handle: pass back to execute() verbatim. Do not parse. */
+  /** Opaque handle: pass back to execute() verbatim. Do not parse: usually a short id for the
+   * quote RAVN keeps (at least 10 minutes, past expiresAt), sometimes the whole signed quote. */
   quoteToken: string;
   venue: { id: string; name: string };
   routeType: string;
@@ -41,7 +42,9 @@ export interface QuoteDTO {
   estimatedTimeSeconds: number;
   estimatedTimeIsGuess: boolean;
   /** Epoch ms, always a real time: execute() on `quoteToken` before this, re-quote after. Never
-   * refused for age before it; past it most routes fail with QUOTE_EXPIRED. Already 5 s ahead of
+   * refused for age before it. Past it, execute() prices the same route again and builds it only
+   * if it still meets the minimum this quote showed (else QUOTE_EXPIRED; a quote with
+   * slippage.noMinimum is never re-priced). Already 5 s ahead of
    * the venue's own deadline, so compare it to the clock as is. 2-hop routes
    * (`venue.id === "compose"`) and venues with no deadline are never refused for age: it's 60 s
    * from the response, when to re-quote. A 2-hop route re-prices at execute (BUILD_FAILED if the
@@ -285,6 +288,23 @@ export interface StatusDTO {
   deliveredAmount?: string | null;
   /** The destination-chain tx that paid the user out, when the venue names one. */
   txHash?: string | null;
+}
+
+/** A venue's price as it lands in getQuoteStream: an alternative without its quoteToken, to show,
+ * not to execute (only the quote getQuoteStream resolves to carries tokens). */
+export type PriceDTO = Omit<AlternativeQuoteDTO, "quoteToken">;
+
+/** What getQuoteStream reports while the race runs. `venues`: the venues racing. `settled`: one
+ * venue answered (`quotes` empty: nothing usable). The winner is picked once, at the end, net of
+ * gas: a venue that led here may not be it. */
+export type QuoteStreamEvent =
+  | { type: "venues"; venueIds: string[] }
+  | { type: "settled"; venueId: string; quotes: PriceDTO[] };
+
+export interface QuoteStreamOptions {
+  /** Called with each event as it arrives. A throw here is ignored: it never costs the quote. */
+  onEvent?: (event: QuoteStreamEvent) => void;
+  signal?: AbortSignal;
 }
 
 export interface GetQuoteParams {
