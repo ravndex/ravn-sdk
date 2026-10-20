@@ -3,11 +3,23 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.2.6, @ravnexchange/react 0.1.8
+## @ravnexchange/sdk 0.2.7, @ravnexchange/react 0.1.8
 
 RAVN keys now come as a pair: a public key (`rvn_live_…`) for your app, browsers included, and a
 secret key (`rvn_sk_…`) for your server, the only one that changes your fee, payout addresses or
-webhook. See the API's Authentication page. Also: quotes can stream each venue's price as it lands.
+webhook. See the API's Authentication page.
+
+### Changed
+
+- **`RavnClient` refuses a secret key in browser code** (throws at construction when `window` and
+  `document` exist): pass your public key there. Servers are unaffected.
+- `RavnErrorCode` gains `FORBIDDEN` (403): a public key where the secret key is needed, or a public
+  key used from a site outside its allowed origins.
+- **react:** `useRavnStatus` stops polling on `FORBIDDEN`, as on `UNAUTHORIZED`: retrying can't fix it.
+
+## @ravnexchange/sdk 0.2.6
+
+Show prices while RAVN's race runs. Nothing changes for code that doesn't call the new method.
 
 ### Added
 
@@ -20,11 +32,6 @@ webhook. See the API's Authentication page. Also: quotes can stream each venue's
 
 ### Changed
 
-- **`RavnClient` refuses a secret key in browser code** (throws at construction when `window` and
-  `document` exist): pass your public key there. Servers are unaffected.
-- `RavnErrorCode` gains `FORBIDDEN` (403): a public key where the secret key is needed, or a public
-  key used from a site outside its allowed origins.
-- **react:** `useRavnStatus` stops polling on `FORBIDDEN`, as on `UNAUTHORIZED`: retrying can't fix it.
 - Type docs: `quoteToken` is usually a short id now; past `expiresAt`, execute re-prices the
   same route and goes ahead only if it still meets the minimum shown.
 
