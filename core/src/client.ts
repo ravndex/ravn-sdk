@@ -12,7 +12,9 @@ import type {
 } from "./types";
 
 export interface RavnClientConfig {
-  /** Self-serve or enterprise key. Omit for the anonymous tier (works immediately, lower rate limit). */
+  /** Your public key (rvn_live_…), or an enterprise key. Omit for the anonymous tier (works
+   * immediately, lower rate limit). Never your secret key (rvn_sk_…) in browser code: it changes
+   * your fee and payout addresses, so the client refuses it in a browser. */
   apiKey?: string;
   /** Default: https://app.ravn.exchange/api/v1 */
   baseUrl?: string;
@@ -38,6 +40,11 @@ export class RavnClient {
   private readonly fetchImpl: typeof fetch;
 
   constructor(config: RavnClientConfig = {}) {
+    if (config.apiKey?.startsWith("rvn_sk_") && typeof window !== "undefined" && typeof document !== "undefined") {
+      throw new Error(
+        "RavnClient: that's your secret key (rvn_sk_…), and this is browser code, where anyone can copy it. Use your public key (rvn_live_…) here and keep the secret key on your server."
+      );
+    }
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     this.fetchImpl = config.fetch ?? globalThis.fetch;

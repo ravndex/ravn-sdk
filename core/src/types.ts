@@ -394,6 +394,7 @@ export type RavnErrorCode =
   | "QUOTE_NOT_EXECUTABLE"
   | "RATE_LIMITED"
   | "UNAUTHORIZED"
+  | "FORBIDDEN"
   | "NOT_CONFIGURED"
   | "NOT_FOUND"
   | "BUILD_FAILED"

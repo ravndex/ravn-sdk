@@ -11,7 +11,7 @@ export interface UseRavnStatusResult {
 // Codes the API itself defines as request-shaped, not transient: retrying with the exact same
 // arguments can never turn one of these into success. Anything else (RATE_LIMITED, INTERNAL, a
 // network failure) is worth retrying through.
-const PERMANENT_ERROR_CODES = new Set(["UNAUTHORIZED", "INVALID_REQUEST", "QUOTE_INVALID", "NOT_FOUND"]);
+const PERMANENT_ERROR_CODES = new Set(["UNAUTHORIZED", "FORBIDDEN", "INVALID_REQUEST", "QUOTE_INVALID", "NOT_FOUND"]);
 
 export function isPermanentError(err: unknown): boolean {
   return err instanceof RavnApiError && PERMANENT_ERROR_CODES.has(err.code);

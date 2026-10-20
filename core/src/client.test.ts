@@ -11,6 +11,18 @@ function fakeFetch(status: number, body: unknown): typeof fetch {
 }
 
 describe("RavnClient", () => {
+  it("refuses a secret key in browser code, where anyone could copy it", () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("document", {});
+    try {
+      expect(() => new RavnClient({ apiKey: "rvn_sk_abc" })).toThrow(/secret key/);
+      expect(() => new RavnClient({ apiKey: "rvn_live_abc" })).not.toThrow(); // the public key belongs there
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(() => new RavnClient({ apiKey: "rvn_sk_abc" })).not.toThrow(); // a server
+  });
+
   it("calls a browser's fetch unbound (window.fetch throws Illegal invocation as a method)", async () => {
     const browserFetch = vi.fn(function (this: unknown) {
       if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
