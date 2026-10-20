@@ -3,6 +3,24 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## Unreleased (@ravnexchange/sdk)
+
+Not published yet: merging this changes no package version.
+
+### Added
+
+- **`RavnClient.getQuoteStream(params, { onEvent, signal })`**: the quote `getQuote` returns, while
+  `onEvent` hears each venue's prices as they land (`{ type: "venues", venueIds }`, then
+  `{ type: "settled", venueId, quotes }` per venue; `quotes` are `PriceDTO`s, alternatives
+  without a quoteToken, for display only). Uses the API's `stream: true`; an answer that isn't
+  streamed (an older API, a proxy) is taken as a plain one. Types `PriceDTO`, `QuoteStreamEvent`,
+  `QuoteStreamOptions`.
+
+### Changed
+
+- Type docs: `quoteToken` is usually a short id now; past `expiresAt`, execute re-prices the
+  same route and goes ahead only if it still meets the minimum shown.
+
 ## @ravnexchange/sdk 0.2.5
 
 `executeAndTrack` sends a TRANSACTION's swap and RAVN's fee in one wallet confirmation whenever
