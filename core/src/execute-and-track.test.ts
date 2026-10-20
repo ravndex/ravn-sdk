@@ -580,6 +580,38 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", "eco-ref", BATCH, expect.anything());
   });
 
+  it("batches a coin sell with its fee when RAVN says so (the fee minted to RAVN as WETH)", async () => {
+    // Robinhood: the coin sent to WETH's depositTo for RAVN, tagged; its Transfer log proves it in the batch.
+    const wethFee = { amount: "500", address: "0xRavnFee", chainId: 4663, transaction: { to: "0xWETH", data: "0xb760faf9tag", value: "500", chainId: 4663 } };
+    const coinSell = { ...withFee(wethFee), transaction: { to: "0xFly", data: "0xswap", value: "99500", chainId: 4663 }, batch: true };
+    const handlers = {
+      sendTransaction: vi.fn(async () => "never"),
+      waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+      sendCalls: vi.fn(async () => [BATCH]), // one 7702 transaction carried both
+    };
+
+    const { result, getStatusSpy } = await run(coinSell, handlers);
+
+    expect(handlers.sendCalls).toHaveBeenCalledWith([coinSell.transaction, wethFee.transaction]);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ txHash: BATCH, feeTxHash: BATCH, statusRef: BATCH, statusTxHash: BATCH });
+    for (const call of getStatusSpy.mock.calls) expect(call.slice(0, 3)).toEqual(["qt-exec", BATCH, BATCH]);
+  });
+
+  it("never batches a fee RAVN says can't share the swap's confirmation, even a token one", async () => {
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? SWAP : FEE)),
+      waitForReceipt: vi.fn(async (hash: string) => ({ status: "success", transactionHash: hash })),
+      sendCalls: vi.fn(async () => ["never"]),
+    };
+
+    const { result } = await run(withFee(tokenFee, { batch: false }), handlers);
+
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(handlers.sendTransaction).toHaveBeenLastCalledWith(tokenFee.transaction);
+    expect(result).toMatchObject({ txHash: SWAP, feeTxHash: FEE });
+  });
+
   it("never batches a native-coin fee: a plain transaction of its own, after the swap", async () => {
     const handlers = {
       sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? SWAP : FEE)),

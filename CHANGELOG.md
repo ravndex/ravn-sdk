@@ -3,6 +3,22 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.2.5
+
+`executeAndTrack` sends a TRANSACTION's swap and RAVN's fee in one wallet confirmation whenever
+RAVN's execute says they may go together (`batch`), not only when the fee is a token.
+
+### Changed
+
+- **The fee batches when `batch` is true** (with a `sendCalls` handler): now also a coin sell's fee
+  that RAVN takes as WETH minted to it (Fly Trade on Robinhood Chain and Arbitrum: the coin sent to
+  WETH's `depositTo`), which its Transfer log proves inside the batch. One transaction carries the
+  swap and the fee; its hash is the swap's `txHash` and `getStatus`'s `txHash` alike.
+- **`batch: false` is followed too**: the fee goes as its own transaction after the swap's receipt,
+  even a token fee. An execute answer without `batch` (older API) keeps 0.2.4's rule: a token fee
+  batches, a coin fee never does.
+- Type docs: the WETH fee on `fee` and `DepositFeeDTO`; the ~400k-gas guidance names the swap's call.
+
 ## @ravnexchange/sdk 0.2.4
 
 `executeAndTrack` can send a DEPOSIT itself, RAVN's fee inside it, so you never build the fee
