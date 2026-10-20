@@ -18,7 +18,7 @@ export interface TokenDTO {
 
 export interface QuoteDTO {
   /** Opaque handle: pass back to execute() verbatim. Do not parse: usually a short id for the
-   * quote RAVN keeps (at least 10 minutes, past expiresAt), sometimes the whole signed quote. */
+   * quote RAVN keeps (until 10 minutes past expiresAt, at least), sometimes the whole signed quote. */
   quoteToken: string;
   venue: { id: string; name: string };
   routeType: string;
@@ -42,9 +42,9 @@ export interface QuoteDTO {
   estimatedTimeSeconds: number;
   estimatedTimeIsGuess: boolean;
   /** Epoch ms, always a real time: execute() on `quoteToken` before this, re-quote after. Never
-   * refused for age before it. Past it, execute() prices the same route again and builds it only
-   * if it still meets the minimum this quote showed (else QUOTE_EXPIRED; a quote with
-   * slippage.noMinimum is never re-priced). Already 5 s ahead of
+   * refused for age before it. Up to 10 minutes past it, execute() prices the same route again and
+   * builds it only if it still meets the minimum this quote showed (else QUOTE_EXPIRED; a quote with
+   * slippage.noMinimum or no slippage is never re-priced). Already 5 s ahead of
    * the venue's own deadline, so compare it to the clock as is. 2-hop routes
    * (`venue.id === "compose"`) and venues with no deadline are never refused for age: it's 60 s
    * from the response, when to re-quote. A 2-hop route re-prices at execute (BUILD_FAILED if the

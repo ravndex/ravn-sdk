@@ -83,3 +83,30 @@ describe("RavnClient.getQuoteStream", () => {
     expect(result).toEqual(quote);
   });
 });
+
+describe("RavnClient.getQuoteStream, rough edges", () => {
+  it("decodes a character split across two network chunks", async () => {
+    const bytes = enc.encode(JSON.stringify({ type: "settled", venueId: "ü-venue", quotes: [] }) + "\n" + JSON.stringify({ type: "done", status: 200, data: quote }) + "\n");
+    const cut = bytes.indexOf(0xc3) + 1; // inside "ü"
+    const fetchImpl = vi.fn(async () =>
+      new Response(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes.slice(0, cut)); c.enqueue(bytes.slice(cut)); c.close(); } }), {
+        headers: { "content-type": "application/x-ndjson" },
+      })
+    ) as unknown as typeof fetch;
+    const events: QuoteStreamEvent[] = [];
+    await new RavnClient({ fetch: fetchImpl }).getQuoteStream(params, { onEvent: (e) => events.push(e) });
+    expect(events).toEqual([{ type: "settled", venueId: "ü-venue", quotes: [] }]);
+  });
+
+  it("a garbled line (a proxy's HTML) is INTERNAL, not a network error", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>bad gateway</html>\n", { headers: { "content-type": "application/x-ndjson" } })) as unknown as typeof fetch;
+    await expect(new RavnClient({ fetch: fetchImpl }).getQuoteStream(params)).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+
+  it("a custom fetch whose response has no headers is taken as a plain answer, like getQuote", async () => {
+    const bare = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: quote }) })) as unknown as typeof fetch;
+    await expect(new RavnClient({ fetch: bare }).getQuoteStream(params)).resolves.toEqual(quote);
+    const refused = vi.fn(async () => ({ ok: false, json: async () => ({}) })) as unknown as typeof fetch;
+    await expect(new RavnClient({ fetch: refused }).getQuote(params)).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+});

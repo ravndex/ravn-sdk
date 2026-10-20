@@ -28,8 +28,8 @@ interface Envelope<T> {
   meta?: { requestId: string; version: string };
 }
 
-function envelopeData<T>(body: Envelope<T>, status: number): T {
-  if (status < 200 || status >= 300 || body.error) {
+function envelopeData<T>(body: Envelope<T>, ok: boolean, status?: number): T {
+  if (!ok || body.error) {
     const err = body.error ?? { code: "INTERNAL", message: `HTTP ${status}` };
     throw new RavnApiError(err.code, err.message, err.details, body.meta, { status });
   }
@@ -89,7 +89,7 @@ export class RavnClient {
       throw new RavnApiError("INTERNAL", `HTTP ${res.status}: response was not valid JSON`, undefined, undefined, { status: res.status });
     }
 
-    return envelopeData(body, res.status);
+    return envelopeData(body, res.ok, res.status);
   }
 
   /** POST /v1/quote: omitting destinationAddress/refundAddress returns a preview-only quote (see QuoteDTO.executable). */
@@ -106,13 +106,20 @@ export class RavnClient {
   async getQuoteStream(params: GetQuoteParams, options: QuoteStreamOptions = {}): Promise<QuoteDTO> {
     const init = { method: "POST", body: JSON.stringify({ ...params, stream: true }), signal: options.signal };
     const res = await this.send("/quote", init);
-    if (!res.ok || !(res.headers.get("content-type") ?? "").includes("ndjson")) {
+    if (!res.ok || !(res.headers?.get?.("content-type") ?? "").includes("ndjson")) {
       return this.unwrap<QuoteDTO>("/quote", res, options.signal);
     }
     let done: (Envelope<QuoteDTO> & { status?: number }) | undefined;
+    let garbled = false;
     const line = (text: string) => {
-      if (!text.trim()) return;
-      const event = JSON.parse(text) as { type: string } & Envelope<QuoteDTO> & { status?: number };
+      if (!text.trim() || garbled) return;
+      let event: { type: string } & Envelope<QuoteDTO> & { status?: number };
+      try {
+        event = JSON.parse(text);
+      } catch {
+        garbled = true;
+        return;
+      }
       if (event.type === "done") done = event;
       else if (event.type === "venues" || event.type === "settled") {
         try {
@@ -122,9 +129,9 @@ export class RavnClient {
         }
       }
     };
+    // A runtime without streamed bodies or TextDecoder (React Native) still gets every line, at the end.
+    const reader = typeof TextDecoder === "undefined" ? undefined : res.body?.getReader();
     try {
-      // A runtime without streamed bodies (React Native) still gets every line, at the end.
-      const reader = res.body?.getReader();
       if (!reader) (await res.text()).split("\n").forEach(line);
       else {
         const decoder = new TextDecoder();
@@ -142,14 +149,20 @@ export class RavnClient {
         line(buf);
       }
     } catch (err) {
+      reader?.cancel().catch(() => {});
       if (options.signal?.aborted) throw err;
       const reason = err instanceof Error ? err.message : String(err);
       throw new RavnApiError("NETWORK_ERROR", `Quote stream broke off: ${reason}`, undefined, undefined, { status: res.status, cause: err });
     }
+    if (garbled) {
+      // Not RAVN's stream (an intermediary's page): a server-side failure, as unwrap reads a non-JSON body.
+      throw new RavnApiError("INTERNAL", `HTTP ${res.status}: quote stream was not valid JSON lines`, undefined, undefined, { status: res.status });
+    }
     if (!done) {
       throw new RavnApiError("NETWORK_ERROR", "Quote stream ended before its answer", undefined, undefined, { status: res.status });
     }
-    return envelopeData(done, done.status ?? res.status);
+    const status = done.status ?? res.status;
+    return envelopeData(done, status >= 200 && status < 300, status);
   }
 
   /** POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT). */
