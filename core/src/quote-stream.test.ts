@@ -103,6 +103,12 @@ describe("RavnClient.getQuoteStream, rough edges", () => {
     await expect(new RavnClient({ fetch: fetchImpl }).getQuoteStream(params)).rejects.toMatchObject({ code: "INTERNAL" });
   });
 
+  it("a fetch whose body has no getReader (node-fetch v2) still gets every line", async () => {
+    const text = [{ type: "venues", venueIds: [] }, { type: "done", status: 200, data: quote }].map((l) => JSON.stringify(l) + "\n").join("");
+    const nodeFetch = vi.fn(async () => ({ ok: true, status: 200, headers: new Headers({ "content-type": "application/x-ndjson" }), body: {}, text: async () => text })) as unknown as typeof fetch;
+    await expect(new RavnClient({ fetch: nodeFetch }).getQuoteStream(params)).resolves.toEqual(quote);
+  });
+
   it("a custom fetch whose response has no headers is taken as a plain answer, like getQuote", async () => {
     const bare = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: quote }) })) as unknown as typeof fetch;
     await expect(new RavnClient({ fetch: bare }).getQuoteStream(params)).resolves.toEqual(quote);

@@ -18,7 +18,7 @@ export interface TokenDTO {
 
 export interface QuoteDTO {
   /** Opaque handle: pass back to execute() verbatim. Do not parse: usually a short id for the
-   * quote RAVN keeps (until 10 minutes past expiresAt, at least), sometimes the whole signed quote. */
+   * quote RAVN keeps until 10 minutes past expiresAt, sometimes the whole signed quote. */
   quoteToken: string;
   venue: { id: string; name: string };
   routeType: string;

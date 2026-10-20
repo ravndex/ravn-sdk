@@ -130,7 +130,8 @@ export class RavnClient {
       }
     };
     // A runtime without streamed bodies or TextDecoder (React Native) still gets every line, at the end.
-    const reader = typeof TextDecoder === "undefined" ? undefined : res.body?.getReader();
+    // node-fetch v2's body is a Node stream, with no getReader.
+    const reader = typeof TextDecoder !== "undefined" && typeof res.body?.getReader === "function" ? res.body.getReader() : undefined;
     try {
       if (!reader) (await res.text()).split("\n").forEach(line);
       else {
