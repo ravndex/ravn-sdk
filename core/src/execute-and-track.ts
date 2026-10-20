@@ -34,10 +34,13 @@ export interface ExecuteAndTrackHandlers {
    * (the same hash repeated, or just one, for one transaction). Not a batch id or a 4337
    * userOpHash: RAVN proves its fee from that transaction. When given, a token-paid RAVN fee rides
    * in the swap's own confirmation, and so does the swap's approval when it needs one; a
-   * TRANSACTION's native-coin fee is always a plain transaction of its own (with sendDeposit, a
+   * TRANSACTION's native-coin fee only when its `batch` says so (a coin sell's fee minted to RAVN as
+   * WETH, Robinhood Chain and Arbitrum), else a plain transaction of its own (with sendDeposit, a
    * DEPOSIT's calls go together only when its `batch` says so). The batch's gas limit is your
    * wallet's (EIP-5792 carries none): give it headroom, as a wallet estimating it tight reverts
-   * the whole batch. Reject only when nothing was sent: a rejection loses the swap's hash.
+   * the whole batch (no fee leaves without the swap). A heavy swap needs the most: Fly's on
+   * Robinhood Chain measured 430–560k gas (2026-10-20). Reject only when nothing was sent: a
+   * rejection loses the swap's hash.
    */
   sendCalls?(txs: TxLike[]): Promise<string[]>;
   /** Sign an EIP-712 typed-data payload. Only called for SIGNATURE executions. */
@@ -489,12 +492,13 @@ export async function executeAndTrack(
       let txHash: string;
       let feeTxHash: string | undefined;
       let feeError: unknown;
-      if (feeTx && BigInt(feeTx.value) === 0n && handlers.sendCalls) {
-        // A token fee may ride in the swap's own confirmation, and the swap's approval with it:
-        // atomic, so neither outlives a swap that reverted. Only here: ExecutionDTO doesn't name
-        // its venue, and the first-party app never batches THORChain (Bifrost ignores a router
-        // deposit whose tx.to is the user's own 7702 account) or Bebop (its settlement needs gas
-        // headroom a batch leaves to the wallet); fee-beside routes are neither.
+      // RAVN says whether the fee may share the swap's confirmation (`batch`): a token fee, or a coin
+      // sell's fee minted to RAVN as WETH (a coin sent from a batch is an internal transfer, which
+      // proves nothing on those chains), never at a venue that can't take a batch (THORChain, Bebop,
+      // a two-hop route). An API answering without `batch` (before calls + batch): a token fee only.
+      const batchFee = execution.batch ?? BigInt(feeTx?.value ?? "1") === 0n;
+      if (feeTx && batchFee && handlers.sendCalls) {
+        // Atomic, so neither the fee nor the swap's approval outlives a swap that reverted.
         const batchApproval = await neededApproval(approval);
         const reset = batchApproval?.reset && { ...batchApproval.reset, chainId: batchApproval.chainId };
         const approvals = batchApproval ? [...(reset ? [reset] : []), batchApproval] : [];

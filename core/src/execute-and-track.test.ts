@@ -580,6 +580,53 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     expect(getStatusSpy).toHaveBeenCalledWith("qt-exec", "eco-ref", BATCH, expect.anything());
   });
 
+  it("batches a coin sell with its fee when RAVN says so (the fee minted to RAVN as WETH)", async () => {
+    // Robinhood: the coin sent to WETH's depositTo for RAVN, tagged; its Transfer log proves it in the batch.
+    const wethFee = { amount: "500", address: "0xRavnFee", chainId: 4663, transaction: { to: "0xWETH", data: "0xb760faf9tag", value: "500", chainId: 4663 } };
+    const coinSell = { ...withFee(wethFee), transaction: { to: "0xFly", data: "0xswap", value: "99500", chainId: 4663 }, batch: true };
+    const handlers = {
+      sendTransaction: vi.fn(async () => "never"),
+      waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+      sendCalls: vi.fn(async () => [BATCH]), // one 7702 transaction carried both
+    };
+
+    const { result, getStatusSpy } = await run(coinSell, handlers);
+
+    expect(handlers.sendCalls).toHaveBeenCalledWith([coinSell.transaction, wethFee.transaction]);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ txHash: BATCH, feeTxHash: BATCH, statusRef: BATCH, statusTxHash: BATCH });
+    for (const call of getStatusSpy.mock.calls) expect(call.slice(0, 3)).toEqual(["qt-exec", BATCH, BATCH]);
+  });
+
+  it("with no sendCalls, sends a batchable coin sell's fee after the swap's receipt", async () => {
+    const wethFee = { amount: "500", address: "0xRavnFee", chainId: 4663, transaction: { to: "0xWETH", data: "0xb760faf9tag", value: "500", chainId: 4663 } };
+    const coinSell = { ...withFee(wethFee), transaction: { to: "0xFly", data: "0xswap", value: "99500", chainId: 4663 }, batch: true };
+    const order: string[] = [];
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => (order.push(`send:${tx.data}`), tx.data === "0xswap" ? SWAP : FEE)),
+      waitForReceipt: vi.fn(async (hash: string) => (order.push(`wait:${hash.slice(0, 3)}`), receipt(hash))),
+    };
+
+    const { result } = await run(coinSell, handlers);
+
+    expect(order).toEqual(["send:0xswap", "wait:0xa", "send:0xb760faf9tag", "wait:0xf"]);
+    expect(result).toMatchObject({ txHash: SWAP, feeTxHash: FEE, statusTxHash: FEE });
+  });
+
+  it("never batches a fee RAVN says can't share the swap's confirmation, even a token one", async () => {
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? SWAP : FEE)),
+      waitForReceipt: vi.fn(async (hash: string) => ({ status: "success", transactionHash: hash })),
+      sendCalls: vi.fn(async () => ["never"]),
+    };
+
+    const { result } = await run(withFee(tokenFee, { batch: false }), handlers);
+
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(handlers.sendTransaction).toHaveBeenLastCalledWith(tokenFee.transaction);
+    expect(result).toMatchObject({ txHash: SWAP, feeTxHash: FEE });
+  });
+
   it("never batches a native-coin fee: a plain transaction of its own, after the swap", async () => {
     const handlers = {
       sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xswap" ? SWAP : FEE)),
@@ -966,10 +1013,9 @@ describe("executeAndTrack: approval batching", () => {
     expect(result).toMatchObject({ approvalTxHash: APPROVAL, txHash: SWAP, feeTxHash: FEE });
   });
 
-  // ExecutionDTO doesn't say which venue it is, and the first-party app never batches THORChain
-  // (Bifrost ignores a router deposit whose tx.to is the user's own 7702 account) or Bebop (its
-  // RFQ settlement needs gas headroom a batch leaves to the wallet). Fee-beside routes (Eco,
-  // Layerswap, Mayan) are neither, so only there does the approval join a batch.
+  // The approval joins a batch only with a fee that may ride in it (`batch`, or a token fee from an
+  // API without one): RAVN never batches THORChain (Bifrost ignores a router deposit whose tx.to is
+  // the user's own 7702 account) or Bebop (its RFQ settlement needs gas headroom a batch leaves).
   it("keeps the approval its own confirmed step on a swap with no token fee to batch", async () => {
     const handlers = {
       sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? APPROVAL : SWAP)),

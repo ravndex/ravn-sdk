@@ -140,25 +140,28 @@ export type ExecutionDTO =
       submit?: { url: string };
       /**
        * Only when your key sets a fee and the route has no fee of its own (Eco, Layerswap, Mayan's
-       * routes paying no referrer) from an EVM chain: RAVN's fee, a transfer of the input token to
-       * RAVN; `transaction` already leaves it out. From Solana there is none to send: the fee is a
-       * transfer inside `transaction.serialized`. Skip it and the swap still fills; no fee is owed to
-       * you. A wallet that batches (EIP-5792 `wallet_sendCalls`) or relays (smart account, 7702,
-       * 4337) may send `fee.transaction` with `transaction` in one confirmation (one fee-bearing swap
-       * per transaction: a second fee in it isn't proven), for an ERC-20 sell
-       * (a native-coin fee must be a plain transaction of its own, so a contract wallet that can't
-       * send one — a Safe, a 4337 account — can't pay it). Pass the on-chain hash of the transaction
-       * that carried the fee (not an EIP-5792 batch id or a 4337 userOpHash) as `txHash` to getStatus
-       * — not needed with no `statusRef` here, when the fee rode in the swap's own transaction. Sent
-       * on its own, send it once the swap has confirmed. A fee paid on a swap the venue refunds
-       * stays with RAVN.
+       * routes paying no referrer, Fly Trade's coin sells where its own fee can't be proven:
+       * Robinhood Chain, Arbitrum and others) from an EVM chain: RAVN's fee, a transfer of the input
+       * token to RAVN, or on Robinhood Chain and Arbitrum a coin sell's fee as WETH minted to RAVN
+       * (the coin sent to WETH's `depositTo`; `fee.token` in the quote is WETH); `transaction`
+       * already leaves it out. From Solana there is none to send: the fee is a transfer inside
+       * `transaction.serialized`. Skip it and the swap still fills; no fee is owed to you. A wallet
+       * that batches (EIP-5792 `wallet_sendCalls`) or relays (smart account, 7702, 4337) may send
+       * `fee.transaction` with `transaction` in one confirmation (one fee-bearing swap per
+       * transaction: a second fee in it isn't proven), for an ERC-20 sell, or a coin sell whose fee
+       * is WETH minted to RAVN (`batch` true; a native-coin fee must otherwise be a plain transaction
+       * of its own, so a contract wallet that can't send one — a Safe, a 4337 account — can't pay
+       * it). Pass the on-chain hash of the transaction that carried the fee (not an EIP-5792 batch id
+       * or a 4337 userOpHash) as `txHash` to getStatus — not needed with no `statusRef` here, when
+       * the fee rode in the swap's own transaction. Sent on its own, send it once the swap has
+       * confirmed. A fee paid on a swap the venue refunds stays with RAVN.
        */
       fee?: DepositFeeDTO;
       /** EVM: everything to send, in order (approval.reset, approval, the swap or the deposit
        * transfer, RAVN's fee). Each once the one before has succeeded (stop if one reverts), or, when
        * `batch` is true, all in one atomic wallet batch (EIP-5792 `wallet_sendCalls`,
        * `atomicRequired: true`): simulate it first, and send them one by one if that fails or the
-       * last call needs more than ~400k gas. */
+       * swap's call needs more than ~400k gas. */
       calls?: CallDTO[];
       /** Whether `calls` (more than one) may go in one atomic wallet batch. */
       batch?: boolean;
@@ -213,7 +216,7 @@ export type ExecutionDTO =
        * transfer, RAVN's fee). Each once the one before has succeeded (stop if one reverts), or, when
        * `batch` is true, all in one atomic wallet batch (EIP-5792 `wallet_sendCalls`,
        * `atomicRequired: true`): simulate it first, and send them one by one if that fails or the
-       * last call needs more than ~400k gas. */
+       * swap's call needs more than ~400k gas. */
       calls?: CallDTO[];
       /** Whether `calls` (more than one) may go in one atomic wallet batch. */
       batch?: boolean;
@@ -230,14 +233,17 @@ export interface CallDTO {
 /** RAVN's integrator fee beside a deposit (or a transaction), in the input token, paid by your user
  * to RAVN; your share is paid out as usual. `deposit.amount` (the transaction) already leaves it out. */
 export interface DepositFeeDTO {
-  /** Base units of the input token. */
+  /** Base units of the input token (the same in WETH, 18 decimals, where a coin sell's fee is
+   * minted as WETH). */
   amount: string;
   /** RAVN's fee address on the input chain. */
   address: string;
   chainId: number;
   /** EVM: send this transaction too, exactly as given (it carries a tag naming this swap): on its
    * own, or in the same wallet batch or relay as the deposit or swap (EIP-5792, smart account, 7702,
-   * 4337) — an ERC-20 fee anywhere; a native-coin fee only beside a NEAR Intents deposit on
+   * 4337) — an ERC-20 fee anywhere, and a coin sell's fee minted to RAVN as WETH (Robinhood Chain,
+   * Arbitrum: the coin sent to WETH's `depositTo`, booked and paid out in WETH, proven by WETH's
+   * Transfer log wherever it rides); a native-coin fee only beside a NEAR Intents deposit on
    * Ethereum, Base or Polygon (proven from those chains' internal transfers). Any other native-coin
    * fee must be a plain transaction of its own (a contract wallet that can't send one can't pay it).
    * Then pass the on-chain hash of the transaction that carried it (not a batch id or a userOpHash)
