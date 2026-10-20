@@ -7,7 +7,16 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 
 RAVN keys now come as a pair: a public key (`rvn_live_…`) for your app, browsers included, and a
 secret key (`rvn_sk_…`) for your server, the only one that changes your fee, payout addresses or
-webhook. See the API's Authentication page.
+webhook. See the API's Authentication page. Also: quotes can stream each venue's price as it lands.
+
+### Added
+
+- **`RavnClient.getQuoteStream(params, { onEvent, signal })`**: the quote `getQuote` returns, while
+  `onEvent` hears each venue's prices as they land (`{ type: "venues", venueIds }`, then
+  `{ type: "settled", venueId, quotes }` per venue; `quotes` are `PriceDTO`s, alternatives
+  without a quoteToken, for display only). Uses the API's `stream: true`; an answer that isn't
+  streamed (an older API, a proxy) is taken as a plain one. Types `PriceDTO`, `QuoteStreamEvent`,
+  `QuoteStreamOptions`.
 
 ### Changed
 
@@ -16,6 +25,8 @@ webhook. See the API's Authentication page.
 - `RavnErrorCode` gains `FORBIDDEN` (403): a public key where the secret key is needed, or a public
   key used from a site outside its allowed origins.
 - **react:** `useRavnStatus` stops polling on `FORBIDDEN`, as on `UNAUTHORIZED`: retrying can't fix it.
+- Type docs: `quoteToken` is usually a short id now; past `expiresAt`, execute re-prices the
+  same route and goes ahead only if it still meets the minimum shown.
 
 ## @ravnexchange/sdk 0.2.5
 
