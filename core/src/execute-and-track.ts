@@ -38,7 +38,8 @@ export interface ExecuteAndTrackHandlers {
    * WETH, Robinhood Chain and Arbitrum), else a plain transaction of its own (with sendDeposit, a
    * DEPOSIT's calls go together only when its `batch` says so). The batch's gas limit is your
    * wallet's (EIP-5792 carries none): give it headroom, as a wallet estimating it tight reverts
-   * the whole batch (a heavy swap, e.g. ~560k gas on Robinhood Chain; no fee leaves without it). Reject only when nothing was sent: a rejection loses the swap's hash.
+   * the whole batch (no fee leaves without the swap). A heavy swap needs the most: Fly's on Robinhood
+   * Chain measured 430–560k gas (2026-10-20). Reject only when nothing was sent: a rejection loses the swap's hash.
    */
   sendCalls?(txs: TxLike[]): Promise<string[]>;
   /** Sign an EIP-712 typed-data payload. Only called for SIGNATURE executions. */
