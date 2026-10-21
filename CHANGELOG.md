@@ -3,9 +3,9 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.4.1
+## @ravnexchange/sdk 0.4.2
 
-Arc (Circle's chain, id 5042). 0.4.0 and earlier refuse every Arc execution with "This SDK version doesn't
+Arc (Circle's chain, id 5042). 0.4.1 and earlier refuse every Arc execution with "This SDK version doesn't
 know chain 5042"; this release knows Arc's venue contracts, each checked against real RAVN /v1/execute
 builds on Arc (2026-10-21).
 
@@ -16,6 +16,32 @@ builds on Arc (2026-10-21).
   `0x97CC…5fD4`, has no code on Arc and is refused there), Eco's portal, 0x AllowanceHolder and Permit2,
   KyberSwap, Fly, OKX (router `0x4E3b…bBE0`, approvals `0x2B98…61Af`), Layerswap's depository and
   Garden's Arc swap contracts.
+
+## @ravnexchange/sdk 0.4.1
+
+Hinkal for SDK users: say you can sign its steps, and get back what a failed Hinkal swap left behind.
+
+### Added
+
+- `GetQuoteParams.authorizeSteps`: your execute flow answers AUTHORIZE steps (`executeAndTrack` does,
+  given `signMessage` and `signTypedData`). RAVN races Hinkal on a confidential quote only with it (or
+  `onlyVenues` naming `"hinkal"`), so an SDK that can't answer those steps never gets one. Sent as given
+  by `getQuote` and `getQuoteStream`.
+- **Recovery** of what a failed Hinkal swap left at Hinkal (Hinkal never refunds on its own):
+  `client.recover({ statusRef, authorization?, signature? }, { userAddress })` (POST /v1/recover,
+  answering `RecoverDTO`: `sign`, `done` or `nothing`), and `recoverStuckFunds(client, { statusRef,
+  userAddress }, { signMessage, signTypedData, switchChain? })`, which runs it: the read-only session,
+  then each recovery, looking again after each until nothing is left, resolving to what came back.
+- **The check covers it** (`checkRecovery`, run by `recover`): the session is read-only, and a recovery
+  is `RecoverStuckBridgeBalance` or `WithdrawStuckUtxos` with Hinkal's own fields, in Hinkal's domain on
+  a chain Hinkal runs on, of one token, sent back to `userAddress` (from your own wallet connection,
+  never a RAVN answer) and nowhere else. `recoverStuckFunds` signs one session and up to 8 recoveries,
+  all on one chain, each (kind, chain, token) once: offered one again, it stops with what came back.
+
+### Changed
+
+- `executeAndTrack` counts the deposit's 10 minutes from when the order step (the second AUTHORIZE)
+  arrives, when Hinkal priced its route, not from the order's answer: that's the window RAVN holds it to.
 
 ## @ravnexchange/sdk 0.4.0, @ravnexchange/react 0.1.9
 

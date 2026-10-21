@@ -234,7 +234,7 @@ const MAX_ATTEMPTS = 8;
 // An execute asked again with its Idempotency-Key: ~30 s at the default interval, so a call that
 // can't get through fails in about that rather than four minutes.
 const EXECUTE_ATTEMPTS = 4;
-// How long after an AUTHORIZE's order is placed its deposit may still be sent (Hinkal's route ages).
+// How long after the order's AUTHORIZE arrives (Hinkal priced its route) the deposit may still be sent.
 const DEPOSIT_WINDOW_MS = 10 * 60_000;
 
 /** The fee payment a DEPOSIT execution asks for beside its deposit; undefined when it has none. */
@@ -391,6 +391,9 @@ export async function executeAndTrack(
       const { authorization, sign, expiresAt } = answer;
       if (signed.has(sign.method)) throw new Error(`executeAndTrack: RAVN asked for a second ${sign.method} for this swap, which it never needs: nothing more was signed`);
       signed.add(sign.method);
+      // Hinkal priced the order's route as this step was built: it goes stale 10 minutes from now,
+      // and a deposit paying a stale one is stuck.
+      if (sign.method === "eth_signTypedData_v4") sendBy = Date.now() + DEPOSIT_WINDOW_MS;
       const live = () => {
         if (!(Date.parse(expiresAt) > Date.now())) throw new Error("executeAndTrack: the authorization expired before it was signed: request a fresh quote");
       };
@@ -410,15 +413,12 @@ export async function executeAndTrack(
       }
       checkpoint();
       live();
-      // From here Hinkal may place the order: its route goes stale, and a deposit paying a stale one is stuck.
-      const placed = Date.now();
       answer = await execute({ ...again, authorization, signature });
-      sendBy = placed + DEPOSIT_WINDOW_MS;
     }
     const execution = answer;
     const depositWindow = () => {
       if (sendBy !== undefined && Date.now() > sendBy) {
-        throw new Error("executeAndTrack: more than 10 minutes passed since the order was placed, so its deposit wasn't sent: request a fresh quote");
+        throw new Error("executeAndTrack: more than 10 minutes passed since the order was priced, so its deposit wasn't sent: request a fresh quote");
       }
     };
     const { quoteToken } = execution;
