@@ -572,7 +572,7 @@ describe("hardened after the second review", () => {
   it("refuses a chain id given as a string", () => {
     const { execution, intent } = fixture("8453 native->token relay");
     (execution as Tx).transaction.chainId = "8453" as unknown as number;
-    refuses(execution, intent, /not the swap's chain/);
+    refuses(execution, intent, /gives its chain as string, not a number/);
   });
 
   it("refuses a PSBT signature-type entry with a longer key", () => {

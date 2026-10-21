@@ -120,7 +120,8 @@ const sameChain = (ctx: Ctx, chainId: unknown, what: string, required = false) =
     if (required) fail(`${what} names no chain`);
     return;
   }
-  if (chainId !== ctx.chainId) fail(`${what} is for chain ${String(chainId)}, not the swap's chain ${ctx.chainId}`, { chainId });
+  if (typeof chainId !== "number") fail(`${what} gives its chain as ${typeof chainId}, not a number`, { chainId });
+  if (chainId !== ctx.chainId) fail(`${what} is for chain ${chainId}, not the swap's chain ${ctx.chainId}`, { chainId });
 };
 
 /** RAVN's fee as the execution states it: to RAVN's own wallet on that chain, at most 1% of the input. */
@@ -269,7 +270,7 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
   const primaryType = typed.primaryType;
   const verifying = lower(domain.verifyingContract);
   if (domain.chainId === undefined) fail("The signature request names no chain");
-  const domainChain = typeof domain.chainId === "string" && /^\d{1,15}$/.test(domain.chainId) ? Number(domain.chainId) : domain.chainId;
+  const domainChain = typeof domain.chainId === "string" && /^(\d{1,15}|0x[0-9a-fA-F]{1,12})$/.test(domain.chainId) ? Number(domain.chainId) : domain.chainId;
   sameChain(ctx, domainChain, "The signature request");
 
   if (!/^0x[0-9a-f]{40}$/.test(verifying)) fail("The signature request names no contract", { verifyingContract: domain.verifyingContract });
