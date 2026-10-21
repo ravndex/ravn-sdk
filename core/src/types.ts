@@ -24,6 +24,11 @@ export interface QuoteDTO {
   routeType: string;
   input: { token: TokenDTO; amount: string };
   output: { token: TokenDTO; amount: string };
+  /** What RAVN counts on this route delivering, in the output token's base units: `output.amount`, less
+   * `slippage.expectedShortfallBps` when the venue holds no minimum (`slippage.noMinimum`, Rift); the
+   * same as `output.amount` for every quote that holds one. RAVN ranks on this (less gas), so sort routes on
+   * it, not `output.amount`, to compare them the way RAVN does. */
+  expectedOutputAmount: string;
   /** `supported: false` means the venue has no fee mechanism at all (bps will be 0 either
    * way); distinct from `supported: true, bps: 0`, a real, intentional zero fee. On NEAR Intents
    * `bps`/`amount` include 1Click's own fee, taken from the input on every swap with or without
@@ -63,7 +68,17 @@ export interface AlternativeQuoteDTO {
   routeType: string;
   /** Pass to execute() to run THIS route instead of the primary quote. */
   quoteToken: string;
+  /** Whether RAVN could have picked this route as its quote. False for a preview-only price
+   * (`executable: false`) while an executable route exists and for one with no minimum (`slippage.noMinimum`) quoting more than 1%
+   * above every route that holds one: nothing backs that figure. To pick a route yourself, choose
+   * among `pickable` ones on `expectedOutputAmount`. */
+  pickable: boolean;
   outputAmount: string;
+  /** What RAVN counts on this route delivering, in the output token's base units: `outputAmount`, less
+   * `slippage.expectedShortfallBps` when the venue holds no minimum (`slippage.noMinimum`, Rift); the
+   * same as `outputAmount` for every quote that holds one. RAVN ranks on this (less gas), so sort routes on
+   * it, not `outputAmount`, to compare them the way RAVN does. */
+  expectedOutputAmount: string;
   /** `amount` is in `token`'s base units: the output token everywhere except Fly Trade and
    * Mayan, which deduct their fee from the input token. */
   fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
@@ -91,6 +106,11 @@ export interface SlippageDTO {
   isFirm: boolean;
   guaranteedMin: string | null;
   noMinimum: boolean;
+  /** How far under its output RAVN counts on a route with no minimum delivering, in bps, from what
+   * such routes have delivered: by swap size and whether both tokens are on RAVN's list (memes count
+   * as unlisted), from 5 (a $1k+ swap of listed tokens) to 100 (under $100). 0 when `noMinimum` is false. `expectedOutputAmount`
+   * already has it taken off. */
+  expectedShortfallBps: number;
 }
 
 export interface ChainDTO {
@@ -292,7 +312,7 @@ export interface StatusDTO {
 
 /** A venue's price as it lands in getQuoteStream: an alternative without its quoteToken, to show,
  * not to execute (only the quote getQuoteStream resolves to carries tokens). */
-export type PriceDTO = Omit<AlternativeQuoteDTO, "quoteToken">;
+export type PriceDTO = Omit<AlternativeQuoteDTO, "quoteToken" | "pickable">;
 
 /** What getQuoteStream reports while the race runs. `venues`: the venues racing. `settled`: one
  * venue answered (`quotes` empty: nothing usable). The winner is picked once, at the end, net of

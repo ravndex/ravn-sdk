@@ -32,6 +32,33 @@ a venue program's own instruction isn't read (see the README).
   input token was given as a symbol rather than an address, and a quoteToken RAVN returned for two
   different requests.
 
+## @ravnexchange/sdk 0.2.7
+
+Every quote and route says what RAVN counts on it delivering, and each alternative whether RAVN
+could have picked it, so you can choose a route the way RAVN does.
+
+### Added
+
+- **`expectedOutputAmount`** on `QuoteDTO`, `AlternativeQuoteDTO` and `PriceDTO`: the output
+  RAVN counts on (base units). It equals the output for every quote that holds a minimum; for one
+  that doesn't (`slippage.noMinimum`, Rift) it is the output less `slippage.expectedShortfallBps`.
+  RAVN ranks on it less gas, so the order `alternatives` arrive in stays the closest match to RAVN's.
+  Sorting on `outputAmount` instead can put a no-minimum route on top that RAVN ranked lower.
+- **`slippage.expectedShortfallBps`** on `SlippageDTO`: that shortfall in bps, by swap size and
+  whether both tokens are on RAVN's list (memes count as unlisted): 5 for a $1k+ swap of listed
+  tokens, up to 100 under $100; 0 when the quote holds a minimum.
+- **`pickable`** on `AlternativeQuoteDTO` (not `PriceDTO`): false for a preview-only price (while an executable route exists) and for a
+  no-minimum route quoting more than 1% above every route that holds one, which RAVN lists but never
+  picks. To choose a route yourself, pick among `pickable` ones on `expectedOutputAmount`.
+
+### Upgrading
+
+- The new fields are required on the types, so test fixtures typed as `QuoteDTO`,
+  `AlternativeQuoteDTO`, `PriceDTO` or `SlippageDTO` need them added. Nothing else changes.
+- The API sends the new fields from the matching ravn-mvp release. A client that validates
+  responses strictly against an older copy of `openapi.json` (which sets `additionalProperties:
+  false`) must refresh it.
+
 ## @ravnexchange/sdk 0.2.6
 
 Show prices while RAVN's race runs. Nothing changes for code that doesn't call the new method.
