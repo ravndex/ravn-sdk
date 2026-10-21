@@ -3,8 +3,8 @@ import { RavnApiError } from "@ravnexchange/sdk";
 import { isPermanentError, nextPollMs, pollAgain } from "./useRavnStatus";
 
 describe("isPermanentError", () => {
-  it("treats UNAUTHORIZED, INVALID_REQUEST, QUOTE_INVALID, and NOT_FOUND as permanent", () => {
-    for (const code of ["UNAUTHORIZED", "INVALID_REQUEST", "QUOTE_INVALID", "NOT_FOUND"]) {
+  it("treats UNAUTHORIZED, FORBIDDEN, INVALID_REQUEST, QUOTE_INVALID, and NOT_FOUND as permanent", () => {
+    for (const code of ["UNAUTHORIZED", "FORBIDDEN", "INVALID_REQUEST", "QUOTE_INVALID", "NOT_FOUND"]) {
       expect(isPermanentError(new RavnApiError(code, "x", undefined, undefined))).toBe(true);
     }
   });

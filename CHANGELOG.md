@@ -3,6 +3,20 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.3.1, @ravnexchange/react 0.1.8
+
+RAVN keys now come as a pair: a public key (`rvn_live_…`) for your app, browsers included, and a
+secret key (`rvn_sk_…`) for your server, the only one that changes your fee, payout addresses or
+webhook. See the API's Authentication page.
+
+### Changed
+
+- **`RavnClient` refuses a secret key in browser code** (throws at construction when `window` and
+  `document` exist): pass your public key there. Servers are unaffected.
+- `RavnErrorCode` gains `FORBIDDEN` (403): a public key where the secret key is needed, or a public
+  key used from a site outside its allowed origins.
+- **react:** `useRavnStatus` stops polling on `FORBIDDEN`, as on `UNAUTHORIZED`: retrying can't fix it.
+
 ## @ravnexchange/sdk 0.3.0
 
 `execute()` checks what RAVN returns before it can reach a wallet. On EVM chains and Bitcoin, a
