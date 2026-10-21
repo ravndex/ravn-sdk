@@ -10,7 +10,7 @@ import { RAVN_FEE_WALLETS, SOLANA_PROGRAMS } from "./guard-contracts";
  *
  * Not read: what an instruction of a venue's own program (Jupiter, Relay, Mayan, 0x, OKX) moves. The
  * user signs for every token account they own, so such an instruction could move any of them; only
- * simulating the transaction shows what it does. Those programs are allowed by name.
+ * simulating the transaction shows what it does (checkSolanaSimulation). Those programs are allowed by name.
  */
 export function checkSolanaTransaction(
   serialized: string,
@@ -154,6 +154,296 @@ export function checkSolanaTransaction(
   }
 }
 
+/**
+ * Simulates a Solana transaction RAVN returned on your own RPC and refuses it unless what it would
+ * take from the user stays within the swap. Running the venue programs checkSolanaTransaction can't
+ * read, it sees every transfer they make, and counts each one out of the user's wallet or token
+ * accounts in the order they happen: only the input token leaves, at most the input amount (plus
+ * what came in earlier within the same top-level instruction); SOL (wallet and wrapped) only account
+ * rent of at most 0.02 SOL beside the network fee (selling SOL: plus the amount). None of the user's token
+ * accounts changes hands, closes to someone else, or is left with an allowance; the user's authority
+ * is used for no other token or system call, and none over a stake account, program or lookup table.
+ * Refused too when the simulation fails or can't run, or the RPC's answer is incomplete: what the
+ * transaction would move is then unknown.
+ *
+ * What it can't hold: the chain's state can change between this simulation and the transaction
+ * landing, so an amount that depends on it can differ: an exact-out swap's input, or a venue step
+ * that pays into the user's account and spends from it again (if the payment comes up short, the
+ * spending draws on what the user held). Nor assets that aren't SOL or SPL tokens in the user's own
+ * accounts (a position in another program the user is the authority of, a compressed NFT).
+ */
+export async function checkSolanaSimulation(
+  serialized: string,
+  ctx: { inputToken: string; inputAmount: string; userAddress: string },
+  rpc: { url: string; fetch: typeof fetch }
+): Promise<void> {
+  const msg = parseMessage(serialized);
+  const user = ctx.userAddress;
+  const amount = BigInt(ctx.inputAmount);
+  const sellsSol = ctx.inputToken === WSOL_MINT;
+  if (!msg.signers.includes(user)) fail("The Solana transaction isn't signed by the user's wallet");
+  const sim = await simulate(serialized, rpc);
+  if (sim.err) fail("The Solana transaction fails in simulation, so what it would move can't be checked: get a fresh quote", { err: sim.err });
+
+  // Every account in the message's order (static keys, then lookup-table ones): what balances count.
+  const keys = [...msg.keys, ...(sim.loadedAddresses?.writable ?? []), ...(sim.loadedAddresses?.readonly ?? [])];
+  if (sim.preBalances.length !== keys.length || sim.postBalances.length !== keys.length || !keys.every((k) => typeof k === "string")) {
+    fail("Your Solana RPC's simulation doesn't give every account's balance, so what the transaction would move is unchecked");
+  }
+  for (const b of [...sim.preTokenBalances, ...sim.postTokenBalances]) {
+    if (!Number.isInteger(b?.accountIndex) || b.accountIndex < 0 || b.accountIndex >= keys.length || typeof b.mint !== "string" || typeof b.owner !== "string") {
+      fail("Your Solana RPC's simulation gives a token balance without its account, mint or owner, so what the transaction would move is unchecked");
+    }
+  }
+
+  // Token accounts by address: mint and owner, as held before (or as opened, for a new one).
+  const tokenAccount = new Map<string, { mint: string; owner: string }>();
+  for (const b of [...sim.preTokenBalances, ...sim.postTokenBalances]) {
+    if (!tokenAccount.has(keys[b.accountIndex])) tokenAccount.set(keys[b.accountIndex], { mint: b.mint, owner: b.owner });
+  }
+  const mine = (a: unknown) => typeof a === "string" && (a === user || tokenAccount.get(a)?.owner === user);
+  // Wrapped SOL is SOL: one budget.
+  const asset = (account: unknown) => {
+    const mint = typeof account === "string" ? tokenAccount.get(account)?.mint : undefined;
+    return mint === WSOL_MINT ? "SOL" : mint;
+  };
+  const input = sellsSol ? "SOL" : ctx.inputToken;
+  // What may leave the user's accounts over the whole transaction: the input up to the amount, and
+  // SOL for rent (selling SOL: plus the amount).
+  const budget = new Map<string, bigint>([
+    [input, amount],
+    ["SOL", (input === "SOL" ? amount : 0n) + RENT_ALLOWANCE_LAMPORTS],
+  ]);
+  // What came in during the current top-level instruction: it may leave again within that same
+  // instruction (a venue's route through the user's own account, a fee out of the output), never in a
+  // later one. A later instruction spending an earlier one's payment would spend the user's own
+  // balance instead, if the chain changes before the transaction lands and that payment comes up short.
+  let received = new Map<string, bigint>();
+  // One transfer, as it happens: out of the user's accounts, it spends what came in first, then the budget.
+  const transfer = (from: unknown, to: unknown, what: string | undefined, n: bigint) => {
+    if (typeof from !== "string" || typeof to !== "string") fail("The Solana transaction, simulated, makes a transfer the RPC doesn't name both sides of");
+    if (mine(from) === mine(to)) return;
+    if (what === undefined) fail("The Solana transaction, simulated, moves the user's tokens through an account the RPC doesn't describe");
+    if (!mine(from)) {
+      received.set(what, (received.get(what) ?? 0n) + n);
+      return;
+    }
+    const covered = received.get(what) ?? 0n;
+    received.set(what, covered > n ? covered - n : 0n);
+    const left = (budget.get(what) ?? 0n) - (n > covered ? n - covered : 0n);
+    budget.set(what, left);
+    if (left >= 0n) return;
+    // How much has left the user's own balance so far (beyond what came in alongside it).
+    const fromBalance = ((what === input ? amount : 0n) + (what === "SOL" ? RENT_ALLOWANCE_LAMPORTS : 0n) - left).toString();
+    const verb = to === BURNED ? "burns" : what === "SOL" ? "sends" : "moves";
+    if (what === "SOL") fail(`The Solana transaction, simulated, ${verb} more SOL than ${sellsSol ? "the swap and its account rent" : "its account rent"}`, { fromBalance });
+    if (what !== input) fail(`The Solana transaction, simulated, ${verb} a token other than the one being swapped`, { mint: what, fromBalance });
+    fail(`The Solana transaction, simulated, ${verb} more of the token than the swap's amount`, { fromBalance });
+  };
+  const closes = (account: unknown, to: unknown) => {
+    if (mine(account) && !mine(to)) fail("The Solana transaction, simulated, closes one of the user's token accounts to someone else");
+  };
+  // Allowances the user gives, by account: what the delegate may still move.
+  const delegated = new Map<unknown, { delegate: unknown; left: bigint }>();
+
+  const inner = new Map<number, { programId?: string; parsed?: unknown; accounts?: string[] }[]>();
+  for (const group of sim.innerInstructions) {
+    const at = group?.index;
+    if (!Number.isInteger(at) || at < 0 || at >= msg.instructions.length || inner.has(at) || !Array.isArray(group.instructions)) {
+      fail("Your Solana RPC's simulation gives inner instructions without their place, so what the transaction would move is unchecked");
+    }
+    inner.set(at, group.instructions);
+  }
+  // Every account of the user's the transaction touches: a call naming any of them is held to the lists below.
+  const usersAccounts = [user, ...[...tokenAccount].filter(([, t]) => t.owner === user).map(([a]) => a)];
+
+  msg.instructions.forEach((ix, n) => {
+    received = new Map();
+    // The transaction's own system and token calls (checkSolanaTransaction allowed only these kinds).
+    const at = (i: number) => keys[ix.indexes[i]];
+    const kind = ix.program === SYSTEM_PROGRAM ? u32(ix.data, 0) : ix.data[0];
+    if (ix.program === SYSTEM_PROGRAM && (kind === 0 || kind === 2)) transfer(at(0), at(1), "SOL", u64(ix.data, 4));
+    else if (ix.program === SYSTEM_PROGRAM && kind === 3) transfer(at(0), at(1), "SOL", u64(ix.data, 4 + 32 + 8 + Number(u64(ix.data, 4 + 32))));
+    else if ((ix.program === TOKEN_PROGRAM || ix.program === TOKEN_2022_PROGRAM) && (kind === 3 || kind === 12)) {
+      transfer(at(0), at(kind === 3 ? 1 : 2), asset(at(0)) ?? asset(at(kind === 3 ? 1 : 2)), u64(ix.data, 1));
+    } else if ((ix.program === TOKEN_PROGRAM || ix.program === TOKEN_2022_PROGRAM) && kind === 9) closes(at(0), at(1));
+
+    // Then everything it called, in order.
+    for (const call of inner.get(n) ?? []) {
+      const parsed = isObject(call.parsed) ? call.parsed : undefined;
+      const info = isObject(parsed?.info) ? parsed.info : {};
+      const type = String(parsed?.type);
+      const json = JSON.stringify(call);
+      const names = json.includes(user);
+      const touches = usersAccounts.some((a) => json.includes(a));
+      if (call.programId === TOKEN_PROGRAM || call.programId === TOKEN_2022_PROGRAM) {
+        const tokens = isObject(info.tokenAmount) ? info.tokenAmount.amount : info.amount;
+        if (type === "transfer" || type === "transferChecked" || type === "transferCheckedWithFee") {
+          transfer(info.source, info.destination, asset(info.source) ?? asset(info.destination), whole(tokens));
+          const allowance = delegated.get(info.source);
+          if (allowance && allowance.delegate === (info.authority ?? info.multisigAuthority)) {
+            allowance.left -= whole(tokens);
+            if (allowance.left <= 0n) delegated.delete(info.source);
+          }
+        } else if (type === "unwrapLamports") {
+          // Wrapped SOL straight out as lamports; with no amount, all of it (unknown unless it stays the user's).
+          transfer(info.source, info.destination, "SOL", info.amount === undefined && mine(info.destination) ? 0n : whole(info.amount));
+        } else if (type === "mintTo" || type === "mintToChecked") {
+          // New tokens into an account (a stake pool's last hop): like any payment in. Never one naming the
+          // user's wallet: that's the user's own mint authority (or their signature on a multisig holding one).
+          if (names) fail("The Solana transaction, simulated, mints with the user's mint authority");
+          transfer(MINTED, info.account, asset(info.account), whole(tokens));
+        } else if (type === "burn" || type === "burnChecked") {
+          // Gone for good (a CCTP deposit, an unstake): leaves like any transfer.
+          transfer(info.account, BURNED, asset(info.account), whole(tokens));
+        } else if (type === "closeAccount") closes(info.account, info.destination);
+        else if ((type === "approve" || type === "approveChecked") && (info.owner ?? info.multisigOwner) === user) {
+          delegated.set(info.source, { delegate: info.delegate, left: whole(tokens) });
+        } else if (type === "revoke" && (info.owner ?? info.multisigOwner) === user) delegated.delete(info.source);
+        else if (touches && !TOKEN_CALLS_ALLOWED.has(type)) {
+          fail("The Solana transaction, simulated, makes a token call on the user's accounts that RAVN's swaps never make", { type: parsed ? type : "unreadable" });
+        }
+      } else if (call.programId === SYSTEM_PROGRAM) {
+        if (type === "transfer") transfer(info.source, info.destination, "SOL", whole(info.lamports));
+        else if (type === "createAccount" || type === "createAccountWithSeed") transfer(info.source, info.newAccount, "SOL", whole(info.lamports));
+        else if (names) fail("The Solana transaction, simulated, makes a system call with the user's wallet that RAVN's swaps never make", { type: parsed ? type : "unreadable" });
+      } else if (call.programId === ATA_PROGRAM || call.programId === MEMO_PROGRAM || call.programId === MEMO_V1_PROGRAM) {
+        continue;
+      } else if (names && (AUTHORITY_PROGRAMS.has(String(call.programId)) || call.parsed !== undefined)) {
+        // Programs the RPC names (stake, vote, loaders, lookup tables): none of RAVN's swaps use the
+        // user's authority there. A venue's own (unnamed) programs move funds only through the above.
+        fail("The Solana transaction, simulated, uses the user's authority over a stake account, program or lookup table", { program: call.programId });
+      }
+    }
+  });
+  if (delegated.size) fail("The Solana transaction, simulated, leaves an allowance on one of the user's token accounts");
+
+  // And the outcome, in case anything moved that the instructions don't show: no token account of the
+  // user's in other hands, and what was lost overall within the same limits.
+  const lamportsLost = (i: number) => whole(sim.preBalances[i]) - whole(sim.postBalances[i]);
+  let solLost = lamportsLost(keys.indexOf(user)) - (msg.feePayer === user ? whole(sim.fee) : 0n);
+  const tokenLost = new Map<string, bigint>();
+  const count = (mint: string, n: bigint) => tokenLost.set(mint, (tokenLost.get(mint) ?? 0n) + n);
+  const held = new Set<number>();
+  for (const b of sim.preTokenBalances) {
+    if (b.owner !== user) continue;
+    held.add(b.accountIndex);
+    // A token account's lamports are its rent, and on a wrapped-SOL account the SOL it wraps.
+    solLost += lamportsLost(b.accountIndex);
+    if (b.mint !== WSOL_MINT) count(b.mint, whole(b.uiTokenAmount?.amount));
+  }
+  for (const b of sim.postTokenBalances) {
+    if (held.has(b.accountIndex) && b.owner !== user) fail("The Solana transaction, simulated, hands one of the user's token accounts to someone else", { mint: b.mint });
+    if (b.owner === user && b.mint !== WSOL_MINT) count(b.mint, -whole(b.uiTokenAmount?.amount));
+  }
+  if (solLost > RENT_ALLOWANCE_LAMPORTS + (sellsSol ? amount : 0n)) {
+    fail(sellsSol ? "The Solana transaction, simulated, takes more SOL than the swap and its account rent" : "The Solana transaction, simulated, takes more SOL than its account rent", {
+      lamports: solLost.toString(),
+    });
+  }
+  for (const [mint, lost] of tokenLost) {
+    if (lost <= 0n) continue;
+    if (mint !== ctx.inputToken) fail("The Solana transaction, simulated, moves a token other than the one being swapped", { mint, amount: lost.toString() });
+    if (lost > amount) fail("The Solana transaction, simulated, moves more of the token than the swap's amount", { amount: lost.toString() });
+  }
+}
+
+/** Where burned tokens go, and minted ones come from: no one's account. */
+const BURNED = "(burned)";
+const MINTED = "(minted)";
+/** Token calls that may touch the user's accounts besides transfers, burns, closes and allowances (each held above). */
+const TOKEN_CALLS_ALLOWED = new Set(["syncNative", "initializeAccount", "initializeAccount2", "initializeAccount3", "initializeImmutableOwner", "getAccountDataSize"]);
+/** Native programs where the user's authority is worth something: stake, vote, the loaders, lookup tables. */
+const AUTHORITY_PROGRAMS = new Set([
+  "Stake11111111111111111111111111111111111111",
+  "Vote111111111111111111111111111111111111111",
+  "BPFLoader1111111111111111111111111111111111",
+  "BPFLoader2111111111111111111111111111111111",
+  "BPFLoaderUpgradeab1e11111111111111111111111",
+  "LoaderV411111111111111111111111111111111111",
+  "AddressLookupTab1e1111111111111111111111111",
+  "Config1111111111111111111111111111111111111",
+]);
+
+interface TokenBalance {
+  accountIndex: number;
+  mint: string;
+  owner: string;
+  uiTokenAmount?: { amount?: string };
+}
+
+interface Simulation {
+  err: unknown;
+  fee: number;
+  preBalances: number[];
+  postBalances: number[];
+  preTokenBalances: TokenBalance[];
+  postTokenBalances: TokenBalance[];
+  innerInstructions: { index: number; instructions: { programId?: string; parsed?: unknown; accounts?: string[] }[] }[];
+  loadedAddresses?: { writable?: string[]; readonly?: string[] };
+}
+
+const SIMULATION_TIMEOUT_MS = 10_000;
+
+// One simulateTransaction call: balances before and after (Agave 2.3+) and inner instructions, at the
+// latest confirmed state, with the blockhash replaced so a slightly old one still simulates. Through
+// the client's own fetch, called unbound; bounded even if that fetch ignores the abort signal.
+async function simulate(serialized: string, rpc: { url: string; fetch: typeof fetch }): Promise<Simulation> {
+  const fetchImpl = rpc.fetch;
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      abort.abort();
+      reject(new Error(`no answer within ${SIMULATION_TIMEOUT_MS / 1000} s`));
+    }, SIMULATION_TIMEOUT_MS);
+  });
+  let body: { result?: { value?: Simulation }; error?: { message?: string } };
+  try {
+    const request = fetchImpl(rpc.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "simulateTransaction",
+        params: [serialized, { encoding: "base64", sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed", innerInstructions: true }],
+      }),
+      signal: abort.signal,
+    }).then((res) => res.json());
+    body = await Promise.race([request, timeout]);
+  } catch (e) {
+    // Never the URL itself, as given or as fetch writes it: an RPC key often rides in it.
+    let error = e instanceof Error ? e.message : String(e);
+    for (const form of urlForms(rpc.url)) error = error.split(form).join("<solanaRpcUrl>");
+    fail("Couldn't simulate the Solana transaction on your RPC, so what it would move is unchecked", { error });
+  } finally {
+    clearTimeout(timer);
+  }
+  const v = body?.result?.value;
+  if (!v) fail("Your Solana RPC didn't simulate the transaction, so what it would move is unchecked", { error: body?.error?.message });
+  if (![v.preBalances, v.postBalances, v.preTokenBalances, v.postTokenBalances, v.innerInstructions].every(Array.isArray) || v.fee === undefined) {
+    fail("Your Solana RPC's simulation doesn't report balance changes (Agave 2.3+ does), so what the transaction would move is unchecked");
+  }
+  return v;
+}
+
+function urlForms(url: string): string[] {
+  try {
+    const u = new URL(url);
+    return [url, u.href, u.search, u.username, u.password].filter((f) => f.length > 1).sort((a, b) => b.length - a.length);
+  } catch {
+    return [url];
+  }
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const whole = (v: unknown): bigint => {
+  if (typeof v === "number" && Number.isInteger(v) && v >= 0) return BigInt(v);
+  if (typeof v === "string" && /^\d{1,30}$/.test(v)) return BigInt(v);
+  fail("Your Solana RPC's simulation reports an amount that isn't a whole number", { value: v });
+};
+
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -195,8 +485,11 @@ const u64 = (d: Uint8Array, at: number): bigint => {
 
 interface Message {
   feePayer: string;
+  /** The static account keys: the indexes simulation balances count from, before lookup-table ones. */
+  keys: string[];
   signers: string[];
-  instructions: { program: string; accounts: (string | undefined)[]; data: Uint8Array }[];
+  /** `indexes`: each account's index among all the transaction's accounts, lookup-table ones included. */
+  instructions: { program: string; accounts: (string | undefined)[]; indexes: number[]; data: Uint8Array }[];
 }
 
 /**
@@ -251,10 +544,10 @@ function parseMessage(b64: string): Message {
   const instructions = raw.map(({ programIndex, accounts, data }) => {
     const program = keys[programIndex];
     if (program === undefined) fail("A Solana instruction calls a program from a lookup table");
-    return { program, accounts: accounts.map((a) => keys[a]), data };
+    return { program, accounts: accounts.map((a) => keys[a]), indexes: accounts, data };
   });
   if (keys.length === 0 || numSigners === 0) fail("The Solana transaction has no signer");
-  return { feePayer: keys[0], signers: keys.slice(0, numSigners), instructions };
+  return { feePayer: keys[0], keys, signers: keys.slice(0, numSigners), instructions };
 }
 
 function base64ToBytes(b64: string): Uint8Array {

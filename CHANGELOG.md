@@ -3,6 +3,31 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.3.2
+
+On Solana, the check before the wallet can now simulate. Pass your Solana RPC and `execute()` runs every
+Solana transaction there before handing it back, so the transfers a venue program's own instruction
+would make (Jupiter, Relay, Mayan, 0x, OKX, Garden), which can't be read from the transaction, are
+checked too, as the chain stands when `execute()` runs.
+
+### Added
+
+- `RavnClientConfig.guard.solanaRpcUrl` (`GuardOptions`): your Solana RPC (Agave 2.3+). `execute()`
+  then simulates each Solana transaction there (one `simulateTransaction` call, ~150–400 ms) and throws
+  `UnsafeExecutionError` unless it succeeds and every transfer out of the user's wallet and token
+  accounts, counted in order, stays within the input token up to the input amount (plus what reached
+  them earlier in the same top-level instruction) and at most 0.02 SOL of rent beside the network fee
+  (selling SOL: plus the amount); none of the user's token accounts changes hands, closes to someone
+  else or keeps an allowance; and the user's authority is used for no other token, system, stake or
+  loader call. It also refuses when the RPC can't simulate or its answer is incomplete. Not covered: an
+  amount that depends on a pool's state changing before the transaction lands (an exact-out swap's
+  input, or a venue step paying into the user's account and spending from it again, which a shortfall
+  would make draw on what the user already held of that token), and assets other than SOL and SPL
+  tokens in the user's own accounts (lending or LP positions, compressed NFTs). Off unless you set it:
+  without it, nothing changes from 0.3.1.
+- `verifyExecution(execution, intent, options)`: `checkExecution` plus that simulation, for an
+  execution you got another way.
+
 ## @ravnexchange/sdk 0.3.1, @ravnexchange/react 0.1.8
 
 RAVN keys now come as a pair: a public key (`rvn_live_…`) for your app, browsers included, and a
