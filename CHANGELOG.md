@@ -3,6 +3,32 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.1
+
+Hinkal for SDK users: say you can sign its steps, and get back what a failed Hinkal swap left behind.
+
+### Added
+
+- `GetQuoteParams.authorizeSteps`: your execute flow answers AUTHORIZE steps (`executeAndTrack` does,
+  given `signMessage` and `signTypedData`). RAVN races Hinkal on a confidential quote only with it (or
+  `onlyVenues` naming `"hinkal"`), so an SDK that can't answer those steps never gets one. Sent as given
+  by `getQuote` and `getQuoteStream`.
+- **Recovery** of what a failed Hinkal swap left at Hinkal (Hinkal never refunds on its own):
+  `client.recover({ statusRef, authorization?, signature? }, { userAddress })` (POST /v1/recover,
+  answering `RecoverDTO`: `sign`, `done` or `nothing`), and `recoverStuckFunds(client, { statusRef,
+  userAddress }, { signMessage, signTypedData, switchChain? })`, which runs it: the read-only session,
+  then each recovery, looking again after each until nothing is left, resolving to what came back.
+- **The check covers it** (`checkRecovery`, run by `recover`): the session is read-only, and a recovery
+  is `RecoverStuckBridgeBalance` or `WithdrawStuckUtxos` with Hinkal's own fields, in Hinkal's domain on
+  a chain Hinkal runs on, of one token, sent back to `userAddress` (from your own wallet connection,
+  never a RAVN answer) and nowhere else. `recoverStuckFunds` signs one session and up to 8 recoveries,
+  all on one chain, each (kind, chain, token) once: offered one again, it stops with what came back.
+
+### Changed
+
+- `executeAndTrack` counts the deposit's 10 minutes from when the order step (the second AUTHORIZE)
+  arrives, when Hinkal priced its route, not from the order's answer: that's the window RAVN holds it to.
+
 ## @ravnexchange/sdk 0.4.0, @ravnexchange/react 0.1.9
 
 Private swaps through Hinkal. Before Hinkal's swap can be built, the paying wallet signs twice (a

@@ -1,5 +1,5 @@
 import { UnsafeExecutionError } from "./types";
-import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO } from "./types";
+import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
 import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
@@ -398,24 +398,32 @@ const sameAddress = (a: unknown, b: string): boolean =>
  * order's route (`quote`) to that recipient by name, but runs its bridge call as given, which can't
  * be read here: as with any venue, what pays out once funds are inside isn't checked.
  */
-function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
-  if (!HINKAL_CHAINS.includes(ctx.chainId)) fail(`This SDK version doesn't know Hinkal on chain ${ctx.chainId}: update @ravnexchange/sdk`);
-  const sign: Record<string, unknown> = isRecord(execution.sign) ? execution.sign : fail("The authorization asks for nothing to sign");
+/** What a Hinkal step asks to sign: a personal_sign (`session`), or typed data for Hinkal's enclave. */
+function hinkalSign(sign: unknown): { session: true } | { session: false; typed: Record<string, unknown>; domain: Record<string, unknown>; message: Record<string, unknown> } {
+  if (!isRecord(sign)) fail("The authorization asks for nothing to sign");
   if (sign.method === "personal_sign") {
+    // Every Hinkal flow starts with this: a read-only session, never normal mode's.
     const message = typeof sign.message === "string" ? sign.message : "";
     if (message.includes(HINKAL_NORMAL_MODE)) fail("The message would open a Hinkal session that can move the user's funds");
     if (!HINKAL_SESSION.test(message)) fail("The message to sign isn't a read-only Hinkal session", { message: message.slice(0, 300) });
-    return;
+    return { session: true };
   }
   if (sign.method !== "eth_signTypedData_v4") fail("RAVN asked for a signature of a kind this SDK doesn't recognise", { method: sign.method });
   const typed = isRecord(sign.typedData) ? sign.typedData : fail("The authorization's typed data is missing");
   soleRoot(typed);
   const domain = isRecord(typed.domain) ? typed.domain : {};
-  const message = isRecord(typed.message) ? typed.message : {};
   // Hinkal's domain names no contract: a field more would make the signature good somewhere else.
   if (domain.name !== "Hinkal Enclave" || Object.keys(domain).some((k) => k !== "name" && k !== "chainId")) {
     fail("The signature request isn't for Hinkal's enclave", { domain });
   }
+  return { session: false, typed, domain, message: isRecord(typed.message) ? typed.message : {} };
+}
+
+function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
+  if (!HINKAL_CHAINS.includes(ctx.chainId)) fail(`This SDK version doesn't know Hinkal on chain ${ctx.chainId}: update @ravnexchange/sdk`);
+  const step = hinkalSign(execution.sign);
+  if (step.session) return;
+  const { typed, domain, message } = step;
   sameChain(ctx, domain.chainId, "The signature request", true);
   if (typed.primaryType !== "PrivateSendBridge") fail("RAVN asked for a signature of a kind this SDK doesn't recognise", { primaryType: typed.primaryType });
   sameChain(ctx, message.chainId, "The order", true);
@@ -429,6 +437,36 @@ function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
   // No destination asked: the user's own wallet, as for any order.
   if (!sameAddress(only.recipient, intent.destinationAddress ?? intent.userAddress)) {
     fail("The order pays someone other than the destination address", { recipient: only.recipient });
+  }
+}
+
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+// Hinkal's own field list for both recoveries (its enclave rebuilds it): `recipient` is signed.
+const RECOVERY_FIELDS = ["nonce:string", "sessionId:string", "chainId:uint256", "tokenAddress:address", "recipient:address"];
+
+/**
+ * Throws UnsafeExecutionError unless a /v1/recover answer is one the wallet that paid for the swap,
+ * `userAddress`, may sign: a read-only Hinkal session, or a recovery (RecoverStuckBridgeBalance /
+ * WithdrawStuckUtxos) on a chain Hinkal runs on that sends a token back to that same wallet, and
+ * nowhere else. RavnClient.recover runs it on every answer.
+ */
+export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
+  if (!isRecord(answer as unknown)) fail("RAVN's answer isn't a recovery");
+  if (answer.status === "nothing" || answer.status === "done") return;
+  if (answer.status !== "sign") fail(`This SDK version can't check a recovery answer of status ${(answer as { status: unknown }).status}: update @ravnexchange/sdk`);
+  const step = hinkalSign(answer.sign);
+  if (step.session) return;
+  const { typed, domain, message } = step;
+  if (typed.primaryType !== "RecoverStuckBridgeBalance" && typed.primaryType !== "WithdrawStuckUtxos") {
+    fail("RAVN asked for a signature of a kind this SDK doesn't recognise", { primaryType: typed.primaryType });
+  }
+  signsExactly(typed, RECOVERY_FIELDS);
+  if (typeof domain.chainId !== "number" || !HINKAL_CHAINS.includes(domain.chainId) || message.chainId !== domain.chainId) {
+    fail("The recovery isn't for a chain Hinkal runs on", { chainId: domain.chainId, messageChainId: message.chainId });
+  }
+  if (!EVM_ADDRESS.test(String(message.tokenAddress))) fail("The recovery names no token", { tokenAddress: message.tokenAddress });
+  if (!EVM_ADDRESS.test(userAddress) || lower(message.recipient) !== lower(userAddress)) {
+    fail("The recovery sends the funds to someone other than the signing wallet", { recipient: message.recipient });
   }
 }
 

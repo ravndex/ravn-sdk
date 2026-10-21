@@ -251,10 +251,12 @@ export type ExecutionDTO =
  * sign `sign` (`personal_sign` the `message`, or `eth_signTypedData_v4` the `typedData` with the
  * wallet on the input chain), then call execute() again with the same `quoteToken`, this
  * `authorization` and the `signature`, before `expiresAt`. Repeat until a TRANSACTION comes back
- * (`step` of `steps`), and send that within 10 minutes. execute() checks each one first: the
- * `personal_sign` opens a read-only Hinkal session, never one that can move funds; the typed data
- * places an order for the input token, at most the input amount, paying the one recipient quoted.
- * executeAndTrack does all of this.
+ * (`step` of `steps`), and send that within 10 minutes of the typed-data step's arrival (RAVN
+ * refuses an order signed with under 4 minutes of that left: execute again). execute() checks each
+ * one first: the `personal_sign` opens a read-only Hinkal session, never one that can move funds; the
+ * typed data places an order for the input token, at most the input amount, paying the one recipient
+ * quoted. executeAndTrack does all of this. RAVN offers Hinkal only on a quote sent with
+ * `authorizeSteps: true`.
  */
 export interface AuthorizeDTO {
   executionType: "AUTHORIZE";
@@ -392,11 +394,16 @@ export interface GetQuoteParams {
    * none of them can quote, NO_LIQUIDITY lists every left-out venue in
    * error.details.excludedVenues. */
   onlyVenues?: string[];
-  /** Settle privately: the race narrows to NEAR Intents (Confidential Intents) and Houdini Swap,
-   * and NO_LIQUIDITY replaces a public fill if neither can quote. Houdini is sent the request's IP,
-   * user-agent and clientTimezone for compliance screening; its terms bar US persons and
-   * sanctioned jurisdictions, and you own your users' eligibility (excludeVenues: ["houdini"]). */
+  /** Settle privately: the race narrows to NEAR Intents (Confidential Intents), Houdini Swap and,
+   * with authorizeSteps, Hinkal, and NO_LIQUIDITY replaces a public fill if none can quote. Houdini is
+   * sent the request's IP, user-agent and clientTimezone for compliance screening; its terms bar US
+   * persons and sanctioned jurisdictions, and you own your users' eligibility (excludeVenues:
+   * ["houdini"], ["hinkal"]). */
   confidential?: boolean;
+  /** Your execute flow answers AUTHORIZE steps (see AuthorizeDTO): executeAndTrack does, given
+   * signMessage and signTypedData. Without it (or onlyVenues naming "hinkal") a confidential race
+   * leaves out Hinkal, whose swap needs two such signatures. */
+  authorizeSteps?: boolean;
   /** Your end user's IANA timezone (e.g. "Europe/Berlin"), forwarded only to Houdini. Default UTC. */
   clientTimezone?: string;
   /** Optional analytics handle: send the same value while re-pricing one swap so it counts as one
@@ -437,6 +444,34 @@ export interface SubmitSignatureParams {
   signature: `0x${string}`;
   approvalSignature?: `0x${string}`;
 }
+
+/** POST /v1/recover: `statusRef` alone starts; then a "sign" answer's `authorization` with the
+ * paying wallet's `signature`; then a "done" answer's `authorization` alone, to look for more. */
+export interface RecoverParams {
+  /** The Hinkal swap's statusRef from execute (its order id). */
+  statusRef: string;
+  authorization?: string;
+  signature?: `0x${string}`;
+}
+
+/**
+ * What a failed Hinkal swap left at Hinkal (never refunded on its own) comes back only on the paying
+ * wallet's signatures, to that wallet, on the swap's source chain. "sign" step 1: a read-only session
+ * message to personal_sign (the same for any statusRef); step 2: the recovery to sign
+ * (eth_signTypedData_v4). "done": sent, amounts before Hinkal's recovery fee; its `authorization`
+ * alone looks again. "nothing": nothing stuck that may be taken (yet: a failed payout's refund shows
+ * a few minutes after it), or no such swap. recoverStuckFunds runs all of it, each step checked first.
+ */
+export type RecoverDTO =
+  | {
+      status: "sign";
+      authorization: string;
+      sign: { method: "personal_sign"; message: string } | { method: "eth_signTypedData_v4"; typedData: Record<string, unknown> };
+      expiresAt: string;
+      step: 1 | 2;
+    }
+  | { status: "done"; recovered: Array<{ chainId: number; tokenAddress: string; amount: string }>; authorization: string }
+  | { status: "nothing" };
 
 export interface SubmitTransactionParams {
   /** The quoteToken execute() returned with that transaction, not the quote's own. */
