@@ -39,6 +39,9 @@ const receipt = (hash: string) => ({ status: "success" as const, transactionHash
 
 const baseParams = { quoteToken: "qt-1" };
 
+// These test executeAndTrack's sequencing with made-up addresses, so the client's check (guard.test.ts)
+// is off in them: it would refuse every one.
+
 describe("executeAndTrack: TRANSACTION", () => {
   it("waits for the approval receipt before sending the main tx, then polls to terminal", async () => {
     const fetchImpl = scriptedFetch({
@@ -51,7 +54,7 @@ describe("executeAndTrack: TRANSACTION", () => {
       ],
       status: [{ status: "pending", venue: "across" }, { status: "success", venue: "across" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const getStatusSpy = vi.spyOn(client, "getStatus");
 
     const order: string[] = [];
@@ -84,7 +87,7 @@ describe("executeAndTrack: TRANSACTION", () => {
       ],
       status: [{ status: "success", venue: "compose" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const getStatusSpy = vi.spyOn(client, "getStatus");
     const hop1 = `0x${"c".repeat(64)}`;
     const handlers = { sendTransaction: vi.fn(async () => hop1), waitForReceipt: vi.fn(async (hash: string) => receipt(hash)) };
@@ -103,7 +106,7 @@ describe("executeAndTrack: TRANSACTION", () => {
       execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xRouter", data: "0xswap" } }],
       status: [{ status: "success", venue: "relay" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const handlers = {
       sendTransaction: vi.fn(async () => "0xMainHash"),
       waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
@@ -127,7 +130,7 @@ describe("executeAndTrack: TRANSACTION", () => {
       ],
       status: [{ status: "success", venue: "across" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const handlers = {
       sendTransaction: vi.fn(async () => "0xMainHash"),
       waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
@@ -147,7 +150,7 @@ describe("executeAndTrack: TRANSACTION", () => {
       execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xRouter", data: "0xswap" } }],
       status: [{ status: "pending", venue: "relay" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const getStatusSpy = vi.spyOn(client, "getStatus");
     const handlers = { sendTransaction: vi.fn(async () => "0xMainHash"), waitForReceipt: vi.fn(async (hash: string) => receipt(hash)) };
 
@@ -173,7 +176,7 @@ describe("executeAndTrack: SIGNATURE", () => {
       "submit-signature": [{ statusRef: "ref-1" }],
       status: [{ status: "success", venue: "0x" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const submitSpy = vi.spyOn(client, "submitSignature");
     const getStatusSpy = vi.spyOn(client, "getStatus");
     const signTypedData = vi.fn(async (d: { primaryType: string }) =>
@@ -208,7 +211,7 @@ describe("executeAndTrack: SIGNATURE", () => {
       "submit-signature": [{ statusRef: "ref-2" }],
       status: [{ status: "success", venue: "cow" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const order: string[] = [];
     const handlers = {
       sendTransaction: vi.fn(async (tx: { data?: string }) => {
@@ -235,7 +238,7 @@ describe("executeAndTrack: SIGNATURE", () => {
     const fetchImpl = scriptedFetch({
       execute: [{ executionType: "SIGNATURE", quoteToken: "qt-exec", typedData: {}, submit: { url: "/submit-signature" } }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     await expect(
       executeAndTrack(client, baseParams, { sendTransaction: vi.fn(), waitForReceipt: vi.fn() })
@@ -248,7 +251,7 @@ describe("executeAndTrack: SIGNATURE", () => {
         { executionType: "SIGNATURE", quoteToken: "qt-exec", approvalData: { primaryType: "Permit" }, submit: { url: "/submit-signature" } },
       ],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const signTypedData = vi.fn(async () => "0xSig" as const);
 
     await expect(
@@ -263,7 +266,7 @@ describe("executeAndTrack: DEPOSIT", () => {
     const fetchImpl = scriptedFetch({
       execute: [{ executionType: "DEPOSIT", quoteToken: "qt-exec", deposit: { address: "bc1q...", amount: "100000" }, statusRef: "dep-1" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const getStatusSpy = vi.spyOn(client, "getStatus");
 
     const result = await executeAndTrack(client, baseParams, { sendTransaction: vi.fn(), waitForReceipt: vi.fn() });
@@ -308,7 +311,7 @@ describe("executeAndTrack: DEPOSIT with sendDeposit", () => {
     return { order, handlers };
   };
   const run = (execution: unknown, handlers: ExecuteAndTrackHandlers, options = {}) => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], status: [success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [success] }) });
     const getStatus = vi.spyOn(client, "getStatus");
     return { getStatus, result: executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true, ...options }) };
   };
@@ -476,7 +479,7 @@ describe("executeAndTrack: DEPOSIT with sendDeposit", () => {
 
   it("once the deposit is out, a failure carries its hash", async () => {
     const { handlers } = evmHandlers({ sendCalls: vi.fn(async () => [DEP]) });
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [evm], status: [httpError(400, "INVALID_REQUEST")] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [evm], status: [httpError(400, "INVALID_REQUEST")] }) });
     const err = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true }).catch((e) => e);
     expect(err).toBeInstanceOf(ExecuteAndTrackError);
     expect(err.partial).toMatchObject({ txHash: DEP, feeTxHash: DEP, statusRef: "rift-order-1", statusTxHash: DEP });
@@ -498,7 +501,7 @@ describe("executeAndTrack: TRANSACTION with submit", () => {
       "submit-transaction": [{ txHash: "5igSig" }],
       status: [{ status: "success", venue: "layerswap" }],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
     const submitSpy = vi.spyOn(client, "submitTransaction");
     const handlers = {
       sendTransaction: vi.fn(async () => "never"),
@@ -517,7 +520,7 @@ describe("executeAndTrack: TRANSACTION with submit", () => {
   });
 
   it("refuses rather than broadcasting when it can't sign without sending", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution] }) });
     const handlers = { sendTransaction: vi.fn(async () => "never"), waitForReceipt: vi.fn(async (hash: string) => receipt(hash)) };
 
     await expect(executeAndTrack(client, baseParams, handlers)).rejects.toThrow(/signSolanaTransaction/);
@@ -535,7 +538,7 @@ describe("executeAndTrack: TRANSACTION with fee", () => {
     executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xEco", data: "0xswap", value: "0", chainId: 8453 }, fee, ...extra,
   });
   const run = async (execution: unknown, handlers: Parameters<typeof executeAndTrack>[2]) => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], status: [{ status: "pending", venue: "eco" }, { status: "success", venue: "eco" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "pending", venue: "eco" }, { status: "success", venue: "eco" }] }) });
     const getStatusSpy = vi.spyOn(client, "getStatus");
     const result = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
     return { result, getStatusSpy };
@@ -735,7 +738,7 @@ describe("depositFeePayment", () => {
   });
 
   it("executeAndTrack reports a fee it can't describe instead of failing the deposit", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [deposit({ amount: "5", address: "x", chainId: 999 })] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [deposit({ amount: "5", address: "x", chainId: 999 })] }) });
 
     const result = await executeAndTrack(client, baseParams, { sendTransaction: vi.fn(), waitForReceipt: vi.fn() });
 
@@ -746,7 +749,7 @@ describe("depositFeePayment", () => {
 
   it("executeAndTrack hands it back on a DEPOSIT", async () => {
     const execution = deposit({ amount: "5", address: "bc1qravn", chainId: -1 });
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution] }) });
 
     const result = await executeAndTrack(client, baseParams, { sendTransaction: vi.fn(), waitForReceipt: vi.fn() });
 
@@ -774,7 +777,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
     ["a 429", httpError(429, "RATE_LIMITED", { retryAfterSec: 0 })],
     ["a network failure", new TypeError("fetch failed")],
   ])("retries a status poll that fails with %s instead of rejecting", async (_, failure) => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [failure, success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [failure, success] }) });
 
     const outcome = await executeAndTrack(client, baseParams, handlers(), { pollIntervalMs: 0 }).catch((e) => e);
 
@@ -784,7 +787,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   it("waits out details.retryAfterSec before polling again", async () => {
     vi.useFakeTimers();
     try {
-      const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [httpError(429, "RATE_LIMITED", { retryAfterSec: 5 }), success] }) });
+      const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [httpError(429, "RATE_LIMITED", { retryAfterSec: 5 }), success] }) });
       const statusSpy = vi.spyOn(client, "getStatus");
       const outcome = executeAndTrack(client, baseParams, handlers(), { pollIntervalMs: 10 }).catch((e) => e);
 
@@ -799,7 +802,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   });
 
   it("rejects a status error it can't retry with every hash it sent attached", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [withFee], status: [httpError(400, "INVALID_REQUEST")] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [withFee], status: [httpError(400, "INVALID_REQUEST")] }) });
 
     const err = await executeAndTrack(client, baseParams, handlers(), { pollIntervalMs: 0 }).catch((e) => e);
 
@@ -811,7 +814,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   });
 
   it("gives up on a status endpoint that keeps failing, hashes attached, rather than spin silently", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [httpError(502, "INTERNAL")] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [httpError(502, "INTERNAL")] }) });
     const statusSpy = vi.spyOn(client, "getStatus");
 
     const err = await executeAndTrack(client, baseParams, handlers(), { pollIntervalMs: 0 }).catch((e) => e);
@@ -822,7 +825,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   });
 
   it("reports each hash through onProgress the moment it exists, before waiting on it", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [withFee], status: [pending, success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [withFee], status: [pending, success] }) });
     const order: string[] = [];
     const h = handlers();
     h.sendTransaction.mockImplementation(async (tx: { data?: string }) => {
@@ -857,7 +860,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   });
 
   it("a throwing onProgress never stops the swap or its fee", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [withFee], status: [success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [withFee], status: [success] }) });
 
     const result = await executeAndTrack(client, baseParams, handlers(), { pollIntervalMs: 0, onProgress: () => { throw new Error("db down"); } });
 
@@ -865,7 +868,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   });
 
   it("stops polling on the caller's AbortSignal, hashes attached", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [pending] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [pending] }) });
     const controller = new AbortController();
 
     const err = await executeAndTrack(client, baseParams, handlers(), {
@@ -879,7 +882,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   }, 1_000);
 
   it("never sends the swap once aborted", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [success] }) });
     const controller = new AbortController();
     controller.abort();
     const h = handlers();
@@ -891,7 +894,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   });
 
   it("gives up after maxWaitMs, even on a status call that never answers", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [pending, HANG] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [pending, HANG] }) });
 
     const err = await executeAndTrack(client, baseParams, handlers(), { pollIntervalMs: 5, maxWaitMs: 50 }).catch((e) => e);
 
@@ -900,7 +903,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
   }, 1_000);
 
   it("retries a rate-limited execute before anything is sent", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [httpError(429, "RATE_LIMITED", { retryAfterSec: 0 }), plain], status: [success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [httpError(429, "RATE_LIMITED", { retryAfterSec: 0 }), plain], status: [success] }) });
 
     const outcome = await executeAndTrack(client, baseParams, handlers(), { pollIntervalMs: 0 }).catch((e) => e);
 
@@ -909,7 +912,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
 
   it("retries submitTransaction with the same signed transaction (RAVN never sends it twice)", async () => {
     const execution = { executionType: "TRANSACTION", quoteToken: "qt-exec", statusRef: "ls-swap-id", transaction: { chainId: -2, serialized: "AQID" }, submit: { url: "/api/v1/submit-transaction" } };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-transaction": [httpError(502, "BUILD_FAILED"), { txHash: "5igSig" }], status: [success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], "submit-transaction": [httpError(502, "BUILD_FAILED"), { txHash: "5igSig" }], status: [success] }) });
     const submitSpy = vi.spyOn(client, "submitTransaction");
     const signSolanaTransaction = vi.fn(async (tx: string) => `signed:${tx}`);
 
@@ -925,7 +928,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
     const signer = () => ({ ...handlers(), signTypedData: vi.fn(async () => "0xsig" as const) });
 
     it("retries submitSignature when the venue rate-limits it (nothing was placed)", async () => {
-      const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-signature": [httpError(503, "VENUE_RATE_LIMITED", { retryAfterSec: 0 }), { statusRef: "cow-uid" }], status: [success] }) });
+      const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], "submit-signature": [httpError(503, "VENUE_RATE_LIMITED", { retryAfterSec: 0 }), { statusRef: "cow-uid" }], status: [success] }) });
 
       const outcome = await executeAndTrack(client, baseParams, signer(), { pollIntervalMs: 0 }).catch((e) => e);
 
@@ -933,7 +936,7 @@ describe("executeAndTrack: once the swap is out, an error never loses it", () =>
     });
 
     it("never re-submits after BUILD_FAILED (the order may be placed); rejects with what it sent", async () => {
-      const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-signature": [httpError(502, "BUILD_FAILED"), { statusRef: "cow-uid" }] }) });
+      const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], "submit-signature": [httpError(502, "BUILD_FAILED"), { statusRef: "cow-uid" }] }) });
       const submitSpy = vi.spyOn(client, "submitSignature");
 
       const err = await executeAndTrack(client, baseParams, signer(), { pollIntervalMs: 0 }).catch((e) => e);
@@ -954,7 +957,7 @@ describe("executeAndTrack: expired", () => {
   const refunded = { status: "refunded", venue: "across" };
 
   it("keeps polling past expired until the refund lands", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], status: [expired, refunded] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [expired, refunded] }) });
 
     const result = await executeAndTrack(client, baseParams, h(), { pollIntervalMs: 0, expiredPollIntervalMs: 0 });
 
@@ -964,7 +967,7 @@ describe("executeAndTrack: expired", () => {
   it("polls an expired swap once a minute, not every few seconds", async () => {
     vi.useFakeTimers();
     try {
-      const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], status: [expired, refunded] }) });
+      const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [expired, refunded] }) });
       const statusSpy = vi.spyOn(client, "getStatus");
       const outcome = executeAndTrack(client, baseParams, h(), { pollIntervalMs: 4_000 }).catch((e) => e);
 
@@ -986,7 +989,7 @@ describe("executeAndTrack: approval batching", () => {
   const transaction = { to: "0xEco", data: "0xswap", value: "0", chainId: 8453 };
   const tokenFee = { amount: "500", address: "0xRavnFee", chainId: 8453, transaction: { to: "0xUSDC", data: "0xfeetransfer", value: "0", chainId: 8453 } };
   const run = async (execution: unknown, handlers: ExecuteAndTrackHandlers) => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], status: [{ status: "success", venue: "eco" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success", venue: "eco" }] }) });
     return executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
   };
 
@@ -1073,7 +1076,7 @@ describe("executeAndTrack: sandbox executions and approval resets", () => {
     signTypedData: vi.fn(async () => "0xsig" as const),
   });
   const run = (execution: unknown, handlers: ExecuteAndTrackHandlers, extra: Record<string, unknown[]> = {}) => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], status: [sandboxStatus], ...extra }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [sandboxStatus], ...extra }) });
     return { client, done: executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 }) };
   };
 
@@ -1156,7 +1159,7 @@ describe("executeAndTrack: review fixes", () => {
 
   it("keeps the signed Solana transaction, and any txHash RAVN names, when submitTransaction keeps failing", async () => {
     const execution = { executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" }, submit: { url: "/api/v1/submit-transaction" } };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-transaction": [httpError(502, "BUILD_FAILED", { txHash: "5igSig" })] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], "submit-transaction": [httpError(502, "BUILD_FAILED", { txHash: "5igSig" })] }) });
     const events: string[] = [];
 
     const err = await executeAndTrack(client, baseParams, { ...wallet(), signSolanaTransaction: async (tx) => `signed:${tx}` }, {
@@ -1173,7 +1176,7 @@ describe("executeAndTrack: review fixes", () => {
       execute: [new TypeError("fetch failed"), httpError(503, "UNAVAILABLE", { retryAfterSec: 0 }), plain],
       status: [success],
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     const outcome = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 });
 
@@ -1188,18 +1191,18 @@ describe("executeAndTrack: review fixes", () => {
 
   it("asks again after a gateway timeout, and gives up on a lost execute after 4 tries", async () => {
     const fetchImpl = scriptedFetch({ execute: [httpError(504, "INTERNAL"), plain], status: [success] });
-    const outcome = await executeAndTrack(new RavnClient({ fetch: fetchImpl }), baseParams, wallet(), { pollIntervalMs: 0 });
+    const outcome = await executeAndTrack(new RavnClient({ guard: false, fetch: fetchImpl }), baseParams, wallet(), { pollIntervalMs: 0 });
     expect(outcome.txHash).toBe(SWAP);
 
     const offline = scriptedFetch({ execute: [new TypeError("fetch failed")] });
-    const err = await executeAndTrack(new RavnClient({ fetch: offline }), baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
+    const err = await executeAndTrack(new RavnClient({ guard: false, fetch: offline }), baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
     expect(err.code).toBe("NETWORK_ERROR");
     expect(offline).toHaveBeenCalledTimes(4);
   });
 
   it("uses the caller's own Idempotency-Key, and never repeats an unexpected execute error", async () => {
     const fetchImpl = scriptedFetch({ execute: [httpError(500, "INTERNAL"), plain] });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     const err = await executeAndTrack(client, { ...baseParams, idempotencyKey: "mine-1" }, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
 
@@ -1210,7 +1213,7 @@ describe("executeAndTrack: review fixes", () => {
   });
 
   it("never repeats an execute that failed to build: re-quoting is the fix, and a repeat can open a second venue order", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [httpError(502, "BUILD_FAILED"), plain] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [httpError(502, "BUILD_FAILED"), plain] }) });
     const executeSpy = vi.spyOn(client, "execute");
 
     const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
@@ -1222,7 +1225,7 @@ describe("executeAndTrack: review fixes", () => {
 
   it("keeps what it knows when sendCalls resolves with no hash", async () => {
     const fee = { amount: "5", address: "0xF", chainId: 1, transaction: { to: "0xUSDC", data: "0xfee", value: "0", chainId: 1 } };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, statusRef: "eco-ref", fee }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, statusRef: "eco-ref", fee }] }) });
 
     const err = await executeAndTrack(client, baseParams, { ...wallet(), sendCalls: async () => [] }, { pollIntervalMs: 0 }).catch((e) => e);
 
@@ -1233,7 +1236,7 @@ describe("executeAndTrack: review fixes", () => {
   it("asks for no second signature once aborted during the first", async () => {
     const controller = new AbortController();
     const execution = { executionType: "SIGNATURE", quoteToken: "qt-exec", approvalData: { primaryType: "Permit" }, typedData: { primaryType: "Order" } };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution] }) });
     const signTypedData = vi.fn(async () => {
       controller.abort();
       return "0xsig" as const;
@@ -1246,7 +1249,7 @@ describe("executeAndTrack: review fixes", () => {
   });
 
   it("records approval.reset's hash the moment it's sent", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval: { ...approval, reset: { to: "0xToken", data: "0xapprove0", value: "0" } } }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, approval: { ...approval, reset: { to: "0xToken", data: "0xapprove0", value: "0" } } }] }) });
     const h = wallet();
     h.waitForReceipt.mockRejectedValueOnce(new Error("RPC down"));
 
@@ -1262,7 +1265,7 @@ describe("executeAndTrack: review fixes", () => {
       if (url.endsWith("/execute")) return { ok: true, status: 200, json: async () => ({ data: plain }) };
       return calls++ === 0 ? { ok: true, status: 200, json: async () => ({ data: { status: "pending", venue: "relay" } }) } : new Promise(() => {});
     }) as unknown as typeof fetch;
-    const client = new RavnClient({ fetch: deaf });
+    const client = new RavnClient({ guard: false, fetch: deaf });
 
     const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 5, maxWaitMs: 50 }).catch((e) => e);
 
@@ -1272,7 +1275,7 @@ describe("executeAndTrack: review fixes", () => {
 
   it("sends no swap when aborted while the approval confirms", async () => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }], status: [success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, approval }], status: [success] }) });
     const h = wallet();
     h.waitForReceipt.mockImplementation(async (hash: string) => {
       controller.abort();
@@ -1288,7 +1291,7 @@ describe("executeAndTrack: review fixes", () => {
 
   it("keeps the swap's hash when aborted while the wallet's swap prompt was open", async () => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [success] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [success] }) });
     const h = wallet();
     h.sendTransaction.mockImplementation(async () => {
       controller.abort();
@@ -1315,7 +1318,7 @@ describe("executeAndTrack: review fixes, round 2", () => {
 
   it("an abort ends a receipt wait that never resolves (a dropped approval), hash kept", async () => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
     const h = wallet();
     h.waitForReceipt.mockImplementation(() => new Promise(() => {}));
     setTimeout(() => controller.abort(), 20);
@@ -1329,7 +1332,7 @@ describe("executeAndTrack: review fixes, round 2", () => {
 
   it("keeps the signed order when submitSignature gets no answer: the venue may hold it", async () => {
     const execution = { executionType: "SIGNATURE", quoteToken: "qt-exec", typedData: { primaryType: "Order" } };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-signature": [new TypeError("fetch failed")] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], "submit-signature": [new TypeError("fetch failed")] }) });
     const stages: string[] = [];
 
     const err = await executeAndTrack(client, baseParams, { ...wallet(), signTypedData: async () => "0xsig" }, {
@@ -1343,7 +1346,7 @@ describe("executeAndTrack: review fixes, round 2", () => {
 
   it("retries an execute 429 even without RAVN's error body (a proxy's page)", async () => {
     const page429 = { [FAIL]: { status: 429, code: "INTERNAL" } };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [page429, plain], status: [{ status: "success", venue: "relay" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [page429, plain], status: [{ status: "success", venue: "relay" }] }) });
 
     const outcome = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
 
@@ -1353,7 +1356,7 @@ describe("executeAndTrack: review fixes, round 2", () => {
   it("never repeats an execute that got no answer without an Idempotency-Key: the first may have opened a venue order", async () => {
     vi.stubGlobal("crypto", {}); // no crypto.randomUUID to make one with
     try {
-      const client = new RavnClient({ fetch: scriptedFetch({ execute: [new TypeError("fetch failed"), plain] }) });
+      const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [new TypeError("fetch failed"), plain] }) });
       const executeSpy = vi.spyOn(client, "execute");
 
       const err = await executeAndTrack(client, baseParams, wallet(), { pollIntervalMs: 0 }).catch((e) => e);
@@ -1368,7 +1371,7 @@ describe("executeAndTrack: review fixes, round 2", () => {
   it("reports a batched approval.reset's hash", async () => {
     const fee = { amount: "5", address: "0xF", chainId: 1, transaction: { to: "0xUSDT", data: "0xfee", value: "0", chainId: 1 } };
     const reset = { to: "0xUSDT", data: "0xapprove0", value: "0" };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval: { ...approval, reset }, fee }], status: [{ status: "success", venue: "eco" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, approval: { ...approval, reset }, fee }], status: [{ status: "success", venue: "eco" }] }) });
     const stages: string[] = [];
 
     const result = await executeAndTrack(client, baseParams, { ...wallet(), sendCalls: async () => [RESET, APPROVAL, BATCH] }, {
@@ -1388,7 +1391,7 @@ describe("executeAndTrack: review fixes, round 2", () => {
       return { ok: true, status: 200, json: async () => ({ data: deposit }) };
     }) as unknown as typeof fetch;
 
-    const err = await executeAndTrack(new RavnClient({ fetch: fetchImpl }), baseParams, wallet(), { signal: controller.signal }).catch((e) => e);
+    const err = await executeAndTrack(new RavnClient({ guard: false, fetch: fetchImpl }), baseParams, wallet(), { signal: controller.signal }).catch((e) => e);
 
     expect(err.code).toBe("ABORTED");
   });
@@ -1421,7 +1424,7 @@ describe("executeAndTrack: review fixes, round 3", () => {
 
   it("a receipt that rejects after an abort is never an unhandled rejection", async () => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
     // Plain functions, not vi.fn: a mock attaches its own handler to the promise it returns, which
     // would hide exactly the unhandled rejection this checks for.
     const h: ExecuteAndTrackHandlers = {
@@ -1443,7 +1446,7 @@ describe("executeAndTrack: review fixes, round 3", () => {
   });
 
   it("an async onProgress that rejects is never an unhandled rejection, and never stops the swap", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [{ status: "success", venue: "relay" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [{ status: "success", venue: "relay" }] }) });
     let txHash: string | undefined;
 
     const unhandled = await unhandledDuring(async () => {
@@ -1459,7 +1462,7 @@ describe("executeAndTrack: review fixes, round 3", () => {
     ["the fee's receipt", FEE, FEE],
   ])("an abort ends a wait on %s that never resolves, hashes kept", async (_, stuckOn, feeTxHash) => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, fee: coinFee }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, fee: coinFee }] }) });
     const h = wallet();
     h.waitForReceipt.mockImplementation(async (hash: string) => {
       if (hash !== stuckOn) return receipt(hash);
@@ -1477,7 +1480,7 @@ describe("executeAndTrack: review fixes, round 3", () => {
 
   it("rejects ABORTED, not a feeError, when aborted before the fee with polling off", async () => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, fee: coinFee }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, fee: coinFee }] }) });
     const h = wallet();
     h.waitForReceipt.mockImplementation(async (hash: string) => {
       controller.abort();
@@ -1493,7 +1496,7 @@ describe("executeAndTrack: review fixes, round 3", () => {
 
   it("an abort ends an execute that never answers", async () => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: (() => new Promise(() => {})) as unknown as typeof fetch });
+    const client = new RavnClient({ guard: false, fetch: (() => new Promise(() => {})) as unknown as typeof fetch });
     setTimeout(() => controller.abort(), 20);
 
     const err = await executeAndTrack(client, baseParams, wallet(), { signal: controller.signal }).catch((e) => e);
@@ -1510,7 +1513,7 @@ describe("executeAndTrack: review fixes, round 4", () => {
 
   it("an abort ends an allowance read that never answers, nothing sent", async () => {
     const controller = new AbortController();
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, approval }] }) });
     const sendTransaction = vi.fn(async () => SWAP);
     setTimeout(() => controller.abort(), 20);
 
@@ -1525,7 +1528,7 @@ describe("executeAndTrack: review fixes, round 4", () => {
   }, 1_000);
 
   it("takes a JS waitForReceipt that returns the receipt itself, not a promise", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [{ ...plain, approval }], status: [{ status: "success", venue: "relay" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ ...plain, approval }], status: [{ status: "success", venue: "relay" }] }) });
     const sendTransaction = vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? `0x${"e".repeat(64)}` : SWAP));
 
     const result = await executeAndTrack(client, baseParams, {
@@ -1537,7 +1540,7 @@ describe("executeAndTrack: review fixes, round 4", () => {
   });
 
   it("keeps polling past not_found: the venue may not have seen the swap yet", async () => {
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [plain], status: [{ status: "not_found", venue: "relay" }, { status: "success", venue: "relay" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [plain], status: [{ status: "not_found", venue: "relay" }, { status: "success", venue: "relay" }] }) });
 
     const result = await executeAndTrack(client, baseParams, { sendTransaction: async () => SWAP, waitForReceipt: async (hash) => receipt(hash) }, { pollIntervalMs: 0 });
 
@@ -1561,7 +1564,7 @@ describe("executeAndTrack: review fixes, round 5", () => {
       }
     }
     const execution = { executionType: "SIGNATURE", quoteToken: "qt-exec", approvalData: { primaryType: "Permit" }, typedData: { primaryType: "Order" } };
-    const client = new RavnClient({ fetch: scriptedFetch({ execute: [execution], "submit-signature": [{ statusRef: "cow-uid" }], status: [{ status: "success", venue: "cow" }] }) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], "submit-signature": [{ statusRef: "cow-uid" }], status: [{ status: "success", venue: "cow" }] }) });
     const submitSpy = vi.spyOn(client, "submitSignature");
 
     const result = await executeAndTrack(client, baseParams, new Wallet(), { pollIntervalMs: 0 });

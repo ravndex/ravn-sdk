@@ -15,6 +15,21 @@ Real npm workspaces (root `package.json`'s `workspaces` field) plus a per-packag
 
 The widget iframe page itself, and the rest of RAVN's routing/execution engine, live in RAVN's main application, which is closed source. This repo only carries the client-side pieces an integrator embeds in their own project.
 
+## The check before the wallet (0.3.0+)
+
+`RavnClient.execute()` (and so `executeAndTrack()` and `useRavnExecute`) checks every execution RAVN returns before you can hand it to a wallet, against what your user asked to swap, which the client remembers from your own `getQuote`/`getQuoteStream` request. It throws `UnsafeExecutionError` (`code: "UNSAFE_EXECUTION"`; nothing was sent or signed) unless:
+
+- every EVM transaction and approval goes to a contract one of RAVN's venues uses on that chain, and approvals and signatures touch only the input token, up to the input amount (an unlimited approval only to Permit2 or CoW's vault relayer, which move funds only against the user's own signature);
+- the native coin sent is at most the input amount, and nothing at all on a token sell;
+- RAVN's fee goes only to RAVN's own wallet and is at most 1% of the swap;
+- a signature is one of the kinds RAVN's venues use (a CoW order paying the user, a Permit2 one-time transfer, the token's own permit, an EIP-3009 authorization from the user), for the input token and at most the amount;
+- a Solana transaction calls only programs RAVN's venues use and visibly moves at most the input amount of the input token (SOL: plus account rent), with no approvals, changes of owner or burns; a deposit RAVN built pays exactly the deposit and RAVN's fee;
+- a Bitcoin PSBT pays exactly the deposit, RAVN's fee and change back to the sender, from the sender's own coins, at a sane network fee.
+
+So a compromised or tampered RAVN server can't use your integration to empty a wallet: the most it could touch is the amount being swapped. What it can't see is whether the swap itself pays out fairly once funds are inside a venue's contract (RAVN's server checks each venue's answer for that); your user's wallet preview remains the last word. Also not covered: an allowance your user already gave one of these venue contracts elsewhere, which a crafted call to that same contract could use (0x's AllowanceHolder is read and capped; others aren't).
+
+For a quoteToken this client didn't fetch (quoted on your server, executed in the browser), pass the intent yourself: `client.execute({ quoteToken }, { intent: { inputChainId, inputToken, inputAmount, userAddress, destinationAddress } })` or `executeAndTrack(client, params, handlers, { intent })`; without it, `execute()` refuses before calling the API. `checkExecution(execution, intent)` is exported for an execution you got another way. If a venue moves to a new contract before your SDK version knows it, its swaps are refused: update the SDK, or add the address meanwhile with `new RavnClient({ guard: { allowContracts: { [chainId]: ["0x…"] } } })`. `guard: false` turns the check off.
+
 ## Reading a quote
 
 - **`slippage.noMinimum`**: `true` means the venue enforces no minimum output (today: Rift, which fills at its own best rate once the deposit lands). `slippage.bps` is then not a protection and the user can receive more or less than `output.amount`. Show this before the user sends funds. Alternatives carry the same field. Setting `slippageBps` keeps such venues out of the race; pass `allowNoMinimum: true` (0.1.11+) to let them race beside it.

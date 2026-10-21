@@ -3,6 +3,30 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.3.0
+
+`execute()` checks what RAVN returns before it can reach a wallet. A compromised or tampered answer
+can no longer use your integration to move more than the amount being swapped.
+
+### Added
+
+- **The check** (`checkExecution`, run by `RavnClient.execute`, so by `executeAndTrack` and
+  `useRavnExecute` too): every transaction, approval, signature, Solana transaction and Bitcoin PSBT
+  is held to the input token on the input chain, at most the input amount, venue contracts RAVN
+  routes through (a list per chain in this release), and RAVN's fee at most 1% to RAVN's own wallet.
+  Throws `UnsafeExecutionError` (`code: "UNSAFE_EXECUTION"`) before anything is sent or signed. See
+  the README's "The check before the wallet".
+- `RavnClientConfig.guard`: `{ allowContracts }` to accept a venue's new contract before an SDK
+  update, or `false` to turn the check off.
+- `execute(params, { intent })` and `ExecuteAndTrackOptions.intent`: what the user asked to swap, for a
+  quoteToken this client didn't fetch. Types `SwapIntent`, `GuardOptions`.
+
+### Changed
+
+- **`execute()` refuses a quoteToken this client didn't fetch unless you pass `intent`**, before calling
+  the API. Quotes from `getQuote`/`getQuoteStream` (and their alternatives) on the same client are
+  remembered, so the usual quote-then-execute flow needs no change.
+
 ## @ravnexchange/sdk 0.2.6
 
 Show prices while RAVN's race runs. Nothing changes for code that doesn't call the new method.
