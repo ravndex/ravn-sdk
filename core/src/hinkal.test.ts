@@ -739,15 +739,34 @@ describe("recoverStuckFunds", () => {
     await expect(recoverStuckFunds(client, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).resolves.toEqual({ recovered: [] });
   });
 
-  it("never signs the same recovery (kind, chain, token) twice, nor a second session", async () => {
+  it("never signs the same recovery (kind, chain, token) twice: offered again, it stops with what came back", async () => {
     const { signMessage, signTypedData } = wallet([]);
     const twice = new RavnClient({
       fetch: api([], [recoverSession(), recovering(recoveryTyped("WithdrawStuckUtxos")), done(USDC, "a-1"), recovering(recoveryTyped("WithdrawStuckUtxos"), "r-3")]) as unknown as typeof fetch,
     });
-    await expect(recoverStuckFunds(twice, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/a second time/);
+    const result = await recoverStuckFunds(twice, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData });
+    expect(result.recovered.map((r) => r.tokenAddress)).toEqual([USDC]);
     expect(signTypedData).toHaveBeenCalledOnce();
+  });
+
+  it("signs one session, recoveries on one chain only, and no more than 8", async () => {
+    const { signMessage, signTypedData } = wallet([]);
     const sessions = new RavnClient({ fetch: api([], [recoverSession(), recoverSession("r-9")]) as unknown as typeof fetch });
     await expect(recoverStuckFunds(sessions, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/session a second time/);
+
+    const other = recoveryTyped("RecoverStuckBridgeBalance", { chainId: 1 });
+    other.domain.chainId = 1;
+    const chains = new RavnClient({ fetch: api([], [recoverSession(), recovering(recoveryTyped("RecoverStuckBridgeBalance")), done(USDC, "a-1"), recovering(other, "r-3")]) as unknown as typeof fetch });
+    signTypedData.mockClear();
+    await expect(recoverStuckFunds(chains, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/on chain 1 after one on chain 8453/);
+    expect(signTypedData).toHaveBeenCalledOnce();
+
+    const token = (i: number) => `0x${(i + 1).toString(16).padStart(40, "0")}`;
+    const many: RecoverDTO[] = [recoverSession()];
+    for (let i = 0; i < 9; i++) many.push(recovering(recoveryTyped("WithdrawStuckUtxos", { tokenAddress: token(i) }), `r-${i}`), done(token(i), `a-${i}`));
+    signTypedData.mockClear();
+    await expect(recoverStuckFunds(new RavnClient({ fetch: api([], many) as unknown as typeof fetch }), { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/more than 8 recoveries/);
+    expect(signTypedData).toHaveBeenCalledTimes(8);
   });
 
   it("refuses a done that answers no recovery, and a step past its expiresAt", async () => {

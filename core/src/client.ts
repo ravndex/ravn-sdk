@@ -268,9 +268,9 @@ export class RavnClient {
 
   /**
    * POST /v1/recover: what a failed Hinkal swap left at Hinkal, back to the wallet that paid for it,
-   * `userAddress` (see RecoverDTO). Every "sign" answer is checked before it is returned
-   * (checkRecovery): the session read-only, a recovery only back to `userAddress`. recoverStuckFunds
-   * runs the whole recovery.
+   * `userAddress` (see RecoverDTO), from your own wallet connection, never from a RAVN answer. Every
+   * "sign" answer is checked before it is returned (checkRecovery): the session read-only, a recovery
+   * only back to `userAddress`. recoverStuckFunds runs the whole recovery.
    */
   async recover(params: RecoverParams, options: { userAddress: string }): Promise<RecoverDTO> {
     const answer = await this.request<RecoverDTO>("/recover", { method: "POST", body: JSON.stringify(params) });

@@ -20,8 +20,9 @@ Hinkal for SDK users: say you can sign its steps, and get back what a failed Hin
   then each recovery, looking again after each until nothing is left, resolving to what came back.
 - **The check covers it** (`checkRecovery`, run by `recover`): the session is read-only, and a recovery
   is `RecoverStuckBridgeBalance` or `WithdrawStuckUtxos` with Hinkal's own fields, in Hinkal's domain on
-  a chain Hinkal runs on, of one token, sent back to `userAddress` and nowhere else. `recoverStuckFunds`
-  signs one session and each recovery (kind, chain, token) once.
+  a chain Hinkal runs on, of one token, sent back to `userAddress` (from your own wallet connection,
+  never a RAVN answer) and nowhere else. `recoverStuckFunds` signs one session and up to 8 recoveries,
+  all on one chain, each (kind, chain, token) once: offered one again, it stops with what came back.
 
 ### Changed
 
