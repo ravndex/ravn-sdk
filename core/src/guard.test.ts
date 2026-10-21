@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import { checkExecution } from "./guard";
+import { KNOWN_CONTRACTS } from "./guard-contracts";
 import type { SwapIntent } from "./guard";
 import { associatedTokenAddress, sha256 } from "./guard-solana";
 import { UnsafeExecutionError } from "./types";
@@ -116,6 +117,29 @@ describe("checkExecution: EVM transactions", () => {
   it("refuses a chain this SDK doesn't know", () => {
     const { execution, intent } = swap();
     refuses(execution, { ...intent, inputChainId: 7777 }, /doesn't know chain 7777/);
+  });
+
+  // Every address the check accepts on Arc, each with code there and named by the venue's own API or a
+  // real Arc build (2026-10-21). A new chain inherits whole-family entries, so this pins Arc's exactly.
+  it("accepts exactly Arc's verified venue contracts there", () => {
+    expect([...KNOWN_CONTRACTS[5042]].sort()).toEqual(
+      [
+        "0x0000000000001fF3684f28c67538d4D072C22734", // 0x AllowanceHolder
+        "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5", // KyberSwap
+        "0x4cd00e387622c35bddb9b4c962c136462338bc31", // Relay depository
+        "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", // Relay approval proxy
+        "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router
+        "0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c", // Across periphery (Arc)
+        "0x9b4A302A548c7e313c2b74C461db7b84d3074A84", // Across SpokePool
+        "0xEC000769a73b70e16f361a442292500b3BCf4A85", // Eco portal
+        "0xe226e4825cb215abafad98fdd400583eab6a594f", // Layerswap depository
+        "0x20f6ee51340adeed01a59b0e65cb3703f3dc860c", // Fly Trade
+        "0x4E3bcCE28cAf98A143Fd8BD9e4875ccAb3E7bBE0", // OKX router
+        "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af", // OKX approvals
+        "0x5fA58e4E89c85B8d678Ade970bD6afD4311aF17E", // Garden USDC
+        "0x89b6612A2121BFBd1c2Dc593504AbE4e5d5E9296", // Garden cirBTC
+      ].map((a) => a.toLowerCase()).sort()
+    );
   });
 
   it("knows Arc's own Across periphery there, not the one other chains use (no code at it on Arc)", () => {

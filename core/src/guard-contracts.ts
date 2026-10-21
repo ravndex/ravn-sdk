@@ -88,7 +88,8 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   // Arc's is its own deployment: no code at 0x97CC… there; Across's Arc swap routes go through this one.
   [[ARC], ["0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c"], "Across periphery (Arc)"],
   [[ZKSYNC], ["0x7c99ced6d8011af8a52488884f7ba2c61b0fa57d"], "Across periphery (zkSync)"],
-  [NOT_ZKSYNC, ["0x337685fdaB40D39bd02028545a4FfA7D287cC3E2"], "Mayan forwarder"],
+  // Not on Arc: no code there and Mayan doesn't serve it (a plain CREATE address its deployer could still fill).
+  [NOT_ZKSYNC.filter((c) => c !== ARC), ["0x337685fdaB40D39bd02028545a4FfA7D287cC3E2"], "Mayan forwarder"],
   [NOT_ZKSYNC, ["0xEC000769a73b70e16f361a442292500b3BCf4A85"], "Eco portal"],
   [ALL, ["0xe226e4825cb215abafad98fdd400583eab6a594f"], "Layerswap depository"],
   [NOT_ZKSYNC, ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
