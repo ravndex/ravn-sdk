@@ -43,6 +43,10 @@ swap. Signing moves no funds: the deposit transaction that follows does.
   and signs the struct `types` makes the root, so a tampered answer could pass the check as a one-time
   Permit2 transfer while ethers signed an unlimited Permit2 allowance to anyone. `primaryType` must now
   be the one struct in `types` no other references. Every real answer from RAVN's venues already is.
+- **A token's own permit (EIP-2612) or EIP-3009 authorization must sign exactly the standard's fields.**
+  The token verifies these itself, and DAI's `Permit` of the same name (`holder, spender, nonce, expiry,
+  allowed`) passed as one while signing an unlimited, never-expiring allowance. Every real answer from
+  RAVN's venues already signs the standard's fields.
 
 ### Changed
 

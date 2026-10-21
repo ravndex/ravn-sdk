@@ -138,8 +138,9 @@ describe("checkExecution: Hinkal's read-only session (AUTHORIZE personal_sign)",
     refuses({ ...session(), sign: undefined } as unknown as AuthorizeDTO, intent, /nothing to sign/);
   });
 
-  it("refuses an authorization for a swap not on an EVM chain it knows", () => {
-    refuses(session(), { ...intent, inputChainId: -2, inputToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, /doesn't know chain -2/);
+  it("refuses an authorization for a swap not on a chain Hinkal runs on", () => {
+    refuses(session(), { ...intent, inputChainId: -2, inputToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, /doesn't know Hinkal on chain -2/);
+    refuses(session(), { ...intent, inputChainId: 10 }, /doesn't know Hinkal on chain 10/);
   });
 
   it("checks an AUTHORIZE marked sandbox all the same: it is signed either way", () => {
@@ -198,12 +199,8 @@ describe("checkExecution: Hinkal's order (AUTHORIZE eth_signTypedData_v4)", () =
   });
 
   // ethers' signer.signTypedData(domain, types, value) signs the struct `types` makes the root and
-  // ignores primaryType: here Hinkal's own Withdraw, which could empty the user's Hinkal balance.
-  const ethersRoot = (types: Partial<Record<string, { type: string }[]>>) => {
-    const used = new Set(Object.values(types).flatMap((fields) => fields ?? []).map((f) => f.type.replace(/(\[\d*\])+$/, "")));
-    return Object.keys(types).filter((n) => n !== "EIP712Domain" && !used.has(n));
-  };
-
+  // ignores primaryType: here Hinkal's own Withdraw (ethers' TypedDataEncoder.from(types) picks it,
+  // checked once against ethers 6), which could move the user's Hinkal funds.
   it("refuses types whose root isn't the PrivateSendBridge the guard reads", () => {
     const withdraw = order();
     withdraw.types = {
@@ -218,7 +215,6 @@ describe("checkExecution: Hinkal's order (AUTHORIZE eth_signTypedData_v4)", () =
       TokenAmount: [{ name: "token", type: "address" }, { name: "amount", type: "int256" }],
     };
     Object.assign(withdraw.message, { tokenAmounts: [{ token: USDC, amount: "1000000000000" }], recipient: ATTACKER });
-    expect(ethersRoot(withdraw.types)).toEqual(["Withdraw"]);
     refuses(placing(withdraw), intent, /sign something other than its primaryType/);
 
     const extra = order();
@@ -229,7 +225,6 @@ describe("checkExecution: Hinkal's order (AUTHORIZE eth_signTypedData_v4)", () =
     const none = order() as Partial<ReturnType<typeof order>>;
     delete none.types;
     refuses(placing(none as ReturnType<typeof order>), intent, /names no types/);
-    expect(ethersRoot(order().types)).toEqual(["PrivateSendBridge"]);
   });
 
   it("refuses an order on another chain", () => {

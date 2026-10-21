@@ -310,6 +310,17 @@ function soleRoot(typed: Record<string, unknown>) {
 }
 
 /**
+ * For a kind the token itself verifies, the standard's own fields, as signed: a token's struct of
+ * the same name can sign others (DAI's Permit: holder, expiry, allowed: an unlimited allowance),
+ * which the check reads past. CoW, Permit2 and Hinkal fix their own field lists.
+ */
+function signsExactly(typed: Record<string, unknown>, fields: string[]) {
+  const listed = (typed.types as Record<string, unknown>)[String(typed.primaryType)];
+  const signed = Array.isArray(listed) ? listed.map((f) => (isRecord(f) ? `${f.name}:${f.type}` : "")) : [];
+  if (signed.join() !== fields.join()) fail("The signature request signs other fields than its kind's", { primaryType: typed.primaryType, signed });
+}
+
+/**
  * Signatures RAVN asks for, by kind: each bounded to the input token and amount. A kind not listed
  * here is refused: a signature can grant anything a transaction can.
  */
@@ -351,6 +362,7 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
 
   // The token's own permit (EIP-2612): an allowance like approve(), so the same rules.
   if (primaryType === "Permit" && verifying === ctx.token) {
+    signsExactly(typed, ["owner:address", "spender:address", "value:uint256", "nonce:uint256", "deadline:uint256"]);
     if (lower(message.owner) !== ctx.user) fail("The permit is for another wallet", { owner: message.owner });
     const spender = lower(message.spender);
     if (!ctx.known.has(spender) && !ctx.gated.has(spender)) fail("The permit names a spender RAVN doesn't route through", { spender });
@@ -362,6 +374,7 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
 
   // EIP-3009 (USDC and others): moves `value` once, from the user, to `to`.
   if ((primaryType === "ReceiveWithAuthorization" || primaryType === "TransferWithAuthorization") && verifying === ctx.token) {
+    signsExactly(typed, ["from:address", "to:address", "value:uint256", "validAfter:uint256", "validBefore:uint256", "nonce:bytes32"]);
     if (lower(message.from) !== ctx.user) fail("The authorization moves another wallet's funds", { from: message.from });
     if (big(message.value, "The authorization amount") > ctx.amount) fail("The authorization is for more than the swap's amount", { value: message.value });
     if (primaryType === "TransferWithAuthorization" && !ctx.known.has(lower(message.to))) {
@@ -380,13 +393,13 @@ const sameAddress = (a: unknown, b: string): boolean =>
 /**
  * An AUTHORIZE (Hinkal) moves nothing by itself, but each signature could if it were another. The
  * personal_sign must open a read-only Hinkal session. The typed data places one PrivateSendBridge
- * order, which Hinkal pays from the user's Hinkal balance (funds already there included): the input
- * token on the input chain, at most the input amount, to the one recipient quoted. Hinkal holds the
+ * order, which Hinkal pays from the deposit made for it: the input token on the input chain, at
+ * most the input amount, to the one recipient quoted. Hinkal holds the
  * order's route (`quote`) to that recipient by name, but runs its bridge call as given, which can't
  * be read here: as with any venue, what pays out once funds are inside isn't checked.
  */
 function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
-  if (!KNOWN_CONTRACTS[ctx.chainId]) fail(`This SDK version doesn't know chain ${ctx.chainId} for an authorization: update @ravnexchange/sdk`);
+  if (!HINKAL_CHAINS.includes(ctx.chainId)) fail(`This SDK version doesn't know Hinkal on chain ${ctx.chainId}: update @ravnexchange/sdk`);
   const sign: Record<string, unknown> = isRecord(execution.sign) ? execution.sign : fail("The authorization asks for nothing to sign");
   if (sign.method === "personal_sign") {
     const message = typeof sign.message === "string" ? sign.message : "";

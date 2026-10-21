@@ -246,6 +246,27 @@ describe("checkExecution: signatures", () => {
     typed.message.spender = ATTACKER;
     refuses(execution, intent, /sign something other than its primaryType/);
   });
+
+  it("refuses a token's own permit or EIP-3009 authorization signing other fields than the standard's", () => {
+    // DAI's Permit of the same name: the check would read owner/value, the wallet sign an unlimited,
+    // never-expiring allowance (allowed: true, expiry: 0) that DAI accepts.
+    const { execution, intent } = fixture("8453 token->native 0x_gasless");
+    const permit = (execution as Sig).approvalData! as { types: Record<string, unknown>; message: Record<string, unknown> };
+    permit.types.Permit = [
+      { name: "holder", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "nonce", type: "uint256" },
+      { name: "expiry", type: "uint256" },
+      { name: "allowed", type: "bool" },
+    ];
+    Object.assign(permit.message, { holder: intent.userAddress, expiry: 0, allowed: true });
+    refuses(execution, intent, /signs other fields than its kind's/);
+
+    const relay = fixture("8453 xchain token relay");
+    const auth = (relay.execution as Sig).typedData! as { types: Record<string, { name: string; type: string }[]> };
+    auth.types.ReceiveWithAuthorization = auth.types.ReceiveWithAuthorization.map((f) => (f.name === "value" ? { name: "amount", type: "uint256" } : f));
+    refuses(relay.execution, relay.intent, /signs other fields than its kind's/);
+  });
 });
 
 // ---- Solana: a minimal legacy transaction, built here --------------------------------------
