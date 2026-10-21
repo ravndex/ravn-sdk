@@ -53,7 +53,7 @@ const order = (token = USDC, amount = AMOUNT_IN.toString()) => ({
       { name: "recipients", type: "BridgeRecipientAmount[]" },
       { name: "quote", type: "string" },
     ],
-  },
+  } as Partial<Record<string, { name: string; type: string }[]>>,
   primaryType: "PrivateSendBridge",
   message: {
     nonce: "5d0c3a8e-0000-4000-8000-000000000001",
@@ -188,8 +188,48 @@ describe("checkExecution: Hinkal's order (AUTHORIZE eth_signTypedData_v4)", () =
   it("refuses typed data of another kind", () => {
     const t = order();
     t.primaryType = "Permit";
-    refuses(placing(t), intent, /kind this SDK doesn't recognise/);
+    refuses(placing(t), intent, /sign something other than its primaryType/);
+    const renamed = order();
+    renamed.types.Permit = renamed.types.PrivateSendBridge;
+    delete renamed.types.PrivateSendBridge;
+    renamed.primaryType = "Permit";
+    refuses(placing(renamed), intent, /kind this SDK doesn't recognise/);
     refuses(authorize({ method: "eth_signTypedData_v4" } as AuthorizeDTO["sign"]), intent, /typed data is missing/);
+  });
+
+  // ethers' signer.signTypedData(domain, types, value) signs the struct `types` makes the root and
+  // ignores primaryType: here Hinkal's own Withdraw, which could empty the user's Hinkal balance.
+  const ethersRoot = (types: Partial<Record<string, { type: string }[]>>) => {
+    const used = new Set(Object.values(types).flatMap((fields) => fields ?? []).map((f) => f.type.replace(/(\[\d*\])+$/, "")));
+    return Object.keys(types).filter((n) => n !== "EIP712Domain" && !used.has(n));
+  };
+
+  it("refuses types whose root isn't the PrivateSendBridge the guard reads", () => {
+    const withdraw = order();
+    withdraw.types = {
+      EIP712Domain: withdraw.types.EIP712Domain,
+      Withdraw: [
+        { name: "nonce", type: "string" },
+        { name: "sessionId", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "tokenAmounts", type: "TokenAmount[]" },
+        { name: "recipient", type: "string" },
+      ],
+      TokenAmount: [{ name: "token", type: "address" }, { name: "amount", type: "int256" }],
+    };
+    Object.assign(withdraw.message, { tokenAmounts: [{ token: USDC, amount: "1000000000000" }], recipient: ATTACKER });
+    expect(ethersRoot(withdraw.types)).toEqual(["Withdraw"]);
+    refuses(placing(withdraw), intent, /sign something other than its primaryType/);
+
+    const extra = order();
+    extra.types.Withdraw = withdraw.types.Withdraw;
+    extra.types.TokenAmount = withdraw.types.TokenAmount;
+    refuses(placing(extra), intent, /sign something other than its primaryType/);
+
+    const none = order() as Partial<ReturnType<typeof order>>;
+    delete none.types;
+    refuses(placing(none as ReturnType<typeof order>), intent, /names no types/);
+    expect(ethersRoot(order().types)).toEqual(["PrivateSendBridge"]);
   });
 
   it("refuses an order on another chain", () => {
@@ -226,14 +266,6 @@ describe("checkExecution: Hinkal's order (AUTHORIZE eth_signTypedData_v4)", () =
     refuses(placing(t), intent, /pays someone other than the destination/);
   });
 
-  it("refuses an order whose route pays someone else, or can't be read", () => {
-    for (const quote of [route(ATTACKER), route(DEST, ATTACKER), route(), "not json", JSON.stringify({ quote: {} })]) {
-      const t = order();
-      t.message.quote = quote;
-      refuses(placing(t), intent, /route pays someone other than the destination/);
-    }
-  });
-
   it("holds a Solana payout to its exact address", () => {
     const sol = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
     const t = order();
@@ -243,12 +275,12 @@ describe("checkExecution: Hinkal's order (AUTHORIZE eth_signTypedData_v4)", () =
     refuses(placing(t), { ...intent, destinationAddress: sol.toLowerCase() }, /pays someone other than the destination/);
   });
 
-  it("leaves the recipient to the caller who named no destination", () => {
-    const t = order();
-    t.message.recipients[0].recipient = ATTACKER;
-    t.message.quote = "unread";
+  it("holds an order to the user's own wallet when the caller named no destination", () => {
     const { destinationAddress: _, ...noDestination } = intent;
-    expect(() => checkExecution(placing(t), noDestination)).not.toThrow();
+    refuses(placing(order()), noDestination, /pays someone other than the destination/);
+    const own = order();
+    own.message.recipients[0].recipient = USER;
+    expect(() => checkExecution(placing(own), noDestination)).not.toThrow();
   });
 });
 
@@ -319,7 +351,8 @@ describe("checkExecution: Hinkal's deposit (TRANSACTION)", () => {
     const e = tokenSell();
     e.transaction.to = "0x4cd00e387622c35bddb9b4c962c136462338bc31";
     delete e.calls;
-    refuses(e, intent, /contract the swap doesn't call/);
+    // Hinkal is known only to a transaction that deposits into it.
+    refuses(e, intent, /spender RAVN doesn't route through/);
     const other = tokenSell();
     other.approval!.data = approve("0x4cd00e387622c35bddb9b4c962c136462338bc31", AMOUNT_IN);
     other.approval!.spender = "0x4cd00e387622c35bddb9b4c962c136462338bc31";
@@ -340,13 +373,40 @@ describe("checkExecution: Hinkal's deposit (TRANSACTION)", () => {
       expect(() => checkExecution(e, { ...nativeIntent, inputChainId: chainId })).not.toThrow();
     }
   });
+
+  it("never lets a signature name Hinkal: an EIP-3009 transfer to it would strand the funds outside any deposit", () => {
+    const transferTo = (to: string): ExecutionDTO => ({
+      executionType: "SIGNATURE",
+      quoteToken: "qt-2",
+      submit: { url: "https://app.ravn.exchange/api/v1/submit-signature" },
+      typedData: {
+        domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: USDC },
+        types: {
+          TransferWithAuthorization: [
+            { name: "from", type: "address" },
+            { name: "to", type: "address" },
+            { name: "value", type: "uint256" },
+            { name: "validAfter", type: "uint256" },
+            { name: "validBefore", type: "uint256" },
+            { name: "nonce", type: "bytes32" },
+          ],
+        },
+        primaryType: "TransferWithAuthorization",
+        message: { from: USER, to, value: "1000000", validAfter: "0", validBefore: "9999999999", nonce: `0x${"0".repeat(64)}` },
+      },
+    });
+    refuses(transferTo(HINKAL), intent, /pays an address RAVN doesn't route through/);
+    expect(() => checkExecution(transferTo("0x4cd00e387622c35bddb9b4c962c136462338bc31"), intent)).not.toThrow();
+  });
 });
 
-// The API, as executeAndTrack calls it: each /execute answers the next of `executes`.
+// The API, as executeAndTrack calls it: each /execute answers the next of `executes` (a function:
+// called as the answer is sent).
 function api(executes: unknown[]) {
   return vi.fn(async (url: string, _init?: RequestInit) => {
     const path = new URL(url).pathname.split("/").pop();
-    const data = path === "execute" ? executes.shift() : { status: "success", venue: "hinkal" };
+    const next = path === "execute" ? executes.shift() : { status: "success", venue: "hinkal" };
+    const data = typeof next === "function" ? next() : next;
     return { ok: true, status: 200, json: async () => ({ data }) };
   });
 }
@@ -480,6 +540,41 @@ describe("executeAndTrack: AUTHORIZE (Hinkal)", () => {
     expect(failure.message).toMatch(/more than 10 minutes/);
     expect(failure.partial.approvalTxHash).toBe(APPROVAL_HASH);
     expect(handlers.sendTransaction).toHaveBeenCalledOnce();
+  });
+
+  it("spends no approval gas on a deposit already too late to send", async () => {
+    const start = Date.now();
+    const late = () => {
+      vi.spyOn(Date, "now").mockReturnValue(start + 10 * 60_000 + 1_000);
+      return tokenSell();
+    };
+    const handlers = wallet([]);
+    const client = new RavnClient({ fetch: api([placing(order()), late]) as unknown as typeof fetch });
+    await expect(executeAndTrack(client, { quoteToken: "qt-1" }, handlers, { intent })).rejects.toThrow(/more than 10 minutes/);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("holds the window on a batched deposit too", async () => {
+    const steps: string[] = [];
+    const handlers = { ...wallet(steps), sendCalls: vi.fn(async () => [APPROVAL_HASH]) };
+    const start = Date.now();
+    const slowRead = vi.fn(async () => {
+      vi.spyOn(Date, "now").mockReturnValue(start + 10 * 60_000 + 1_000);
+      return false;
+    });
+    const client = new RavnClient({ fetch: api([placing(order()), tokenSell()]) as unknown as typeof fetch });
+    await expect(executeAndTrack(client, { quoteToken: "qt-1" }, { ...handlers, hasAllowance: slowRead }, { intent })).rejects.toThrow(/more than 10 minutes/);
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+  });
+
+  it("signs one session and one order per swap, never a second of either", async () => {
+    const handlers = wallet([]);
+    const client = new RavnClient({ fetch: api([session(), session()]) as unknown as typeof fetch });
+    await expect(executeAndTrack(client, { quoteToken: "qt-1" }, handlers, { intent })).rejects.toThrow(/second personal_sign/);
+    expect(handlers.signMessage).toHaveBeenCalledOnce();
+    const orders = new RavnClient({ fetch: api([placing(order()), placing(order())]) as unknown as typeof fetch });
+    await expect(executeAndTrack(orders, { quoteToken: "qt-1" }, handlers, { intent })).rejects.toThrow(/second eth_signTypedData_v4/);
+    expect(handlers.signTypedData).toHaveBeenCalledOnce();
   });
 
   it("keeps no such window on a swap that needed no authorization", async () => {

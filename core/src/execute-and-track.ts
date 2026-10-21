@@ -385,8 +385,12 @@ export async function executeAndTrack(
     // own), until the swap itself comes back. It moves no funds: an error here comes as it is.
     let sendBy: number | undefined;
     const { idempotencyKey: _first, ...again } = params;
+    // One session and one order per swap: a server asking again is collecting more of either.
+    const signed = new Set<string>();
     while (answer.executionType === "AUTHORIZE") {
       const { authorization, sign, expiresAt } = answer;
+      if (signed.has(sign.method)) throw new Error(`executeAndTrack: RAVN asked for a second ${sign.method} for this swap, which it never needs: nothing more was signed`);
+      signed.add(sign.method);
       const live = () => {
         if (!(Date.parse(expiresAt) > Date.now())) throw new Error("executeAndTrack: the authorization expired before it was signed: request a fresh quote");
       };
@@ -406,9 +410,10 @@ export async function executeAndTrack(
       }
       checkpoint();
       live();
+      // From here Hinkal may place the order: its route goes stale, and a deposit paying a stale one is stuck.
+      const placed = Date.now();
       answer = await execute({ ...again, authorization, signature });
-      // Hinkal's order is placed: its route goes stale, and a deposit paying a stale one is stuck.
-      sendBy = Date.now() + DEPOSIT_WINDOW_MS;
+      sendBy = placed + DEPOSIT_WINDOW_MS;
     }
     const execution = answer;
     const depositWindow = () => {
@@ -547,6 +552,8 @@ export async function executeAndTrack(
       // proves nothing on those chains), never at a venue that can't take a batch (THORChain, Bebop,
       // a two-hop route). An API answering without `batch` (before calls + batch): a token fee only.
       const batchFee = execution.batch ?? BigInt(feeTx?.value ?? "1") === 0n;
+      // Before the approval too: no gas spent on a deposit that can't go out.
+      depositWindow();
       if (feeTx && batchFee && handlers.sendCalls) {
         // Atomic, so neither the fee nor the swap's approval outlives a swap that reverted.
         const batchApproval = await neededApproval(approval);

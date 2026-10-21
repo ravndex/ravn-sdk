@@ -221,13 +221,30 @@ describe("checkExecution: signatures", () => {
 
   it("refuses a kind of signature it doesn't know, and one for another chain", () => {
     const a = fixture("8453 token->native cow");
-    (a.execution as Sig).typedData!.primaryType = "PermitBatch";
+    const typed = (a.execution as Sig).typedData! as { primaryType: string; types: Record<string, unknown> };
+    typed.primaryType = "PermitBatch";
+    refuses(a.execution, a.intent, /sign something other than its primaryType/);
+    typed.types.PermitBatch = typed.types.Order;
+    delete typed.types.Order;
     refuses(a.execution, a.intent, /kind this SDK doesn't recognise/);
     const b = fixture("8453 token->native cow");
     ((b.execution as Sig).typedData!.domain as Record<string, unknown>).chainId = 1;
     refuses(b.execution, b.intent, /not the swap's chain/);
     ((b.execution as Sig).typedData!.domain as Record<string, unknown>).chainId = null;
     refuses(b.execution, b.intent, /names no chain/);
+  });
+
+  it("refuses types that make a wallet sign another struct than primaryType (ethers works it out from types)", () => {
+    // Claimed as 0x gasless's one-time Permit2 transfer; ethers would sign an unlimited PermitSingle allowance.
+    const { execution, intent } = fixture("8453 token->native 0x_gasless");
+    const typed = (execution as Sig).typedData! as { types: Record<string, unknown>; message: Record<string, unknown> };
+    typed.types = {
+      PermitSingle: [{ name: "details", type: "PermitDetails" }, { name: "spender", type: "address" }, { name: "sigDeadline", type: "uint256" }],
+      PermitDetails: [{ name: "token", type: "address" }, { name: "amount", type: "uint160" }, { name: "expiration", type: "uint48" }, { name: "nonce", type: "uint48" }],
+    };
+    typed.message.details = { token: intent.inputToken, amount: MAX.toString(), expiration: "281474976710655", nonce: "0" };
+    typed.message.spender = ATTACKER;
+    refuses(execution, intent, /sign something other than its primaryType/);
   });
 });
 

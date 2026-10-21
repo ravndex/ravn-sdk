@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO } from "./types";
-import { COW_SETTLEMENT, HINKAL, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -292,11 +292,30 @@ function checkApproval(ctx: Ctx, approval: ApprovalDTO): bigint {
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /**
+ * What a wallet signs is the struct `types` makes the root, whatever `primaryType` says: ethers'
+ * signTypedData(domain, types, value) works it out from `types` alone. So `primaryType` must be the
+ * one struct no other references; its fields are then what the verifier (the token, Permit2, CoW,
+ * Hinkal) rebuilds for itself, or the signature is no good there.
+ */
+function soleRoot(typed: Record<string, unknown>) {
+  const types = isRecord(typed.types) ? typed.types : fail("The signature request names no types");
+  const structs = Object.keys(types).filter((name) => name !== "EIP712Domain");
+  const used = new Set(
+    structs.flatMap((name) => (Array.isArray(types[name]) ? (types[name] as unknown[]) : []).map((f) => String(isRecord(f) ? f.type : "").replace(/(\[\d*\])+$/, "")))
+  );
+  const roots = structs.filter((name) => !used.has(name));
+  if (roots.length !== 1 || roots[0] !== typed.primaryType) {
+    fail("The signature request's types sign something other than its primaryType", { primaryType: typed.primaryType, roots });
+  }
+}
+
+/**
  * Signatures RAVN asks for, by kind: each bounded to the input token and amount. A kind not listed
  * here is refused: a signature can grant anything a transaction can.
  */
 function checkTypedData(ctx: Ctx, typed: unknown) {
   if (!isRecord(typed)) fail("The signature request isn't typed data");
+  soleRoot(typed);
   const domain = isRecord(typed.domain) ? typed.domain : {};
   const message = isRecord(typed.message) ? typed.message : {};
   const primaryType = typed.primaryType;
@@ -362,8 +381,9 @@ const sameAddress = (a: unknown, b: string): boolean =>
  * An AUTHORIZE (Hinkal) moves nothing by itself, but each signature could if it were another. The
  * personal_sign must open a read-only Hinkal session. The typed data places one PrivateSendBridge
  * order, which Hinkal pays from the user's Hinkal balance (funds already there included): the input
- * token on the input chain, at most the input amount, to the one recipient quoted, by a route paying
- * only it (Hinkal runs the order's `quote` as given).
+ * token on the input chain, at most the input amount, to the one recipient quoted. Hinkal holds the
+ * order's route (`quote`) to that recipient by name, but runs its bridge call as given, which can't
+ * be read here: as with any venue, what pays out once funds are inside isn't checked.
  */
 function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
   if (!KNOWN_CONTRACTS[ctx.chainId]) fail(`This SDK version doesn't know chain ${ctx.chainId} for an authorization: update @ravnexchange/sdk`);
@@ -376,6 +396,7 @@ function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
   }
   if (sign.method !== "eth_signTypedData_v4") fail("RAVN asked for a signature of a kind this SDK doesn't recognise", { method: sign.method });
   const typed = isRecord(sign.typedData) ? sign.typedData : fail("The authorization's typed data is missing");
+  soleRoot(typed);
   const domain = isRecord(typed.domain) ? typed.domain : {};
   const message = isRecord(typed.message) ? typed.message : {};
   // Hinkal's domain names no contract: a field more would make the signature good somewhere else.
@@ -392,17 +413,9 @@ function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
   const only: unknown = recipients[0];
   if (recipients.length !== 1 || !isRecord(only)) fail("The order doesn't pay exactly one recipient", { count: recipients.length });
   if (big(only.amount, "The order's amount") > ctx.amount) fail("The order sends more than the swap's amount", { amount: only.amount });
-  const to = intent.destinationAddress;
-  if (to === undefined) return;
-  if (!sameAddress(only.recipient, to)) fail("The order pays someone other than the destination address", { recipient: only.recipient });
-  let legs: unknown;
-  try {
-    legs = JSON.parse(String(message.quote)).quote.lifiRecipients;
-  } catch {
-    // Unreadable: the route can't be held to the recipient.
-  }
-  if (!Array.isArray(legs) || legs.length === 0 || !legs.every((l) => isRecord(l) && sameAddress(l.recipientAddress, to))) {
-    fail("The order's route pays someone other than the destination address");
+  // No destination asked: the user's own wallet, as for any order.
+  if (!sameAddress(only.recipient, intent.destinationAddress ?? intent.userAddress)) {
+    fail("The order pays someone other than the destination address", { recipient: only.recipient });
   }
 }
 
@@ -442,6 +455,8 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
   if (type === "TRANSACTION" && execution.executionType === "TRANSACTION") {
     if (execution.transaction.serialized) fail("A Solana transaction was returned for an EVM swap");
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
+    // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
+    if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
     // The input token the swap may take (approved, or pulled by 0x: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;

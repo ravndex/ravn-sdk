@@ -22,16 +22,27 @@ swap. Signing moves no funds: the deposit transaction that follows does.
   "This signature can also be used to submit transactions.", is refused: its key can move funds). The
   typed data must be a `PrivateSendBridge` order in Hinkal's own domain (`name: "Hinkal Enclave"` and the
   input chain, no contract), on the input chain, for the input token (the coin as the zero address),
-  paying exactly one recipient at most the input amount: your `destinationAddress` when the quote named
-  one, by a route (`quote`) whose every leg pays it. An AUTHORIZE is checked even when marked sandbox.
-- Hinkal.sol (`0x7cb6…Cfa4`) as a known contract on Ethereum, Base, Arbitrum, Polygon, BNB Chain and
-  Robinhood Chain, callable only through its deposit (`prooflessDeposit`) of the input token alone, at
-  most the input amount; its approval must be for Hinkal, and a token sell sends no coin.
+  paying exactly one recipient at most the input amount: your `destinationAddress` (without one, the
+  user's own wallet). An AUTHORIZE is checked even when marked sandbox. Not checked: the bridge call in
+  the order's route (`quote`), which Hinkal runs as given; as with any venue, what pays out once funds
+  are inside it (README, "What that guarantees").
+- Hinkal.sol (`0x7cb6…Cfa4`) on Ethereum, Base, Arbitrum, Polygon, BNB Chain and Robinhood Chain, known
+  only to a TRANSACTION depositing into it (`prooflessDeposit` of the input token alone, at most the
+  input amount, read from the calldata) and to its approval; never to a signature.
 - **`executeAndTrack()` signs each step itself**: `signMessage` for the session, `signTypedData` for the
   order (after `switchChain(inputChainId)`, when you pass it), each answer an `execute()` of its own, then
-  sends the approval, the deposit and RAVN's fee as for any TRANSACTION. It refuses to sign or answer a
-  step past its `expiresAt`, and to send the deposit more than 10 minutes after the order was placed.
-  New optional handlers `signMessage(message)` and `switchChain(chainId)`.
+  sends the approval, the deposit and RAVN's fee as for any TRANSACTION. One session and one order per
+  swap: a second of either is refused. It refuses to sign or answer a step past its `expiresAt`, and to
+  send the approval or the deposit more than 10 minutes after the order was asked for. New optional
+  handlers `signMessage(message)` and `switchChain(chainId)`.
+
+### Fixed
+
+- **Typed data whose `types` sign another struct than its `primaryType` is refused**, on every signature
+  (SIGNATURE executions too). ethers' `signer.signTypedData(domain, types, value)` ignores `primaryType`
+  and signs the struct `types` makes the root, so a tampered answer could pass the check as a one-time
+  Permit2 transfer while ethers signed an unlimited Permit2 allowance to anyone. `primaryType` must now
+  be the one struct in `types` no other references. Every real answer from RAVN's venues already is.
 
 ### Changed
 
