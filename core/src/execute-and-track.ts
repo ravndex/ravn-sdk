@@ -1,4 +1,5 @@
 import type { RavnClient } from "./client";
+import type { SwapIntent } from "./guard";
 import { RavnApiError } from "./types";
 import type { ApprovalDTO, DepositFeeDTO, ExecuteParams, ExecutionDTO, StatusDTO } from "./types";
 import { isPollingTerminal } from "./polling";
@@ -119,6 +120,9 @@ export interface ExecuteAndTrackOptions {
   /** Called with every hash the moment it exists (approval, swap with its statusRef, fee) and with
    * every status poll. An error it throws is ignored: it never stops a swap that's out. */
   onProgress?(progress: ExecuteAndTrackProgress): void;
+  /** What your user asked to swap, for a quoteToken this client didn't fetch (see RavnClient.execute):
+   * the execution is checked against it before anything reaches the wallet. */
+  intent?: SwapIntent;
 }
 
 export interface ExecuteAndTrackResult {
@@ -303,7 +307,8 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
  * answer was lost or is still being built, up to 4 tries; submitSignature only when rate limited),
  * waiting the API's retryAfterSec. Once anything
  * is sent, it rejects only with an ExecuteAndTrackError carrying every hash; `onProgress` hears
- * each one first.
+ * each one first. An execution that fails the client's check (UnsafeExecutionError, see
+ * RavnClient.execute) rejects before any handler is called: nothing reaches the wallet.
  */
 export async function executeAndTrack(
   client: RavnClient,
@@ -362,7 +367,7 @@ export async function executeAndTrack(
     // limit is repeated. A BUILD_FAILED wants a fresh quote either way.
     const key = params.idempotencyKey ?? globalThis.crypto?.randomUUID?.();
     const execution = await withRetries(
-      () => orAbort(client.execute({ ...params, ...(key ? { idempotencyKey: key } : {}) }), stop.signal),
+      () => orAbort(client.execute({ ...params, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent }), stop.signal),
       key ? answerLost : rateLimited,
       key ? EXECUTE_ATTEMPTS : MAX_ATTEMPTS
     );

@@ -31,7 +31,7 @@ describe("RavnClient", () => {
     vi.stubGlobal("fetch", browserFetch);
     try {
       await expect(new RavnClient().getChains()).resolves.toEqual([]);
-      await expect(new RavnClient({ fetch: browserFetch }).getChains()).resolves.toEqual([]);
+      await expect(new RavnClient({ guard: false, fetch: browserFetch }).getChains()).resolves.toEqual([]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -39,7 +39,7 @@ describe("RavnClient", () => {
 
   it("sends x-api-key and unwraps `data` on success", async () => {
     const fetchImpl = fakeFetch(200, { data: { quoteToken: "abc" }, meta: { requestId: "r1", version: "v1" } });
-    const client = new RavnClient({ apiKey: "test-key", fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, apiKey: "test-key", fetch: fetchImpl });
 
     const result = await client.execute({ quoteToken: "abc" });
 
@@ -51,7 +51,7 @@ describe("RavnClient", () => {
 
   it("POSTs status as a JSON body, not a query string (a 2-hop quoteToken can 431 a GET)", async () => {
     const fetchImpl = fakeFetch(200, { data: { status: "success", venue: "relay" } });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     await client.getStatus("tok", "0xref");
 
@@ -63,14 +63,14 @@ describe("RavnClient", () => {
 
   it("sends txHash with status when given (a Rift fee payment or a 2-hop hop-1 tx)", async () => {
     const fetchImpl = fakeFetch(200, { data: { status: "success", venue: "rift" } });
-    await new RavnClient({ fetch: fetchImpl }).getStatus("tok", "order-id", "0xfee");
+    await new RavnClient({ guard: false, fetch: fetchImpl }).getStatus("tok", "order-id", "0xfee");
     const [, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(JSON.parse(init.body as string)).toEqual({ quoteToken: "tok", ref: "order-id", txHash: "0xfee" });
   });
 
   it("omits x-api-key when no key is configured (anonymous tier)", async () => {
     const fetchImpl = fakeFetch(200, { data: {} });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     await client.getQuote({
       inputChainId: 1,
@@ -90,7 +90,7 @@ describe("RavnClient", () => {
       error: { code: "QUOTE_EXPIRED", message: "quoteToken has expired" },
       meta: { requestId: "r2", version: "v1" },
     });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     await expect(client.execute({ quoteToken: "stale" })).rejects.toMatchObject({
       code: "QUOTE_EXPIRED",
@@ -100,7 +100,7 @@ describe("RavnClient", () => {
 
   it("is an instanceof RavnApiError so integrators can narrow with instanceof", async () => {
     const fetchImpl = fakeFetch(400, { error: { code: "INVALID_REQUEST", message: "bad" } });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     try {
       await client.getStatus("q", "ref");
@@ -118,14 +118,14 @@ describe("RavnClient", () => {
         throw new SyntaxError("Unexpected token < in JSON");
       },
     })) as unknown as typeof fetch;
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     await expect(client.execute({ quoteToken: "x" })).rejects.toBeInstanceOf(RavnApiError);
   });
 
   it("getTokens sends chainId as a query param and unwraps the array", async () => {
     const fetchImpl = fakeFetch(200, { data: [{ symbol: "USDC" }] });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     const tokens = await client.getTokens(8453);
 
@@ -136,7 +136,7 @@ describe("RavnClient", () => {
 
   it("getChains unwraps the array with no query params", async () => {
     const fetchImpl = fakeFetch(200, { data: [{ chainId: 1, name: "Ethereum" }] });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     const chains = await client.getChains();
 
@@ -147,7 +147,7 @@ describe("RavnClient", () => {
 
   it("respects a custom baseUrl and strips a trailing slash", async () => {
     const fetchImpl = fakeFetch(200, { data: {} });
-    const client = new RavnClient({ baseUrl: "http://localhost:3000/api/v1/", fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, baseUrl: "http://localhost:3000/api/v1/", fetch: fetchImpl });
 
     await client.execute({ quoteToken: "x" });
 
@@ -157,7 +157,7 @@ describe("RavnClient", () => {
 
   it("sends execute's idempotencyKey as the Idempotency-Key header, not in the body", async () => {
     const fetchImpl = fakeFetch(200, { data: {} });
-    const client = new RavnClient({ apiKey: "rvn_live_x", fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, apiKey: "rvn_live_x", fetch: fetchImpl });
 
     await client.execute({ quoteToken: "x", idempotencyKey: "swap-attempt-1" });
 
@@ -168,7 +168,7 @@ describe("RavnClient", () => {
 
   it("refuses an idempotencyKey RAVN would refuse, without sending anything", async () => {
     const fetchImpl = fakeFetch(200, { data: {} });
-    const client = new RavnClient({ fetch: fetchImpl });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
 
     for (const bad of ["a b", "a\nb", "ключ", "", "k".repeat(256)]) {
       await expect(client.execute({ quoteToken: "x", idempotencyKey: bad })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
@@ -181,7 +181,7 @@ describe("RavnClient", () => {
 describe("RavnClient errors", () => {
   it("a network failure is a RavnApiError (NETWORK_ERROR), never a raw fetch TypeError", async () => {
     const cause = new TypeError("fetch failed");
-    const client = new RavnClient({ fetch: vi.fn(async () => { throw cause; }) as unknown as typeof fetch });
+    const client = new RavnClient({ guard: false, fetch: vi.fn(async () => { throw cause; }) as unknown as typeof fetch });
 
     const err = await client.getChains().catch((e) => e);
 
@@ -193,8 +193,8 @@ describe("RavnClient errors", () => {
     const limited = fakeFetch(429, { error: { code: "RATE_LIMITED", message: "slow down", details: { retryAfterSec: 7 } } });
     const notJson = vi.fn(async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError("<html>"); } })) as unknown as typeof fetch;
 
-    const err = await new RavnClient({ fetch: limited }).getStatus("t", "r").catch((e) => e);
-    const gateway = await new RavnClient({ fetch: notJson }).getStatus("t", "r").catch((e) => e);
+    const err = await new RavnClient({ guard: false, fetch: limited }).getStatus("t", "r").catch((e) => e);
+    const gateway = await new RavnClient({ guard: false, fetch: notJson }).getStatus("t", "r").catch((e) => e);
 
     expect(err).toMatchObject({ code: "RATE_LIMITED", status: 429, retryAfterSec: 7 });
     expect(gateway).toMatchObject({ code: "INTERNAL", status: 502, retryAfterSec: undefined });
@@ -208,7 +208,7 @@ describe("RavnClient errors", () => {
       return { ok: true, status: 200, json: async () => ({ data: { status: "success", venue: "relay" } }) };
     }) as unknown as typeof fetch;
 
-    const err = await new RavnClient({ fetch: fetchImpl }).getStatus("t", "r", undefined, { signal: controller.signal }).catch((e) => e);
+    const err = await new RavnClient({ guard: false, fetch: fetchImpl }).getStatus("t", "r", undefined, { signal: controller.signal }).catch((e) => e);
 
     expect(err).toBe(controller.signal.reason);
   });
@@ -217,7 +217,7 @@ describe("RavnClient errors", () => {
 describe("getQuote timeoutMs", () => {
   it("sends the race's time limit when given (ravn-mvp #418; older APIs ignore it)", async () => {
     const fetchImpl = fakeFetch(200, { data: {} });
-    await new RavnClient({ fetch: fetchImpl }).getQuote({
+    await new RavnClient({ guard: false, fetch: fetchImpl }).getQuote({
       inputChainId: 1, outputChainId: 8453, inputToken: "0xa", outputToken: "0xb", inputAmount: "1", userAddress: "0xu", timeoutMs: 3_000,
     });
     const [, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];

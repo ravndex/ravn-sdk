@@ -3,7 +3,7 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.2.7, @ravnexchange/react 0.1.8
+## @ravnexchange/sdk 0.3.1, @ravnexchange/react 0.1.8
 
 RAVN keys now come as a pair: a public key (`rvn_live_…`) for your app, browsers included, and a
 secret key (`rvn_sk_…`) for your server, the only one that changes your fee, payout addresses or
@@ -16,6 +16,62 @@ webhook. See the API's Authentication page.
 - `RavnErrorCode` gains `FORBIDDEN` (403): a public key where the secret key is needed, or a public
   key used from a site outside its allowed origins.
 - **react:** `useRavnStatus` stops polling on `FORBIDDEN`, as on `UNAUTHORIZED`: retrying can't fix it.
+
+## @ravnexchange/sdk 0.3.0
+
+`execute()` checks what RAVN returns before it can reach a wallet. On EVM chains and Bitcoin, a
+compromised or tampered answer can no longer use your integration to move more than the amount being
+swapped (an allowance the user already gave the same venue contract elsewhere excepted). On Solana it
+holds transactions to RAVN's venue programs and checks what their system and token instructions move;
+a venue program's own instruction isn't read (see the README).
+
+### Added
+
+- **The check** (`checkExecution`, run by `RavnClient.execute`, so by `executeAndTrack` and
+  `useRavnExecute` too): every transaction, approval, signature, Solana transaction and Bitcoin PSBT
+  is held to the input token on the input chain, at most the input amount, venue contracts and
+  programs RAVN routes through (a list per chain in this release), and RAVN's fee at most 1% to RAVN's
+  own wallet. Throws `UnsafeExecutionError` (`code: "UNSAFE_EXECUTION"`) before anything is sent or
+  signed. See the README's "The check before the wallet".
+- `RavnClientConfig.guard`: `{ allowContracts }` to accept a venue's new contract before an SDK
+  update, or `false` to turn the check off.
+- `execute(params, { intent })` and `ExecuteAndTrackOptions.intent`: what the user asked to swap, for a
+  quoteToken this client didn't fetch. Types `SwapIntent`, `GuardOptions`.
+
+### Changed
+
+- **`execute()` refuses a quoteToken this client didn't fetch unless you pass `intent`**, before calling
+  the API. Quotes from `getQuote`/`getQuoteStream` (and their alternatives) on the same client are
+  remembered, so the usual quote-then-execute flow needs no change. It also refuses a quote whose
+  input token was given as a symbol rather than an address, and a quoteToken RAVN returned for two
+  different requests.
+
+## @ravnexchange/sdk 0.2.7
+
+Every quote and route says what RAVN counts on it delivering, and each alternative whether RAVN
+could have picked it, so you can choose a route the way RAVN does.
+
+### Added
+
+- **`expectedOutputAmount`** on `QuoteDTO`, `AlternativeQuoteDTO` and `PriceDTO`: the output
+  RAVN counts on (base units). It equals the output for every quote that holds a minimum; for one
+  that doesn't (`slippage.noMinimum`, Rift) it is the output less `slippage.expectedShortfallBps`.
+  RAVN ranks on it less gas, so the order `alternatives` arrive in stays the closest match to RAVN's.
+  Sorting on `outputAmount` instead can put a no-minimum route on top that RAVN ranked lower.
+- **`slippage.expectedShortfallBps`** on `SlippageDTO`: that shortfall in bps, by swap size and
+  whether both tokens are on RAVN's list (memes count as unlisted): 5 for a $1k+ swap of listed
+  tokens, up to 100 under $100; 0 when the quote holds a minimum.
+- **`pickable`** on `AlternativeQuoteDTO` (not `PriceDTO`): false for a preview-only price (while an executable route exists) and for a
+  no-minimum route quoting more than 1% above every route that holds one, which RAVN lists but never
+  picks. To choose a route yourself, pick among `pickable` ones on `expectedOutputAmount`.
+
+### Upgrading
+
+- The new fields are required on the types, so test fixtures typed as `QuoteDTO`,
+  `AlternativeQuoteDTO`, `PriceDTO` or `SlippageDTO` need them added. Nothing else changes.
+- The API sends the new fields from the matching ravn-mvp release. A client that validates
+  responses strictly against an older copy of `openapi.json` (which sets `additionalProperties:
+  false`) must refresh it.
 
 ## @ravnexchange/sdk 0.2.6
 

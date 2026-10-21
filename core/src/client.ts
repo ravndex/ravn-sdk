@@ -1,4 +1,6 @@
-import { RavnApiError } from "./types";
+import { checkExecution } from "./guard";
+import type { GuardOptions, SwapIntent } from "./guard";
+import { RavnApiError, UnsafeExecutionError } from "./types";
 import type {
   ChainDTO,
   ExecuteParams,
@@ -22,7 +24,24 @@ export interface RavnClientConfig {
   /** Swap in your own fetch (e.g. for React Native, or a test double). Defaults to global fetch.
    * Called as a plain function (no `this`): pass fetch itself, or a plain or bound wrapper. */
   fetch?: typeof fetch;
+  /**
+   * execute() checks every execution RAVN returns against what your user asked to swap, before it
+   * can reach a wallet (see checkExecution): only RAVN's venue contracts, at most the input amount,
+   * RAVN's fee at most 1% and only to RAVN. On by default; options here (allowContracts) tune it.
+   * `false` turns it off: then nothing stands between a compromised or tampered answer and your
+   * user's wallet but the wallet's own preview.
+   */
+  guard?: false | GuardOptions;
 }
+
+/** Quotes remembered for execute()'s check: plenty for any one user's session. */
+const MAX_REMEMBERED_QUOTES = 1_000;
+/** A quoteToken RAVN returned for two different requests (see remember). */
+const CONFLICT = Symbol("conflicting quote requests");
+/** Tokens remembered from one answer (RAVN's race has ~20 venues): more can't flush the memory. */
+const MAX_TOKENS_PER_ANSWER = 64;
+/** Every token seen, kept far longer than the intents, so one evicted and seen again is a conflict. */
+const MAX_SEEN_TOKENS = 50_000;
 
 interface Envelope<T> {
   data?: T;
@@ -47,6 +66,11 @@ export class RavnClient {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly guard: false | GuardOptions;
+  // What each quoteToken this client fetched was asked for, from the caller's own request: the
+  // independent side of execute()'s check, since RAVN's answers are what it checks.
+  private readonly intents = new Map<string, SwapIntent | typeof CONFLICT>();
+  private readonly seen = new Set<string>();
 
   constructor(config: RavnClientConfig = {}) {
     if (config.apiKey?.startsWith("rvn_sk_") && typeof window !== "undefined" && typeof document !== "undefined") {
@@ -57,6 +81,38 @@ export class RavnClient {
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     this.fetchImpl = config.fetch ?? globalThis.fetch;
+    this.guard = config.guard ?? {};
+  }
+
+  private remember(params: GetQuoteParams, quote: QuoteDTO): QuoteDTO {
+    const intent: SwapIntent = {
+      inputChainId: params.inputChainId,
+      inputToken: params.inputToken,
+      inputAmount: params.inputAmount,
+      userAddress: params.userAddress,
+      ...(params.destinationAddress ? { destinationAddress: params.destinationAddress } : {}),
+      ...(params.sandbox ? { sandbox: true } : {}),
+    };
+    const key = JSON.stringify(intent);
+    const tokens = [quote?.quoteToken, ...(Array.isArray(quote?.alternatives) ? quote.alternatives : []).map((a) => a?.quoteToken)]
+      .filter((t): t is string => typeof t === "string")
+      .slice(0, MAX_TOKENS_PER_ANSWER);
+    for (const token of tokens) {
+      // A token RAVN hands back for two different requests can't be checked against either: an
+      // answer could otherwise rebind an earlier quote to a later request. One seen before and no
+      // longer remembered counts as two.
+      const held = this.intents.get(token);
+      const conflict = held === undefined ? this.seen.has(token) : held === CONFLICT || JSON.stringify(held) !== key;
+      this.intents.delete(token);
+      this.intents.set(token, conflict ? CONFLICT : intent);
+      this.seen.delete(token);
+      this.seen.add(token);
+    }
+    // ponytail: a token seen 50,000 tokens ago can be rebound (~800 answers flushing 64 each); a
+    // persistent store if a long-lived client ever needs more.
+    while (this.intents.size > MAX_REMEMBERED_QUOTES) this.intents.delete(this.intents.keys().next().value as string);
+    while (this.seen.size > MAX_SEEN_TOKENS) this.seen.delete(this.seen.values().next().value as string);
+    return quote;
   }
 
   private async send(path: string, init: RequestInit): Promise<Response> {
@@ -100,8 +156,8 @@ export class RavnClient {
   }
 
   /** POST /v1/quote: omitting destinationAddress/refundAddress returns a preview-only quote (see QuoteDTO.executable). */
-  getQuote(params: GetQuoteParams): Promise<QuoteDTO> {
-    return this.request<QuoteDTO>("/quote", { method: "POST", body: JSON.stringify(params) });
+  async getQuote(params: GetQuoteParams): Promise<QuoteDTO> {
+    return this.remember(params, await this.request<QuoteDTO>("/quote", { method: "POST", body: JSON.stringify(params) }));
   }
 
   /**
@@ -114,7 +170,7 @@ export class RavnClient {
     const init = { method: "POST", body: JSON.stringify({ ...params, stream: true }), signal: options.signal };
     const res = await this.send("/quote", init);
     if (!res.ok || !(res.headers?.get?.("content-type") ?? "").includes("ndjson")) {
-      return this.unwrap<QuoteDTO>("/quote", res, options.signal);
+      return this.remember(params, await this.unwrap<QuoteDTO>("/quote", res, options.signal));
     }
     let done: (Envelope<QuoteDTO> & { status?: number }) | undefined;
     let garbled = false;
@@ -170,22 +226,39 @@ export class RavnClient {
       throw new RavnApiError("NETWORK_ERROR", "Quote stream ended before its answer", undefined, undefined, { status: res.status });
     }
     const status = done.status ?? res.status;
-    return envelopeData(done, status >= 200 && status < 300, status);
+    return this.remember(params, envelopeData(done, status >= 200 && status < 300, status));
   }
 
-  /** POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT). */
-  execute({ idempotencyKey, ...params }: ExecuteParams): Promise<ExecutionDTO> {
+  /**
+   * POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT).
+   * Throws UnsafeExecutionError, before anything reaches a wallet, when the answer could move more
+   * than the quote asked (see RavnClientConfig.guard). For a quoteToken another client or your
+   * server fetched, pass `intent`: what your user asked to swap, from your own records.
+   */
+  async execute({ idempotencyKey, ...params }: ExecuteParams, options: { intent?: SwapIntent } = {}): Promise<ExecutionDTO> {
     // The API's own rule: anything else fetch refuses to send (a reported NETWORK_ERROR) or RAVN answers 400.
     if (idempotencyKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
-      return Promise.reject(
-        new RavnApiError("INVALID_REQUEST", "idempotencyKey must be 1–255 printable ASCII characters, no spaces", undefined, undefined)
+      throw new RavnApiError("INVALID_REQUEST", "idempotencyKey must be 1–255 printable ASCII characters, no spaces", undefined, undefined);
+    }
+    const remembered = this.intents.get(params.quoteToken);
+    if (this.guard !== false && !options.intent && remembered === CONFLICT) {
+      throw new UnsafeExecutionError("RAVN returned this quoteToken for two different quote requests, so execute() can't tell which one to check it against");
+    }
+    const intent = options.intent ?? (remembered === CONFLICT ? undefined : remembered);
+    if (this.guard !== false && !intent) {
+      throw new UnsafeExecutionError(
+        "execute() can't check this quote: this client didn't fetch it. Pass { intent } (what your user asked to swap) as execute's second argument"
       );
     }
-    return this.request<ExecutionDTO>("/execute", {
+    const execution = await this.request<ExecutionDTO>("/execute", {
       method: "POST",
       body: JSON.stringify(params),
       ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
     });
+    if (this.guard !== false && intent) {
+      checkExecution(execution, params.destinationAddress ? { ...intent, destinationAddress: params.destinationAddress } : intent, this.guard);
+    }
+    return execution;
   }
 
   /** POST /v1/submit-signature: for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */
