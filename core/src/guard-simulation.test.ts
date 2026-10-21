@@ -60,7 +60,13 @@ const refuses = async (f: ReturnType<typeof fixture>, message: RegExp) => {
   expect((err as Error).message).toMatch(message);
 };
 const userBalance = (s: Simulation, mint: string) => s.postTokenBalances.find((b) => b.owner === USER && b.mint === mint)!;
-const inner = (f: ReturnType<typeof fixture>, ...instructions: Record<string, unknown>[]) => f.simulation.innerInstructions.push({ index: 0, instructions });
+// Adds calls as if top-level instruction `index` made them (after any it already made).
+const innerAt = (f: ReturnType<typeof fixture>, index: number, ...instructions: Record<string, unknown>[]) => {
+  const group = f.simulation.innerInstructions.find((g) => g.index === index);
+  if (group) group.instructions.push(...instructions);
+  else f.simulation.innerInstructions.push({ index, instructions });
+};
+const inner = (f: ReturnType<typeof fixture>, ...instructions: Record<string, unknown>[]) => innerAt(f, 0, ...instructions);
 const tokenTransfer = (source: string, destination: string, amount: bigint, authority = USER) => ({ programId: TOKEN, parsed: { type: "transfer", info: { source, destination, amount: amount.toString(), authority } } });
 
 describe("verifyExecution simulates Solana transactions on the integrator's RPC", () => {
@@ -126,6 +132,47 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
     await refuses(f, /more of the token than the swap's amount/);
   });
 
+  it("never lets a later instruction spend what an earlier one paid in: a pool can pay less on chain", async () => {
+    // Step 0 pays 995 USDC into the user's account (a pool's payout: on chain it can be nothing);
+    // step 1 sends 995 out at a fixed amount, which would then come out of the user's own USDC.
+    const f = fixture("sol->usdc jupiter");
+    const usdc = f.userTokenAccounts[USDC];
+    innerAt(f, 0, tokenTransfer(ATTACKER, usdc, 995_000_000n, ATTACKER));
+    innerAt(f, 1, tokenTransfer(usdc, ATTACKER, 995_000_000n));
+    await refuses(f, /moves a token other than the one being swapped/);
+  });
+
+  it("refuses inner instructions the RPC places nowhere or twice", async () => {
+    const twice = fixture("usdc->bonk jupiter");
+    twice.simulation.innerInstructions.push({ index: twice.simulation.innerInstructions[0].index, instructions: [] });
+    await refuses(twice, /inner instructions without their place/);
+    const nowhere = fixture("usdc->bonk jupiter");
+    nowhere.simulation.innerInstructions.push({ index: 99, instructions: [] });
+    await refuses(nowhere, /inner instructions without their place/);
+  });
+
+  it("refuses a transfer the RPC doesn't name both sides of", async () => {
+    const f = fixture("usdc->bonk jupiter");
+    inner(f, { programId: TOKEN, parsed: { type: "transfer", info: { source: f.userTokenAccounts[USDC], amount: "1", authority: USER } } });
+    await refuses(f, /doesn't name both sides of/);
+  });
+
+  it("counts a burn out of the user's account as leaving", async () => {
+    const input = fixture("usdc->bonk jupiter");
+    const usdc = input.userTokenAccounts[USDC];
+    inner(input, { programId: TOKEN, parsed: { type: "burn", info: { account: usdc, mint: USDC, amount: "1", authority: USER } } });
+    await refuses(input, /more of the token than the swap's amount/);
+    const other = fixture("usdc->bonk jupiter");
+    inner(other, { programId: TOKEN, parsed: { type: "burnChecked", info: { account: other.userTokenAccounts[BONK], mint: BONK, tokenAmount: { amount: "1" }, authority: USER } } });
+    await refuses(other, /moves a token other than the one being swapped/);
+  });
+
+  it("refuses an unreadable token call on one of the user's token accounts, even without the wallet", async () => {
+    const f = fixture("usdc->bonk jupiter");
+    inner(f, { programId: TOKEN, accounts: [f.userTokenAccounts[USDC], ATTACKER, ATTACKER], data: "x" });
+    await refuses(f, /token call on the user's accounts/);
+  });
+
   it("lets a token pass through the user's own account, but not leave before it arrived", async () => {
     const through = fixture("usdc->bonk jupiter");
     const bonk = through.userTokenAccounts[BONK];
@@ -172,7 +219,7 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
   ])("refuses %s", async (_, parsed) => {
     const f = fixture("sol->usdc 0x_solana");
     inner(f, { programId: TOKEN, parsed });
-    await refuses(f, /token call with the user's authority that RAVN's swaps never make/);
+    await refuses(f, /token call on the user's accounts that RAVN's swaps never make/);
   });
 
   it.each([
@@ -188,7 +235,7 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
   it("refuses a token or system call naming the user that the RPC couldn't read", async () => {
     const f = fixture("sol->base usdc mayan");
     inner(f, { programId: TOKEN, accounts: [ATTACKER, USER], data: "x" });
-    await refuses(f, /token call with the user's authority/);
+    await refuses(f, /token call on the user's accounts/);
     const g = fixture("sol->base usdc mayan");
     inner(g, { programId: SYSTEM, accounts: [USER, ATTACKER], data: "x" });
     await refuses(g, /system call with the user's wallet/);
@@ -245,11 +292,14 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
     } finally {
       vi.useRealTimers();
     }
+    // As given, and as node-fetch writes it (a slash before the query).
+    const keyed = "https://rpc.example?api-key=SECRETKEY";
     const leaky = vi.fn(async () => {
-      throw new Error(`request to ${RPC} failed`);
+      throw new Error(`request to ${keyed} or https://rpc.example/?api-key=SECRETKEY failed`);
     }) as unknown as typeof fetch;
-    const err = (await verify(f, leaky).catch((e: unknown) => e)) as UnsafeExecutionError;
-    expect(JSON.stringify(err.details)).not.toContain(RPC);
+    const err = (await verifyExecution(f.execution, f.intent, { solanaRpcUrl: keyed }, leaky).catch((e: unknown) => e)) as UnsafeExecutionError;
+    expect(err).toBeInstanceOf(UnsafeExecutionError);
+    expect(JSON.stringify(err.details)).not.toContain("SECRETKEY");
   });
 
   it("catches what reading the transaction can't: a Jupiter route selling more than the swap", async () => {

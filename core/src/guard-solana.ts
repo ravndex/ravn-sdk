@@ -159,17 +159,18 @@ export function checkSolanaTransaction(
  * take from the user stays within the swap. Running the venue programs checkSolanaTransaction can't
  * read, it sees every transfer they make, and counts each one out of the user's wallet or token
  * accounts in the order they happen: only the input token leaves, at most the input amount (plus
- * what came in earlier in the same transaction); SOL (wallet and wrapped) only account rent of at
- * most 0.02 SOL beside the network fee (selling SOL: plus the amount). None of the user's token
+ * what came in earlier within the same top-level instruction); SOL (wallet and wrapped) only account
+ * rent of at most 0.02 SOL beside the network fee (selling SOL: plus the amount). None of the user's token
  * accounts changes hands, closes to someone else, or is left with an allowance; the user's authority
  * is used for no other token or system call, and none over a stake account, program or lookup table.
  * Refused too when the simulation fails or can't run, or the RPC's answer is incomplete: what the
  * transaction would move is then unknown.
  *
  * What it can't hold: the chain's state can change between this simulation and the transaction
- * landing, so an amount that depends on it (an exact-out swap's input) can differ; and assets that
- * aren't SOL or SPL tokens in the user's own accounts (a position in another program the user is the
- * authority of, a compressed NFT).
+ * landing, so an amount that depends on it can differ: an exact-out swap's input, or a venue step
+ * that pays into the user's account and spends from it again (if the payment comes up short, the
+ * spending draws on what the user held). Nor assets that aren't SOL or SPL tokens in the user's own
+ * accounts (a position in another program the user is the authority of, a compressed NFT).
  */
 export async function checkSolanaSimulation(
   serialized: string,
@@ -207,23 +208,32 @@ export async function checkSolanaSimulation(
     return mint === WSOL_MINT ? "SOL" : mint;
   };
   const input = sellsSol ? "SOL" : ctx.inputToken;
-  const allowed = new Map<string, bigint>([
+  // What may leave the user's accounts over the whole transaction: the input up to the amount, and
+  // SOL for rent (selling SOL: plus the amount).
+  const budget = new Map<string, bigint>([
     [input, amount],
     ["SOL", (input === "SOL" ? amount : 0n) + RENT_ALLOWANCE_LAMPORTS],
   ]);
-  const sent = new Map<string, bigint>();
-  // One transfer, as it happens: out of the user's accounts it's held to what may leave; into them,
-  // it may leave again later in the transaction (a route passing through the user's own account).
+  // What came in during the current top-level instruction: it may leave again within that same
+  // instruction (a venue's route through the user's own account, a fee out of the output), never in a
+  // later one. A later instruction spending an earlier one's payment would spend the user's own
+  // balance instead, if the chain changes before the transaction lands and that payment comes up short.
+  let received = new Map<string, bigint>();
+  // One transfer, as it happens: out of the user's accounts, it spends what came in first, then the budget.
   const transfer = (from: unknown, to: unknown, what: string | undefined, n: bigint) => {
+    if (typeof from !== "string" || typeof to !== "string") fail("The Solana transaction, simulated, makes a transfer the RPC doesn't name both sides of");
     if (mine(from) === mine(to)) return;
     if (what === undefined) fail("The Solana transaction, simulated, moves the user's tokens through an account the RPC doesn't describe");
     if (!mine(from)) {
-      allowed.set(what, (allowed.get(what) ?? 0n) + n);
+      received.set(what, (received.get(what) ?? 0n) + n);
       return;
     }
-    const total = (sent.get(what) ?? 0n) + n;
-    sent.set(what, total);
-    if (total <= (allowed.get(what) ?? 0n)) return;
+    const covered = received.get(what) ?? 0n;
+    received.set(what, covered > n ? covered - n : 0n);
+    const left = (budget.get(what) ?? 0n) - (n > covered ? n - covered : 0n);
+    budget.set(what, left);
+    if (left >= 0n) return;
+    const total = (what === input ? amount : 0n) + (what === "SOL" ? RENT_ALLOWANCE_LAMPORTS : 0n) - left;
     if (what === "SOL") fail(sellsSol ? "The Solana transaction, simulated, sends more SOL than the swap and its account rent" : "The Solana transaction, simulated, sends more SOL than its account rent", { lamports: total.toString() });
     if (what !== input) fail("The Solana transaction, simulated, moves a token other than the one being swapped", { mint: what, amount: total.toString() });
     fail("The Solana transaction, simulated, moves more of the token than the swap's amount", { amount: total.toString() });
@@ -236,11 +246,17 @@ export async function checkSolanaSimulation(
 
   const inner = new Map<number, { programId?: string; parsed?: unknown; accounts?: string[] }[]>();
   for (const group of sim.innerInstructions) {
-    if (!Number.isInteger(group?.index) || !Array.isArray(group.instructions)) fail("Your Solana RPC's simulation gives inner instructions without their place, so what the transaction would move is unchecked");
-    inner.set(group.index, group.instructions);
+    const at = group?.index;
+    if (!Number.isInteger(at) || at < 0 || at >= msg.instructions.length || inner.has(at) || !Array.isArray(group.instructions)) {
+      fail("Your Solana RPC's simulation gives inner instructions without their place, so what the transaction would move is unchecked");
+    }
+    inner.set(at, group.instructions);
   }
+  // Every account of the user's the transaction touches: a call naming any of them is held to the lists below.
+  const usersAccounts = [user, ...[...tokenAccount].filter(([, t]) => t.owner === user).map(([a]) => a)];
 
   msg.instructions.forEach((ix, n) => {
+    received = new Map();
     // The transaction's own system and token calls (checkSolanaTransaction allowed only these kinds).
     const at = (i: number) => keys[ix.indexes[i]];
     const kind = ix.program === SYSTEM_PROGRAM ? u32(ix.data, 0) : ix.data[0];
@@ -255,7 +271,9 @@ export async function checkSolanaSimulation(
       const parsed = isObject(call.parsed) ? call.parsed : undefined;
       const info = isObject(parsed?.info) ? parsed.info : {};
       const type = String(parsed?.type);
-      const names = JSON.stringify(call).includes(user);
+      const json = JSON.stringify(call);
+      const names = json.includes(user);
+      const touches = usersAccounts.some((a) => json.includes(a));
       if (call.programId === TOKEN_PROGRAM || call.programId === TOKEN_2022_PROGRAM) {
         const tokens = isObject(info.tokenAmount) ? info.tokenAmount.amount : info.amount;
         if (type === "transfer" || type === "transferChecked" || type === "transferCheckedWithFee") {
@@ -268,12 +286,15 @@ export async function checkSolanaSimulation(
         } else if (type === "unwrapLamports") {
           // Wrapped SOL straight out as lamports; with no amount, all of it (unknown unless it stays the user's).
           transfer(info.source, info.destination, "SOL", info.amount === undefined && mine(info.destination) ? 0n : whole(info.amount));
+        } else if (type === "burn" || type === "burnChecked") {
+          // Gone for good (a CCTP deposit, an unstake): leaves like any transfer.
+          transfer(info.account, BURNED, asset(info.account), whole(tokens));
         } else if (type === "closeAccount") closes(info.account, info.destination);
         else if ((type === "approve" || type === "approveChecked") && (info.owner ?? info.multisigOwner) === user) {
           delegated.set(info.source, { delegate: info.delegate, left: whole(tokens) });
         } else if (type === "revoke" && (info.owner ?? info.multisigOwner) === user) delegated.delete(info.source);
-        else if (names && !TOKEN_CALLS_ALLOWED.has(type)) {
-          fail("The Solana transaction, simulated, makes a token call with the user's authority that RAVN's swaps never make", { type: parsed ? type : "unreadable" });
+        else if (touches && !TOKEN_CALLS_ALLOWED.has(type)) {
+          fail("The Solana transaction, simulated, makes a token call on the user's accounts that RAVN's swaps never make", { type: parsed ? type : "unreadable" });
         }
       } else if (call.programId === SYSTEM_PROGRAM) {
         if (type === "transfer") transfer(info.source, info.destination, "SOL", whole(info.lamports));
@@ -320,7 +341,9 @@ export async function checkSolanaSimulation(
   }
 }
 
-/** Token calls that may name the user besides transfers, closes and allowances (each held above). */
+/** Where burned tokens go: no one's account. */
+const BURNED = "(burned)";
+/** Token calls that may touch the user's accounts besides transfers, burns, closes and allowances (each held above). */
 const TOKEN_CALLS_ALLOWED = new Set(["syncNative", "initializeAccount", "initializeAccount2", "initializeAccount3", "initializeImmutableOwner", "getAccountDataSize"]);
 /** Native programs where the user's authority is worth something: stake, vote, the loaders, lookup tables. */
 const AUTHORITY_PROGRAMS = new Set([
@@ -382,8 +405,9 @@ async function simulate(serialized: string, rpc: { url: string; fetch: typeof fe
     }).then((res) => res.json());
     body = await Promise.race([request, timeout]);
   } catch (e) {
-    // Never the URL itself: an RPC key often rides in it.
-    const error = (e instanceof Error ? e.message : String(e)).split(rpc.url).join("<solanaRpcUrl>");
+    // Never the URL itself, as given or as fetch writes it: an RPC key often rides in it.
+    let error = e instanceof Error ? e.message : String(e);
+    for (const form of urlForms(rpc.url)) error = error.split(form).join("<solanaRpcUrl>");
     fail("Couldn't simulate the Solana transaction on your RPC, so what it would move is unchecked", { error });
   } finally {
     clearTimeout(timer);
@@ -394,6 +418,15 @@ async function simulate(serialized: string, rpc: { url: string; fetch: typeof fe
     fail("Your Solana RPC's simulation doesn't report balance changes (Agave 2.3+ does), so what the transaction would move is unchecked");
   }
   return v;
+}
+
+function urlForms(url: string): string[] {
+  try {
+    const u = new URL(url);
+    return [url, u.href, u.search, u.username, u.password].filter((f) => f.length > 1).sort((a, b) => b.length - a.length);
+  } catch {
+    return [url];
+  }
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);

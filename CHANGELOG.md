@@ -16,11 +16,13 @@ checked too, as the chain stands when `execute()` runs.
   then simulates each Solana transaction there (one `simulateTransaction` call, ~150–400 ms) and throws
   `UnsafeExecutionError` unless it succeeds and every transfer out of the user's wallet and token
   accounts, counted in order, stays within the input token up to the input amount (plus what reached
-  them earlier in the transaction) and at most 0.02 SOL of rent beside the network fee (selling SOL:
+  them earlier in the same top-level instruction) and at most 0.02 SOL of rent beside the network fee (selling SOL:
   plus the amount); none of the user's token accounts changes hands, closes to someone else or keeps an
   allowance; and the user's authority is used for no other token, system, stake or loader call. It
   also refuses when the RPC can't simulate or its answer is incomplete. Not covered: an amount that
-  depends on a pool's state changing before the transaction lands (an exact-out swap's input), and
+  depends on a pool's state changing before the transaction lands (an exact-out swap's input, or a
+  venue step paying into the user's account and spending from it again, which a shortfall would make
+  draw on what the user already held of that token), and
   assets other than SOL and SPL tokens in the user's own accounts (lending or LP positions, compressed
   NFTs). Off unless you set it: without it, nothing changes from 0.3.0.
 - `verifyExecution(execution, intent, options)`: `checkExecution` plus that simulation, for an
