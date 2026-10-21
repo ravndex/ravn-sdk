@@ -19,9 +19,9 @@ The widget iframe page itself, and the rest of RAVN's routing/execution engine, 
 
 `RavnClient.execute()` (and so `executeAndTrack()` and `useRavnExecute`) checks every execution RAVN returns before you can hand it to a wallet, against what your user asked to swap, which the client remembers from your own `getQuote`/`getQuoteStream` request (quote token addresses, not symbols). It throws `UnsafeExecutionError` (`code: "UNSAFE_EXECUTION"`; nothing was sent or signed) unless:
 
-- every EVM transaction names the swap's chain and goes to a contract one of RAVN's venues uses there; approvals and signatures touch only the input token, up to the input amount (an unlimited approval only to Permit2 or CoW's vault relayer, which move funds only against the user's own signature), and an approval's `spender`/`amount` fields say what its calldata does;
+- every EVM transaction names the swap's chain and goes to a contract one of RAVN's venues uses there; approvals and signatures touch only the input token, up to the input amount (an unlimited approval only to Permit2 or CoW's vault relayer, which move funds only against the user's own signature); an approval is for the contract the swap calls, and its `spender`/`amount` fields say what its calldata does;
 - the native coin sent is at most the input amount, and nothing at all on a token sell; what the swap takes plus RAVN's fee stays within the input amount;
-- RAVN's fee goes only to RAVN's own wallet and is at most 1%;
+- RAVN's fee goes only to RAVN's own wallet and is at most 1% (on Solana: of what the transaction pays RAVN's fee accounts by name);
 - a signature is one of the kinds RAVN's venues use (a CoW order paying the user, a Permit2 one-time transfer, the token's own permit, an EIP-3009 authorization from the user), for the input token and at most the amount;
 - a Bitcoin PSBT pays exactly the deposit, RAVN's fee and change back to the sender, from the sender's own coins, signed over every output, at a sane network fee;
 - a Solana transaction calls only programs RAVN's venues use, its own system and token instructions move at most the input amount of the input token (selling SOL: SOL and wrapped SOL together, plus rent), with no approvals, changes of owner, burns or durable nonces; a deposit RAVN built pays exactly the deposit and RAVN's fee;

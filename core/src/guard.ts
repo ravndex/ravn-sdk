@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, DepositFeeDTO, ExecutionDTO } from "./types";
-import { COW_SETTLEMENT, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaTransaction } from "./guard-solana";
 
@@ -112,14 +112,15 @@ function context(intent: SwapIntent, options: GuardOptions): Ctx {
   };
 }
 
-// A chain id, when given, must be the swap's; `required`: it must be given (an EVM transaction
-// without one goes out on whatever chain the wallet is on, in that chain's coin).
+// A chain id, when given, must be the swap's, as a number (a wallet may read "8453" as hex, or skip
+// it); `required`: it must be given (an EVM transaction without one goes out on whatever chain the
+// wallet is on, in that chain's coin). Typed data's domain may carry it as a decimal string.
 const sameChain = (ctx: Ctx, chainId: unknown, what: string, required = false) => {
   if (chainId === undefined || chainId === null) {
     if (required) fail(`${what} names no chain`);
     return;
   }
-  if (Number(chainId) !== ctx.chainId) fail(`${what} is for chain ${chainId}, not the swap's chain ${ctx.chainId}`, { chainId });
+  if (chainId !== ctx.chainId) fail(`${what} is for chain ${String(chainId)}, not the swap's chain ${ctx.chainId}`, { chainId });
 };
 
 /** RAVN's fee as the execution states it: to RAVN's own wallet on that chain, at most 1% of the input. */
@@ -268,7 +269,8 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
   const primaryType = typed.primaryType;
   const verifying = lower(domain.verifyingContract);
   if (domain.chainId === undefined) fail("The signature request names no chain");
-  sameChain(ctx, domain.chainId, "The signature request");
+  const domainChain = typeof domain.chainId === "string" && /^\d{1,15}$/.test(domain.chainId) ? Number(domain.chainId) : domain.chainId;
+  sameChain(ctx, domainChain, "The signature request");
 
   if (!/^0x[0-9a-f]{40}$/.test(verifying)) fail("The signature request names no contract", { verifyingContract: domain.verifyingContract });
 
@@ -356,6 +358,15 @@ export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, opti
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");
+    // The approval goes to the contract the swap calls (OKX's own approval contract beside its
+    // router excepted): an allowance to another one would outlive this swap.
+    if (execution.approval) {
+      const spender = wordAddress(lower(execution.approval.data), 0);
+      const target = lower(execution.transaction.to);
+      if (spender !== target && separateSpender(ctx.chainId, target) !== spender) {
+        fail("The approval is for a contract the swap doesn't call", { spender, to: target });
+      }
+    }
     let value = swap.value;
     let tokens = approved > swap.tokens ? approved : swap.tokens;
     if (execution.fee) {

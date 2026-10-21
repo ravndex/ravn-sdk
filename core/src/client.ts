@@ -36,6 +36,10 @@ export interface RavnClientConfig {
 const MAX_REMEMBERED_QUOTES = 1_000;
 /** A quoteToken RAVN returned for two different requests (see remember). */
 const CONFLICT = Symbol("conflicting quote requests");
+/** Tokens remembered from one answer (RAVN's race has ~20 venues): more can't flush the memory. */
+const MAX_TOKENS_PER_ANSWER = 64;
+/** Every token seen, kept far longer than the intents, so one evicted and seen again is a conflict. */
+const MAX_SEEN_TOKENS = 50_000;
 
 interface Envelope<T> {
   data?: T;
@@ -64,6 +68,7 @@ export class RavnClient {
   // What each quoteToken this client fetched was asked for, from the caller's own request: the
   // independent side of execute()'s check, since RAVN's answers are what it checks.
   private readonly intents = new Map<string, SwapIntent | typeof CONFLICT>();
+  private readonly seen = new Set<string>();
 
   constructor(config: RavnClientConfig = {}) {
     this.apiKey = config.apiKey;
@@ -82,16 +87,24 @@ export class RavnClient {
       ...(params.sandbox ? { sandbox: true } : {}),
     };
     const key = JSON.stringify(intent);
-    for (const token of [quote?.quoteToken, ...(quote?.alternatives ?? []).map((a) => a.quoteToken)]) {
-      if (typeof token !== "string") continue;
+    const tokens = [quote?.quoteToken, ...(Array.isArray(quote?.alternatives) ? quote.alternatives : []).map((a) => a?.quoteToken)]
+      .filter((t): t is string => typeof t === "string")
+      .slice(0, MAX_TOKENS_PER_ANSWER);
+    for (const token of tokens) {
       // A token RAVN hands back for two different requests can't be checked against either: an
-      // answer could otherwise rebind an earlier quote to a later request.
+      // answer could otherwise rebind an earlier quote to a later request. One seen before and no
+      // longer remembered counts as two.
       const held = this.intents.get(token);
-      const value = held !== undefined && (held === CONFLICT || JSON.stringify(held) !== key) ? CONFLICT : intent;
+      const conflict = held === undefined ? this.seen.has(token) : held === CONFLICT || JSON.stringify(held) !== key;
       this.intents.delete(token);
-      this.intents.set(token, value);
+      this.intents.set(token, conflict ? CONFLICT : intent);
+      this.seen.delete(token);
+      this.seen.add(token);
     }
+    // ponytail: a token seen 50,000 tokens ago can be rebound (~800 answers flushing 64 each); a
+    // persistent store if a long-lived client ever needs more.
     while (this.intents.size > MAX_REMEMBERED_QUOTES) this.intents.delete(this.intents.keys().next().value as string);
+    while (this.seen.size > MAX_SEEN_TOKENS) this.seen.delete(this.seen.values().next().value as string);
     return quote;
   }
 

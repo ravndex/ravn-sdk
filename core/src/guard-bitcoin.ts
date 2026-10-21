@@ -118,6 +118,8 @@ function readMap(r: Reader): Map<number, Uint8Array> {
     const key = r.bytes(keyLen);
     const value = r.bytes(r.varint());
     if (seen.has(hex(key))) fail("The Bitcoin PSBT repeats a key");
+    // A sighash type (0x03) only ever has a one-byte key; a longer one could smuggle in another.
+    if (key[0] === 0x03 && keyLen !== 1) fail("The Bitcoin PSBT has a malformed signature-type entry");
     seen.add(hex(key));
     if (keyLen === 1) map.set(key[0], value);
   }

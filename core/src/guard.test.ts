@@ -429,9 +429,9 @@ describe("RavnClient.execute runs the check", () => {
   });
 
   it("allowContracts admits a venue's new contract", async () => {
-    const { execution, intent } = real();
+    const { execution, intent } = fixture("8453 native->token relay");
     (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).transaction.to = ATTACKER;
-    (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).calls![1].to = ATTACKER;
+    (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).calls![0].to = ATTACKER;
     const client = new RavnClient({ fetch: api({ execute: execution }), guard: { allowContracts: { 8453: [ATTACKER] } } });
     await expect(client.execute({ quoteToken: "x" }, { intent })).resolves.toEqual(execution);
   });
@@ -554,5 +554,57 @@ describe("RavnClient: a quoteToken RAVN returns for two requests", () => {
     await client.getQuote(base);
     await client.getQuote({ ...base, inputAmount: "1" });
     await expect(client.execute({ quoteToken: "T" })).rejects.toThrow(/two different quote requests/);
+  });
+});
+
+describe("hardened after the second review", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+
+  it("refuses an approval for a contract the swap doesn't call", () => {
+    const { execution, intent } = fixture("8453 token->native relay");
+    const e = execution as Tx;
+    e.approval!.data = approve("0x6131B5fae19EA4f9D964eAc0408E4408b66337b5", 100_000_000n);
+    e.approval!.spender = "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5";
+    e.calls![0].data = e.approval!.data;
+    refuses(e, intent, /contract the swap doesn't call/);
+  });
+
+  it("refuses a chain id given as a string", () => {
+    const { execution, intent } = fixture("8453 native->token relay");
+    (execution as Tx).transaction.chainId = "8453" as unknown as number;
+    refuses(execution, intent, /not the swap's chain/);
+  });
+
+  it("refuses a PSBT signature-type entry with a longer key", () => {
+    const intent: SwapIntent = { inputChainId: -1, inputToken: "native", inputAmount: "200000", userAddress: BTC_USER };
+    const outs = [
+      { value: 200_000n, to: BTC_DEPOSIT },
+      { value: 399_000n, to: BTC_USER },
+    ];
+    const b64 = psbt([{ value: 600_000n, owner: BTC_USER, extra: [2, 3, 0, 4, 2, 0, 0, 0] }], outs);
+    refuses({ executionType: "DEPOSIT", quoteToken: "qt", statusRef: "r", deposit: { address: BTC_DEPOSIT, amount: "200000", chainId: -1, psbt: b64 } }, intent, /malformed signature-type/);
+  });
+});
+
+describe("RavnClient: a flood of alternatives can't make it forget a quote", () => {
+  it("still refuses a token it saw for another request after the memory is flushed", async () => {
+    const { execution, intent } = fixture("8453 token->native relay");
+    const junk = (n: number, tag: string) => Array.from({ length: n }, (_, i) => ({ quoteToken: `${tag}${i}` }));
+    const answers: unknown[] = [{ quoteToken: "T", alternatives: [] }];
+    // Enough answers, each at the per-answer cap, to push T out of the intent memory.
+    for (let k = 0; k < 20; k++) answers.push({ quoteToken: `q${k}`, alternatives: junk(1_001, `j${k}_`) });
+    answers.push({ quoteToken: "again", alternatives: [{ quoteToken: "T" }] });
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname.split("/").pop()!;
+      const data = path === "quote" ? answers.shift() : execution;
+      return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ data }) };
+    });
+    const client = new RavnClient({ fetch: fetchImpl as unknown as typeof fetch });
+    const base = { ...intent, outputChainId: 8453, outputToken: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" };
+    await client.getQuote(base);
+    for (let k = 0; k < 21; k++) await client.getQuote({ ...base, inputAmount: "1" });
+    await expect(client.execute({ quoteToken: "T" })).rejects.toThrow(/two different quote requests/);
+    // Past the per-answer cap a token isn't remembered at all, so it can't be executed unchecked.
+    await expect(client.execute({ quoteToken: "j0_1000" })).rejects.toThrow(/didn't fetch it/);
   });
 });

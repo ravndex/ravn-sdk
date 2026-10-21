@@ -157,6 +157,12 @@ const GARDEN: Record<number, string[]> = {
   [TEMPO]: ["0x0289b0da24962121b95400b572d08dbc01bb1281", "0x5fa58e4e89c85b8d678ade970bd6afd4311af17e"],
 };
 
+/** The contract approved to swap through `router`, where it's a different one (OKX's approval contract). */
+export function separateSpender(chainId: number, router: string): string | undefined {
+  const pair = OKX[chainId];
+  return pair && pair[0].toLowerCase() === router.toLowerCase() ? pair[1].toLowerCase() : undefined;
+}
+
 function build(): Record<number, readonly string[]> {
   const out: Record<number, Set<string>> = Object.fromEntries(ALL.map((c) => [c, new Set<string>()]));
   const add = (c: number, ...addresses: string[]) => addresses.forEach((a) => out[c]?.add(a.toLowerCase()));
