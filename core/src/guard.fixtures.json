@@ -2419,5 +2419,303 @@
    ],
    "batch": true
   }
+ },
+ {
+  "name": "1 token->native okx (okx evm approval)",
+  "intent": {
+   "inputChainId": 1,
+   "inputToken": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+   "inputAmount": "100000000",
+   "userAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A",
+   "destinationAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A"
+  },
+  "execution": {
+   "executionType": "TRANSACTION",
+   "quoteToken": "qt",
+   "approval": {
+    "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "data": "0x095ea7b300000000000000000000000040aa958dd87fc8305b97f2ba922cddca374bcd7f0000000000000000000000000000000000000000000000000000000005f5e100",
+    "value": "0",
+    "chainId": 1,
+    "spender": "0x40aA958dd87FC8305b97f2BA922CDdCa374bcD7f",
+    "amount": "100000000"
+   },
+   "transaction": {
+    "to": "0x8feab81d36e7576107d5de0758c1b839be31b4f6",
+    "data": "0x0c307f76000000000000000000000000000000000000000000000000000000003bc319ec0000000000000000000000003304e22ddaa22bcdc5fca2269b418046ae7b566a000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0000000000000000000000000000000000000000000000000000000005f51db00000000000000000000000000000000000000000000000000090fda232ffb1e4",
+    "value": "0",
+    "chainId": 1
+   },
+   "calls": [
+    {
+     "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+     "data": "0x095ea7b300000000000000000000000040aa958dd87fc8305b97f2ba922cddca374bcd7f0000000000000000000000000000000000000000000000000000000005f5e100",
+     "value": "0",
+     "chainId": 1
+    },
+    {
+     "to": "0x8feab81d36e7576107d5de0758c1b839be31b4f6",
+     "data": "0x0c307f76000000000000000000000000000000000000000000000000000000003bc319ec0000000000000000000000003304e22ddaa22bcdc5fca2269b418046ae7b566a000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0000000000000000000000000000000000000000000000000000000005f51db00000000000000000000000000000000000000000000000000090fda232ffb1e4",
+     "value": "0",
+     "chainId": 1
+    }
+   ],
+   "batch": true
+  }
+ },
+ {
+  "name": "-2 sol->usdc okx (okx solana)",
+  "intent": {
+   "inputChainId": -2,
+   "inputToken": "So11111111111111111111111111111111111111112",
+   "inputAmount": "500000000",
+   "userAddress": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+   "destinationAddress": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+  },
+  "execution": {
+   "executionType": "TRANSACTION",
+   "quoteToken": "qt",
+   "transaction": {
+    "chainId": -2,
+    "serialized": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAIDX6MCIdgv94d3c8ywX8gm4JC7lKq8TH6zYjQ6ixtCwbykJ2gxjslUMqQpYPMEelApFk6zshZJKr/i1hCWa3fJ4PT6oz1rKyozQUgdRIXXEPO9Upd2Z7eIKFrVSU3OPOX3Mkhk3St1c/rvBntvQ4OxlcEwPJT7ykFhcNpQYbEU/fwohZ/ZAC23qZbHrcx8hp8oJSQ8/qBXV1JHbJPbufBzH4G3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLhgbUmyVmSS8PJRrK5OXF2XR921a111ixn7OW09HtAee7HbIWFzeazcBFYlWmwzP3NxKrHg6YpaKOXtuVy7rIyXJY9OJInxuz0QKRSODYMLWhOZ2v8QhASOe9jb6fhZDEKb18GPUPgVbZr8HN3nLfZo2as77K9rVw1XZmRa2cj80T2gQVWQE89K66GoTtcCOtT/IahHR/87Basw+oIHwwMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAkDX/yc87qRGDTUDOby/7/Dz2VHfn2D5S6qJ/H7d0CNAJDAAFAuRyCAAMAAkDUMMAAAAAAAAGAgABDAIAAABRtekdAAAAAAoGAAABIgUGCZPxe2T0hK52/wkGAAIAJAYFAQEJBgADByQGBQEBCQYABAgkBgUBAQo8AAECIiQDBBgZGgUFCQYhCiAYGRsWFxUFBSIlIwsnGBkbJh4dHCIlBQUjKCkfGBsaJSQREBMOEhQNDwUFPKopVbGEUB817BnDOwAAAAAAZc0dAAAAACgkJgMAAAAAMgACAAAAfgIAAAAGEQAQJwGHECcSIKEHANAHAAUDAQAAAQkEHd4SGH1xBgj5xKgd+kypokMfC7yVRLNDJtcCdj11PGEIZGVmZ2hqbG4BY6Dug6RpKM84DUtAJ3GA+6CMxbpUtHn+UQp/+eSYotAzAwABBgEF5Ia7ies9HHOSWTJeD7FIKFw8onu4rQozmgKUD0WG4hAEAQIDBAVwPGw9Pv2GmfESz5PVKyMYKWH9Rd/kLsZayEKZlBaF7OnTMK9bA+Dc3QTi297f"
+   }
+  }
+ },
+ {
+  "name": "42161 native->token flytrade (fly weth fee)",
+  "intent": {
+   "inputChainId": 42161,
+   "inputToken": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+   "inputAmount": "30000000000000000",
+   "userAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A",
+   "destinationAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A"
+  },
+  "execution": {
+   "executionType": "TRANSACTION",
+   "quoteToken": "qt",
+   "transaction": {
+    "to": "0x20f6ee51340adeed01a59b0e65cb3703f3dc860c",
+    "data": "0x46ec278a0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000022301fd00803304e22ddaa22bcdc5fca2269b418046ae7b566a0000000000000000000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831000000000000000000000000000000000000000000000000006a799022f40b00e0011de00122e00127fdaa1229e5e832ab6b61a9c8cd880d46fe81ff380a6bdf",
+    "value": "29985000000000000",
+    "chainId": 42161
+   },
+   "fee": {
+    "amount": "15000000000000",
+    "address": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+    "chainId": 42161,
+    "transaction": {
+     "to": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+     "data": "0xb760faf900000000000000000000000012d2425fd88c693edb4de004e0c747879b7d693376cdac2a2cd97e11ca55c84242d30277",
+     "value": "15000000000000",
+     "chainId": 42161
+    }
+   },
+   "calls": [
+    {
+     "to": "0x20f6ee51340adeed01a59b0e65cb3703f3dc860c",
+     "data": "0x46ec278a0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000022301fd00803304e22ddaa22bcdc5fca2269b418046ae7b566a0000000000000000000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831000000000000000000000000000000000000000000000000006a799022f40b00e0011de00122e00127fdaa1229e5e832ab6b61a9c8cd880d46fe81ff380a6bdf",
+     "value": "29985000000000000",
+     "chainId": 42161
+    },
+    {
+     "to": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+     "data": "0xb760faf900000000000000000000000012d2425fd88c693edb4de004e0c747879b7d693376cdac2a2cd97e11ca55c84242d30277",
+     "value": "15000000000000",
+     "chainId": 42161
+    }
+   ],
+   "batch": true
+  }
+ },
+ {
+  "name": "56 native->token flytrade (fly coin fee)",
+  "intent": {
+   "inputChainId": 56,
+   "inputToken": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+   "inputAmount": "150000000000000000",
+   "userAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A",
+   "destinationAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A"
+  },
+  "execution": {
+   "executionType": "TRANSACTION",
+   "quoteToken": "qt",
+   "transaction": {
+    "to": "0x20f6ee51340adeed01a59b0e65cb3703f3dc860c",
+    "data": "0x46ec278a000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000003a4036300803304e22ddaa22bcdc5fca2269b418046ae7b566a00000000000000000000000000000000000000008ac76a51cc950d9822d68b83fe1ad97b32cd580d00000000000000000000000000000000000000000000000002145fd0aec43700e0011db80122b8012cfdaa1229e5e832ab6b61a9c8cd880d46fe81ff380a6bdf",
+    "value": "149925000000000000",
+    "chainId": 56
+   },
+   "fee": {
+    "amount": "75000000000000",
+    "address": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+    "chainId": 56,
+    "transaction": {
+     "to": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+     "data": "0x26e841fa01347f46c30c7322737b56a1",
+     "value": "75000000000000",
+     "chainId": 56
+    }
+   },
+   "calls": [
+    {
+     "to": "0x20f6ee51340adeed01a59b0e65cb3703f3dc860c",
+     "data": "0x46ec278a000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000003a4036300803304e22ddaa22bcdc5fca2269b418046ae7b566a00000000000000000000000000000000000000008ac76a51cc950d9822d68b83fe1ad97b32cd580d00000000000000000000000000000000000000000000000002145fd0aec43700e0011db80122b8012cfdaa1229e5e832ab6b61a9c8cd880d46fe81ff380a6bdf",
+     "value": "149925000000000000",
+     "chainId": 56
+    },
+    {
+     "to": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+     "data": "0x26e841fa01347f46c30c7322737b56a1",
+     "value": "75000000000000",
+     "chainId": 56
+    }
+   ],
+   "batch": false
+  }
+ },
+ {
+  "name": "8453 token->btc rift (rift token fee)",
+  "intent": {
+   "inputChainId": 8453,
+   "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+   "inputAmount": "100000000",
+   "userAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A",
+   "destinationAddress": "bc1qe8px5j4l6sexjzgs7a4khwt9tmhrzfgf3nuzsa"
+  },
+  "execution": {
+   "executionType": "DEPOSIT",
+   "quoteToken": "qt",
+   "deposit": {
+    "address": "0x365bc58eff64246f82fd99c8f41f5ca5a4487d7c",
+    "amount": "99950000",
+    "chainId": 8453,
+    "expiresAt": "2026-10-28T06:19:08.081908Z"
+   },
+   "statusRef": "ref",
+   "fee": {
+    "amount": "50000",
+    "address": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+    "chainId": 8453,
+    "transaction": {
+     "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+     "data": "0xa9059cbb00000000000000000000000012d2425fd88c693edb4de004e0c747879b7d6933000000000000000000000000000000000000000000000000000000000000c35001a15d1d0fb971c3b243607ff48190ca",
+     "value": "0",
+     "chainId": 8453
+    }
+   },
+   "calls": [
+    {
+     "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+     "data": "0xa9059cbb000000000000000000000000365bc58eff64246f82fd99c8f41f5ca5a4487d7c0000000000000000000000000000000000000000000000000000000005f51db0",
+     "value": "0",
+     "chainId": 8453
+    },
+    {
+     "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+     "data": "0xa9059cbb00000000000000000000000012d2425fd88c693edb4de004e0c747879b7d6933000000000000000000000000000000000000000000000000000000000000c35001a15d1d0fb971c3b243607ff48190ca",
+     "value": "0",
+     "chainId": 8453
+    }
+   ],
+   "batch": true
+  }
+ },
+ {
+  "name": "1 native->btc rift (rift coin fee)",
+  "intent": {
+   "inputChainId": 1,
+   "inputToken": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+   "inputAmount": "30000000000000000",
+   "userAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A",
+   "destinationAddress": "bc1qe8px5j4l6sexjzgs7a4khwt9tmhrzfgf3nuzsa"
+  },
+  "execution": {
+   "executionType": "DEPOSIT",
+   "quoteToken": "qt",
+   "deposit": {
+    "address": "0x8ca5db36e7b55441bb79814514e397152956a262",
+    "amount": "29985000000000000",
+    "chainId": 1,
+    "expiresAt": "2026-10-28T06:08:27.824994Z"
+   },
+   "statusRef": "ref",
+   "fee": {
+    "amount": "15000000000000",
+    "address": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+    "chainId": 1,
+    "transaction": {
+     "to": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+     "data": "0x01a15d134abb7513be5d1187100f0148",
+     "value": "15000000000000",
+     "chainId": 1
+    }
+   },
+   "calls": [
+    {
+     "to": "0x8ca5db36e7b55441bb79814514e397152956a262",
+     "data": "0x",
+     "value": "29985000000000000",
+     "chainId": 1
+    },
+    {
+     "to": "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
+     "data": "0x01a15d134abb7513be5d1187100f0148",
+     "value": "15000000000000",
+     "chainId": 1
+    }
+   ],
+   "batch": false
+  }
+ },
+ {
+  "name": "-1 rift fee btc->rh aapl rift (rift btc psbt)",
+  "intent": {
+   "inputChainId": -1,
+   "inputToken": "native",
+   "inputAmount": "200000",
+   "userAddress": "bc1qj2qrg8qrpnpw70cd99z90j6h0pzhscgmt0c78g",
+   "destinationAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A"
+  },
+  "execution": {
+   "executionType": "DEPOSIT",
+   "quoteToken": "qt",
+   "deposit": {
+    "address": "bc1quukfvjetxp408lwguwn3cqs9urjuahaggyxnau",
+    "amount": "200000",
+    "chainId": -1,
+    "expiresAt": "2026-10-28T06:30:19.451237Z",
+    "psbt": "cHNidP8BAHECAAAAAar0rM2w7nRC2COY9EfB9jQObDxwh0jruMKJGX1+eTV/AQAAAAD/////AkANAwAAAAAAFgAU5yyWSyswavP9yOOnHAIF4OXO36jfKQYAAAAAABYAFJKANBwDDMLvPw0pRFfLV3hFeGEbAAAAAAABAR+sNwkAAAAAABYAFJKANBwDDMLvPw0pRFfLV3hFeGEbAAAA"
+   },
+   "statusRef": "ref"
+  }
+ },
+ {
+  "name": "4663 eth->usdg okx (okx robinhood)",
+  "intent": {
+   "inputChainId": 4663,
+   "inputToken": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+   "inputAmount": "30000000000000000",
+   "userAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A",
+   "destinationAddress": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A"
+  },
+  "execution": {
+   "executionType": "TRANSACTION",
+   "quoteToken": "qt",
+   "transaction": {
+    "to": "0x6e2a35a7ad683cf634d91492d73bb7ff774c6919",
+    "data": "0x0c307f76000000000000000000000000000000000000000000000000000000003bc319ec0000000000000000000000003304e22ddaa22bcdc5fca2269b418046ae7b566a000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0000000000000000000000005fc5360d0400a0fd4f2af552add042d716f1d168000000000000000000000000000000000000000000000000006a94d74f430000000000000000000000000000000000000000000000000000000000000454ae1c",
+    "value": "30000000000000000",
+    "chainId": 4663
+   },
+   "calls": [
+    {
+     "to": "0x6e2a35a7ad683cf634d91492d73bb7ff774c6919",
+     "data": "0x0c307f76000000000000000000000000000000000000000000000000000000003bc319ec0000000000000000000000003304e22ddaa22bcdc5fca2269b418046ae7b566a000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0000000000000000000000005fc5360d0400a0fd4f2af552add042d716f1d168000000000000000000000000000000000000000000000000006a94d74f430000000000000000000000000000000000000000000000000000000000000454ae1c",
+     "value": "30000000000000000",
+     "chainId": 4663
+    }
+   ],
+   "batch": false
+  }
  }
 ]
