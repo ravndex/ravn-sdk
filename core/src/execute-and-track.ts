@@ -44,8 +44,14 @@ export interface ExecuteAndTrackHandlers {
    * rejection loses the swap's hash.
    */
   sendCalls?(txs: TxLike[]): Promise<string[]>;
-  /** Sign an EIP-712 typed-data payload. Only called for SIGNATURE executions. */
+  /** Sign an EIP-712 typed-data payload. Only called for SIGNATURE executions and an AUTHORIZE's typed data. */
   signTypedData?(typedData: Record<string, unknown>): Promise<`0x${string}`>;
+  /** Sign a message (EIP-191 personal_sign) with the paying wallet. Only called for an AUTHORIZE
+   * asking for one: a read-only Hinkal session, which moves no funds. */
+  signMessage?(message: string): Promise<`0x${string}`>;
+  /** Switch the wallet to `chainId`. Called before signing an AUTHORIZE's typed data, which a wallet
+   * on another chain refuses; without it the wallet must already be on the swap's input chain. */
+  switchChain?(chainId: number): Promise<unknown>;
   /**
    * Sign (don't send) a base64 Solana transaction and return it signed, base64. Only called for a
    * TRANSACTION carrying `submit` (broadcastViaRavn quotes), which RAVN checks and sends itself.
@@ -228,6 +234,8 @@ const MAX_ATTEMPTS = 8;
 // An execute asked again with its Idempotency-Key: ~30 s at the default interval, so a call that
 // can't get through fails in about that rather than four minutes.
 const EXECUTE_ATTEMPTS = 4;
+// How long after an AUTHORIZE's order is placed its deposit may still be sent (Hinkal's route ages).
+const DEPOSIT_WINDOW_MS = 10 * 60_000;
 
 /** The fee payment a DEPOSIT execution asks for beside its deposit; undefined when it has none. */
 export function depositFeePayment(execution: ExecutionDTO): DepositFeePayment | undefined {
@@ -298,7 +306,8 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
   });
 
 /**
- * Sequences execute() → approval (if any) → wait for its receipt → main tx/signature → RAVN's fee
+ * Sequences execute() (signing each AUTHORIZE step and executing again, see AuthorizeDTO) → approval
+ * (if any) → wait for its receipt → main tx/signature → RAVN's fee
  * payment (if any) → status polling, using caller-supplied signing/sending functions. The SDK
  * stays wallet-agnostic (no RPC dependency); this just gets the ORDER right, which quickstart's
  * own docs flag as the most common integration failure: sending the main tx before the approval
@@ -365,12 +374,48 @@ export async function executeAndTrack(
     // One Idempotency-Key for every try, so a repeat can't open a second order at the venue (a NEAR
     // deposit address, a Houdini or Garden order). Without one (no crypto.randomUUID), only a rate
     // limit is repeated. A BUILD_FAILED wants a fresh quote either way.
-    const key = params.idempotencyKey ?? globalThis.crypto?.randomUUID?.();
-    const execution = await withRetries(
-      () => orAbort(client.execute({ ...params, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent }), stop.signal),
-      key ? answerLost : rateLimited,
-      key ? EXECUTE_ATTEMPTS : MAX_ATTEMPTS
-    );
+    const execute = (call: ExecuteParams, key: string | undefined = globalThis.crypto?.randomUUID?.()) =>
+      withRetries(
+        () => orAbort(client.execute({ ...call, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent }), stop.signal),
+        key ? answerLost : rateLimited,
+        key ? EXECUTE_ATTEMPTS : MAX_ATTEMPTS
+      );
+    let answer = await execute(params, params.idempotencyKey);
+    // An AUTHORIZE (Hinkal) is signed and answered, each answer an execute of its own (a key of its
+    // own), until the swap itself comes back. It moves no funds: an error here comes as it is.
+    let sendBy: number | undefined;
+    const { idempotencyKey: _first, ...again } = params;
+    while (answer.executionType === "AUTHORIZE") {
+      const { authorization, sign, expiresAt } = answer;
+      const live = () => {
+        if (!(Date.parse(expiresAt) > Date.now())) throw new Error("executeAndTrack: the authorization expired before it was signed: request a fresh quote");
+      };
+      live();
+      checkpoint();
+      let signature: `0x${string}`;
+      // Called as methods: a class-instance wallet needs its `this`.
+      if (sign.method === "personal_sign") {
+        if (!handlers.signMessage) throw new Error("executeAndTrack: this swap needs signMessage, none was provided");
+        signature = await handlers.signMessage(sign.message);
+      } else {
+        if (!handlers.signTypedData) throw new Error("executeAndTrack: this swap needs signTypedData, none was provided");
+        const chainId = (sign.typedData.domain as { chainId?: unknown } | undefined)?.chainId;
+        if (handlers.switchChain && typeof chainId === "number") await handlers.switchChain(chainId);
+        checkpoint();
+        signature = await handlers.signTypedData(sign.typedData);
+      }
+      checkpoint();
+      live();
+      answer = await execute({ ...again, authorization, signature });
+      // Hinkal's order is placed: its route goes stale, and a deposit paying a stale one is stuck.
+      sendBy = Date.now() + DEPOSIT_WINDOW_MS;
+    }
+    const execution = answer;
+    const depositWindow = () => {
+      if (sendBy !== undefined && Date.now() > sendBy) {
+        throw new Error("executeAndTrack: more than 10 minutes passed since the order was placed, so its deposit wasn't sent: request a fresh quote");
+      }
+    };
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
 
@@ -508,6 +553,7 @@ export async function executeAndTrack(
         const reset = batchApproval?.reset && { ...batchApproval.reset, chainId: batchApproval.chainId };
         const approvals = batchApproval ? [...(reset ? [reset] : []), batchApproval] : [];
         checkpoint();
+        depositWindow();
         const hashes = await handlers.sendCalls([...approvals, transaction, feeTx]);
         // The wallet resolved, so something may be out: from here an error carries what's known.
         sent = true;
@@ -523,6 +569,7 @@ export async function executeAndTrack(
       } else {
         await maybeSendApproval(approval);
         checkpoint();
+        depositWindow();
         txHash = await handlers.sendTransaction(transaction);
         sent = true;
         report("swap_sent", { txHash, statusRef: execution.statusRef ?? txHash, statusTxHash: proof(txHash) });

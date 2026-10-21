@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
-import type { ApprovalDTO, DepositFeeDTO, ExecutionDTO } from "./types";
-import { COW_SETTLEMENT, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
+import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO } from "./types";
+import { COW_SETTLEMENT, HINKAL, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -54,7 +54,14 @@ const SEL = {
   depositTo: "0xb760faf9",
   /** 0x AllowanceHolder exec(operator, token, amount, target, data). */
   allowanceHolderExec: "0x2213bc0b",
+  /** Hinkal.sol prooflessDeposit(address[] tokens, uint256[] amounts, (uint256,uint256,uint256,uint256,uint256)[], bytes[], bool, string). */
+  prooflessDeposit: "0xbb3b5d78",
 };
+
+// What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
+// HINKAL_NORMAL_MODE, and its session key can move the user's Hinkal funds.
+const HINKAL_SESSION = /^Authorize Hinkal session\nSession ID: [0-9a-f-]{36}\nPublic Key: 0[23][0-9a-f]{64}$/;
+const HINKAL_NORMAL_MODE = "This signature can also be used to submit transactions.";
 
 const lower = (s: unknown): string => (typeof s === "string" ? s.toLowerCase() : "");
 // A non-negative whole number: a decimal or 0x-hex string, or a safe non-negative JS integer.
@@ -228,7 +235,23 @@ function classifyEvmCall(
   // The swap: a venue contract RAVN routes through, never a token or RAVN's own wallet.
   if (!ctx.known.has(to)) fail("The swap goes to a contract RAVN doesn't route through", { to });
   let pulled = 0n;
-  if (sel === SEL.allowanceHolderExec) {
+  if (to === lower(HINKAL)) {
+    // Hinkal's deposit, its only call RAVN routes through: the input token alone (the coin as the
+    // zero address), at most the swap's amount. Hinkal pulls a token with transferFrom, so this
+    // holds where an allowance the user already gave Hinkal stands in for the approval.
+    if (sel !== SEL.prooflessDeposit) fail("The call to Hinkal isn't a deposit", { selector: sel });
+    const single = (arg: number): number => {
+      const offset = wordUint(data, arg);
+      if (offset % 32n !== 0n) fail("Hinkal's deposit calldata isn't ABI-encoded");
+      const at = Number(offset / 32n);
+      if (wordUint(data, at) !== 1n) fail("The Hinkal deposit isn't for exactly one token");
+      return at + 1;
+    };
+    const token = wordAddress(data, single(0));
+    pulled = wordUint(data, single(1));
+    if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The Hinkal deposit is for a token other than the one being swapped", { token });
+    if (pulled > ctx.amount) fail("The Hinkal deposit is for more than the swap's amount", { amount: pulled.toString() });
+  } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.
     const token = wordAddress(data, 1);
@@ -331,6 +354,58 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
   fail("RAVN asked for a signature of a kind this SDK doesn't recognise", { primaryType, verifyingContract: domain.verifyingContract });
 }
 
+// EVM addresses compare in any case, others (a Solana payout) exactly.
+const sameAddress = (a: unknown, b: string): boolean =>
+  typeof a === "string" && (/^0x[0-9a-fA-F]{40}$/.test(b) ? lower(a) === lower(b) : a === b);
+
+/**
+ * An AUTHORIZE (Hinkal) moves nothing by itself, but each signature could if it were another. The
+ * personal_sign must open a read-only Hinkal session. The typed data places one PrivateSendBridge
+ * order, which Hinkal pays from the user's Hinkal balance (funds already there included): the input
+ * token on the input chain, at most the input amount, to the one recipient quoted, by a route paying
+ * only it (Hinkal runs the order's `quote` as given).
+ */
+function checkAuthorize(ctx: Ctx, execution: AuthorizeDTO, intent: SwapIntent) {
+  if (!KNOWN_CONTRACTS[ctx.chainId]) fail(`This SDK version doesn't know chain ${ctx.chainId} for an authorization: update @ravnexchange/sdk`);
+  const sign: Record<string, unknown> = isRecord(execution.sign) ? execution.sign : fail("The authorization asks for nothing to sign");
+  if (sign.method === "personal_sign") {
+    const message = typeof sign.message === "string" ? sign.message : "";
+    if (message.includes(HINKAL_NORMAL_MODE)) fail("The message would open a Hinkal session that can move the user's funds");
+    if (!HINKAL_SESSION.test(message)) fail("The message to sign isn't a read-only Hinkal session", { message: message.slice(0, 300) });
+    return;
+  }
+  if (sign.method !== "eth_signTypedData_v4") fail("RAVN asked for a signature of a kind this SDK doesn't recognise", { method: sign.method });
+  const typed = isRecord(sign.typedData) ? sign.typedData : fail("The authorization's typed data is missing");
+  const domain = isRecord(typed.domain) ? typed.domain : {};
+  const message = isRecord(typed.message) ? typed.message : {};
+  // Hinkal's domain names no contract: a field more would make the signature good somewhere else.
+  if (domain.name !== "Hinkal Enclave" || Object.keys(domain).some((k) => k !== "name" && k !== "chainId")) {
+    fail("The signature request isn't for Hinkal's enclave", { domain });
+  }
+  sameChain(ctx, domain.chainId, "The signature request", true);
+  if (typed.primaryType !== "PrivateSendBridge") fail("RAVN asked for a signature of a kind this SDK doesn't recognise", { primaryType: typed.primaryType });
+  sameChain(ctx, message.chainId, "The order", true);
+  if (lower(message.tokenAddress) !== (ctx.native ? ZERO_ADDRESS : ctx.token)) {
+    fail("The order is for a token other than the one being swapped", { tokenAddress: message.tokenAddress });
+  }
+  const recipients = Array.isArray(message.recipients) ? message.recipients : [];
+  const only: unknown = recipients[0];
+  if (recipients.length !== 1 || !isRecord(only)) fail("The order doesn't pay exactly one recipient", { count: recipients.length });
+  if (big(only.amount, "The order's amount") > ctx.amount) fail("The order sends more than the swap's amount", { amount: only.amount });
+  const to = intent.destinationAddress;
+  if (to === undefined) return;
+  if (!sameAddress(only.recipient, to)) fail("The order pays someone other than the destination address", { recipient: only.recipient });
+  let legs: unknown;
+  try {
+    legs = JSON.parse(String(message.quote)).quote.lifiRecipients;
+  } catch {
+    // Unreadable: the route can't be held to the recipient.
+  }
+  if (!Array.isArray(legs) || legs.length === 0 || !legs.every((l) => isRecord(l) && sameAddress(l.recipientAddress, to))) {
+    fail("The order's route pays someone other than the destination address");
+  }
+}
+
 /**
  * Throws UnsafeExecutionError unless every transaction, signature and deposit in `execution` stays
  * within what `intent` asked: the input token on the input chain, no more than the input amount,
@@ -345,8 +420,11 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.
  */
-export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, options: GuardOptions = {}): void {
-  if (!isRecord(execution)) fail("RAVN's answer isn't an execution");
+export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: SwapIntent, options: GuardOptions = {}): void {
+  // As unknown: narrowing to a Record would drop the AuthorizeDTO interface from the type.
+  if (!isRecord(execution as unknown)) fail("RAVN's answer isn't an execution");
+  // Signed whatever its quote, so checked whatever it says of itself.
+  if (execution.executionType === "AUTHORIZE") return checkAuthorize(context(intent, options), execution, intent);
   // A sandbox execution is never sent, so it's left unchecked: but only when the quote asked for one.
   // RAVN's own flag can't switch the check off.
   if (execution.sandbox) {
@@ -433,9 +511,9 @@ export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, opti
  * on that RPC (see GuardOptions.solanaRpcUrl). RavnClient.execute runs this; call it yourself only for
  * an execution you got another way.
  */
-export async function verifyExecution(execution: ExecutionDTO, intent: SwapIntent, options: GuardOptions = {}, fetchImpl: typeof fetch = globalThis.fetch): Promise<void> {
+export async function verifyExecution(execution: ExecutionDTO | AuthorizeDTO, intent: SwapIntent, options: GuardOptions = {}, fetchImpl: typeof fetch = globalThis.fetch): Promise<void> {
   checkExecution(execution, intent, options);
-  if (!options.solanaRpcUrl || intent.inputChainId !== SOLANA_CHAIN_ID || execution.sandbox) return;
+  if (!options.solanaRpcUrl || intent.inputChainId !== SOLANA_CHAIN_ID || execution.executionType === "AUTHORIZE" || execution.sandbox) return;
   const serialized = execution.executionType === "TRANSACTION" ? execution.transaction.serialized : execution.executionType === "DEPOSIT" ? execution.deposit.transaction : undefined;
   if (serialized) await checkSolanaSimulation(serialized, intent, { url: options.solanaRpcUrl, fetch: fetchImpl });
 }

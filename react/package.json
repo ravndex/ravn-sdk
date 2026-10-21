@@ -1,6 +1,6 @@
 {
   "name": "@ravnexchange/react",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "React hooks for @ravnexchange/sdk: quote/execute/status state management. Bring your own wallet.",
   "keywords": ["ravn", "cross-chain", "swap", "swap-api", "dex-aggregator", "bitcoin", "native-btc", "solana", "evm", "crypto", "defi", "react", "react-hooks", "typescript"],
   "main": "./dist/index.js",

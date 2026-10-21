@@ -56,6 +56,10 @@ export const WETH_FEE_MINTERS: Record<number, string> = {
   [ARBITRUM]: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
 };
 
+/** Hinkal.sol, the same address on every chain Hinkal runs on (its GET /contract-addresses, 2026-10-21):
+ * a private swap's deposit, which the guard only lets call prooflessDeposit. */
+export const HINKAL = "0x7cb60446d7635C68EDf1c568cac74A1f98c1Cfa4";
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -83,6 +87,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [ALL, ["0xe226e4825cb215abafad98fdd400583eab6a594f"], "Layerswap depository"],
   [NOT_ZKSYNC, ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
+  [[ETHEREUM, BASE, ARBITRUM, POLYGON, BNB, ROBINHOOD], [HINKAL], "Hinkal"],
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).

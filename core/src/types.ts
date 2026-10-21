@@ -245,6 +245,31 @@ export type ExecutionDTO =
       batch?: boolean;
     };
 
+/**
+ * execute()'s answer when the swap needs your user's signature before it can be built (Hinkal, a
+ * private swap): no funds move by signing it. Have the paying wallet (the quote's `userAddress`)
+ * sign `sign` (`personal_sign` the `message`, or `eth_signTypedData_v4` the `typedData` with the
+ * wallet on the input chain), then call execute() again with the same `quoteToken`, this
+ * `authorization` and the `signature`, before `expiresAt`. Repeat until a TRANSACTION comes back
+ * (`step` of `steps`), and send that within 10 minutes. execute() checks each one first: the
+ * `personal_sign` opens a read-only Hinkal session, never one that can move funds; the typed data
+ * places an order for the input token, at most the input amount, paying the one recipient quoted.
+ * executeAndTrack does all of this.
+ */
+export interface AuthorizeDTO {
+  executionType: "AUTHORIZE";
+  quoteToken: string;
+  /** Pass back with the signature. Single-use. */
+  authorization: string;
+  sign:
+    | { method: "personal_sign"; message: string }
+    | { method: "eth_signTypedData_v4"; typedData: Record<string, unknown> };
+  /** ISO 8601: sign and call /v1/execute again before this. */
+  expiresAt: string;
+  step: number;
+  steps: number;
+}
+
 /** One EVM transaction to send, as given. */
 export interface CallDTO {
   to: string;
@@ -401,6 +426,10 @@ export interface ExecuteParams {
    * returns the first answer instead of building again (at a deposit venue, a second deposit
    * address). executeAndTrack sends one itself when you don't. */
   idempotencyKey?: string;
+  /** Answering an AUTHORIZE: its `authorization`, with `signature`, the paying wallet's signature
+   * over its `sign`. Send each answer with an idempotencyKey of its own. */
+  authorization?: string;
+  signature?: `0x${string}`;
 }
 
 export interface SubmitSignatureParams {
