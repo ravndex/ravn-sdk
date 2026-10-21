@@ -68,6 +68,11 @@ export interface AlternativeQuoteDTO {
   routeType: string;
   /** Pass to execute() to run THIS route instead of the primary quote. */
   quoteToken: string;
+  /** Whether RAVN could have picked this route as its quote. False for a preview-only price
+   * (`executable: false`) and for one with no minimum (`slippage.noMinimum`) quoting more than 1%
+   * above every route that holds one: nothing backs that figure. To pick a route yourself, choose
+   * among `pickable` ones on `expectedOutputAmount`. */
+  pickable: boolean;
   outputAmount: string;
   /** What RAVN counts on this route delivering, in the output token's base units: `outputAmount`, less
    * `slippage.expectedShortfallBps` when the venue holds no minimum (`slippage.noMinimum`, Rift); the
@@ -102,8 +107,8 @@ export interface SlippageDTO {
   guaranteedMin: string | null;
   noMinimum: boolean;
   /** How far under its output RAVN counts on a route with no minimum delivering, in bps, from what
-   * such routes have delivered: by swap size and whether both tokens are listed, from 5 (a $1k+ swap
-   * of listed tokens) to 100 (under $100). 0 when `noMinimum` is false. `expectedOutputAmount`
+   * such routes have delivered: by swap size and whether both tokens are on RAVN's list (memes count
+   * as unlisted), from 5 (a $1k+ swap of listed tokens) to 100 (under $100). 0 when `noMinimum` is false. `expectedOutputAmount`
    * already has it taken off. */
   expectedShortfallBps: number;
 }
@@ -307,7 +312,7 @@ export interface StatusDTO {
 
 /** A venue's price as it lands in getQuoteStream: an alternative without its quoteToken, to show,
  * not to execute (only the quote getQuoteStream resolves to carries tokens). */
-export type PriceDTO = Omit<AlternativeQuoteDTO, "quoteToken">;
+export type PriceDTO = Omit<AlternativeQuoteDTO, "quoteToken" | "pickable">;
 
 /** What getQuoteStream reports while the race runs. `venues`: the venues racing. `settled`: one
  * venue answered (`quotes` empty: nothing usable). The winner is picked once, at the end, net of
