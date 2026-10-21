@@ -233,10 +233,12 @@ export async function checkSolanaSimulation(
     const left = (budget.get(what) ?? 0n) - (n > covered ? n - covered : 0n);
     budget.set(what, left);
     if (left >= 0n) return;
-    const total = (what === input ? amount : 0n) + (what === "SOL" ? RENT_ALLOWANCE_LAMPORTS : 0n) - left;
-    if (what === "SOL") fail(sellsSol ? "The Solana transaction, simulated, sends more SOL than the swap and its account rent" : "The Solana transaction, simulated, sends more SOL than its account rent", { lamports: total.toString() });
-    if (what !== input) fail("The Solana transaction, simulated, moves a token other than the one being swapped", { mint: what, amount: total.toString() });
-    fail("The Solana transaction, simulated, moves more of the token than the swap's amount", { amount: total.toString() });
+    // How much has left the user's own balance so far (beyond what came in alongside it).
+    const fromBalance = ((what === input ? amount : 0n) + (what === "SOL" ? RENT_ALLOWANCE_LAMPORTS : 0n) - left).toString();
+    const verb = to === BURNED ? "burns" : what === "SOL" ? "sends" : "moves";
+    if (what === "SOL") fail(`The Solana transaction, simulated, ${verb} more SOL than ${sellsSol ? "the swap and its account rent" : "its account rent"}`, { fromBalance });
+    if (what !== input) fail(`The Solana transaction, simulated, ${verb} a token other than the one being swapped`, { mint: what, fromBalance });
+    fail(`The Solana transaction, simulated, ${verb} more of the token than the swap's amount`, { fromBalance });
   };
   const closes = (account: unknown, to: unknown) => {
     if (mine(account) && !mine(to)) fail("The Solana transaction, simulated, closes one of the user's token accounts to someone else");
@@ -286,6 +288,10 @@ export async function checkSolanaSimulation(
         } else if (type === "unwrapLamports") {
           // Wrapped SOL straight out as lamports; with no amount, all of it (unknown unless it stays the user's).
           transfer(info.source, info.destination, "SOL", info.amount === undefined && mine(info.destination) ? 0n : whole(info.amount));
+        } else if (type === "mintTo" || type === "mintToChecked") {
+          // New tokens into an account (a stake pool's last hop): like any payment in. Never with the user's own mint authority.
+          if ((info.mintAuthority ?? info.multisigMintAuthority) === user) fail("The Solana transaction, simulated, mints with the user's mint authority");
+          transfer(MINTED, info.account, asset(info.account), whole(tokens));
         } else if (type === "burn" || type === "burnChecked") {
           // Gone for good (a CCTP deposit, an unstake): leaves like any transfer.
           transfer(info.account, BURNED, asset(info.account), whole(tokens));
@@ -341,8 +347,9 @@ export async function checkSolanaSimulation(
   }
 }
 
-/** Where burned tokens go: no one's account. */
+/** Where burned tokens go, and minted ones come from: no one's account. */
 const BURNED = "(burned)";
+const MINTED = "(minted)";
 /** Token calls that may touch the user's accounts besides transfers, burns, closes and allowances (each held above). */
 const TOKEN_CALLS_ALLOWED = new Set(["syncNative", "initializeAccount", "initializeAccount2", "initializeAccount3", "initializeImmutableOwner", "getAccountDataSize"]);
 /** Native programs where the user's authority is worth something: stake, vote, the loaders, lookup tables. */

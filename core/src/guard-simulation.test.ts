@@ -160,11 +160,22 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
   it("counts a burn out of the user's account as leaving", async () => {
     const input = fixture("usdc->bonk jupiter");
     const usdc = input.userTokenAccounts[USDC];
-    inner(input, { programId: TOKEN, parsed: { type: "burn", info: { account: usdc, mint: USDC, amount: "1", authority: USER } } });
-    await refuses(input, /more of the token than the swap's amount/);
+    // After the swap has used the whole amount.
+    innerAt(input, input.simulation.innerInstructions.at(-1)!.index, { programId: TOKEN, parsed: { type: "burn", info: { account: usdc, mint: USDC, amount: "1", authority: USER } } });
+    await refuses(input, /burns more of the token than the swap's amount/);
     const other = fixture("usdc->bonk jupiter");
     inner(other, { programId: TOKEN, parsed: { type: "burnChecked", info: { account: other.userTokenAccounts[BONK], mint: BONK, tokenAmount: { amount: "1" }, authority: USER } } });
-    await refuses(other, /moves a token other than the one being swapped/);
+    await refuses(other, /burns a token other than the one being swapped/);
+  });
+
+  it("counts tokens minted into the user's account as coming in, but never minting with the user's authority", async () => {
+    const minted = fixture("usdc->bonk jupiter");
+    const bonk = minted.userTokenAccounts[BONK];
+    inner(minted, { programId: TOKEN, parsed: { type: "mintTo", info: { mint: BONK, account: bonk, mintAuthority: ATTACKER, amount: "5" } } }, tokenTransfer(bonk, ATTACKER, 5n));
+    await expect(verify(minted)).resolves.toBeUndefined();
+    const own = fixture("usdc->bonk jupiter");
+    inner(own, { programId: TOKEN, parsed: { type: "mintToChecked", info: { mint: ATTACKER, account: ATTACKER, mintAuthority: USER, tokenAmount: { amount: "5" } } } });
+    await refuses(own, /mints with the user's mint authority/);
   });
 
   it("refuses an unreadable token call on one of the user's token accounts, even without the wallet", async () => {
@@ -214,7 +225,6 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
 
   it.each([
     ["a change of authority", { type: "setAuthority", info: { account: ATTACKER, authorityType: "closeAccount", newAuthority: ATTACKER, authority: USER } }],
-    ["minting with the user's mint authority", { type: "mintTo", info: { mint: ATTACKER, account: ATTACKER, mintAuthority: USER, amount: "1" } }],
     ["withdrawing fees the user may withdraw", { type: "withdrawWithheldTokensFromMint", info: { mint: ATTACKER, feeRecipient: ATTACKER, withdrawWithheldAuthority: USER } }],
   ])("refuses %s", async (_, parsed) => {
     const f = fixture("sol->usdc 0x_solana");
