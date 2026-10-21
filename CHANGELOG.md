@@ -3,6 +3,22 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.2.7
+
+Every quote and route says what RAVN counts on it delivering, so you can sort routes the way RAVN
+does. Type-only: nothing changes for code that doesn't read the new fields.
+
+### Added
+
+- **`expectedOutputAmount`** on `QuoteDTO`, `AlternativeQuoteDTO` and `PriceDTO`: the output
+  RAVN counts on (base units). It equals the output for every quote that holds a minimum; for one
+  that doesn't (`slippage.noMinimum`, Rift) it is the output less `slippage.expectedShortfallBps`.
+  RAVN ranks on it less gas. Sorting on `outputAmount` instead can put a no-minimum route on top
+  that RAVN ranked lower.
+- **`slippage.expectedShortfallBps`** on `SlippageDTO`: that shortfall in bps, by swap size and
+  whether both tokens are listed (5 for a $1k+ swap of listed tokens, up to 100 under $100); 0 when
+  the quote holds a minimum.
+
 ## @ravnexchange/sdk 0.2.6
 
 Show prices while RAVN's race runs. Nothing changes for code that doesn't call the new method.
