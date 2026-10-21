@@ -226,6 +226,8 @@ describe("checkExecution: signatures", () => {
     const b = fixture("8453 token->native cow");
     ((b.execution as Sig).typedData!.domain as Record<string, unknown>).chainId = 1;
     refuses(b.execution, b.intent, /not the swap's chain/);
+    ((b.execution as Sig).typedData!.domain as Record<string, unknown>).chainId = null;
+    refuses(b.execution, b.intent, /names no chain/);
   });
 });
 

@@ -269,7 +269,7 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
   const message = isRecord(typed.message) ? typed.message : {};
   const primaryType = typed.primaryType;
   const verifying = lower(domain.verifyingContract);
-  if (domain.chainId === undefined) fail("The signature request names no chain");
+  if (domain.chainId === undefined || domain.chainId === null) fail("The signature request names no chain");
   const domainChain = typeof domain.chainId === "string" && /^(\d{1,15}|0x[0-9a-fA-F]{1,12})$/.test(domain.chainId) ? Number(domain.chainId) : domain.chainId;
   sameChain(ctx, domainChain, "The signature request");
 
