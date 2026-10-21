@@ -443,6 +443,24 @@ export type RavnErrorCode =
   | "INTERNAL"
   | "NETWORK_ERROR";
 
+/**
+ * Thrown by RavnClient.execute (and so executeAndTrack) before anything reaches the wallet, when
+ * what RAVN returned could move more than the user asked to swap, or touch anything else: an
+ * unknown contract, an approval beyond the amount, a fee above 1% or to anyone but RAVN, another
+ * token, a signature of a kind it doesn't know. Nothing was sent or signed. Don't retry it blindly:
+ * re-quote, and if it persists, tell RAVN.
+ */
+export class UnsafeExecutionError extends Error {
+  readonly code = "UNSAFE_EXECUTION";
+  constructor(
+    message: string,
+    public readonly details: Record<string, unknown> = {}
+  ) {
+    super(message);
+    this.name = "UnsafeExecutionError";
+  }
+}
+
 /** Thrown for every failed call: a non-2xx response, or none at all (NETWORK_ERROR). `code` is the
  * stable, machine-readable string from the API. */
 export class RavnApiError extends Error {
