@@ -69,7 +69,7 @@ export interface AlternativeQuoteDTO {
   /** Pass to execute() to run THIS route instead of the primary quote. */
   quoteToken: string;
   /** Whether RAVN could have picked this route as its quote. False for a preview-only price
-   * (`executable: false`) and for one with no minimum (`slippage.noMinimum`) quoting more than 1%
+   * (`executable: false`) while an executable route exists and for one with no minimum (`slippage.noMinimum`) quoting more than 1%
    * above every route that holds one: nothing backs that figure. To pick a route yourself, choose
    * among `pickable` ones on `expectedOutputAmount`. */
   pickable: boolean;

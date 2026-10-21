@@ -18,7 +18,7 @@ could have picked it, so you can choose a route the way RAVN does.
 - **`slippage.expectedShortfallBps`** on `SlippageDTO`: that shortfall in bps, by swap size and
   whether both tokens are on RAVN's list (memes count as unlisted): 5 for a $1k+ swap of listed
   tokens, up to 100 under $100; 0 when the quote holds a minimum.
-- **`pickable`** on `AlternativeQuoteDTO` (not `PriceDTO`): false for a preview-only price and for a
+- **`pickable`** on `AlternativeQuoteDTO` (not `PriceDTO`): false for a preview-only price (while an executable route exists) and for a
   no-minimum route quoting more than 1% above every route that holds one, which RAVN lists but never
   picks. To choose a route yourself, pick among `pickable` ones on `expectedOutputAmount`.
 
