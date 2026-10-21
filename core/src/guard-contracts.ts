@@ -5,7 +5,8 @@
  * couldn't reach (KyberSwap's /routes, OKX's /swap, Across's /chains, Garden's /assets, THORChain's
  * inbound addresses, Mayan's SDK). A venue that moves to a new contract is refused until this list
  * knows it: RAVN's server runs this same check on what it hands out and alerts on a refusal, and
- * GuardOptions.allowContracts covers the gap meanwhile.
+ * GuardOptions.allowContracts covers the gap meanwhile. Arc (5042) added 2026-10-21 from the same kind of
+ * sweep: 33 builds across Relay, Across, Eco, 0x Swap/Gasless, KyberSwap, Fly and OKX, plus Garden's /assets.
  */
 
 const ETHEREUM = 1;
@@ -18,13 +19,14 @@ const ZKSYNC = 324;
 const WORLD_CHAIN = 480;
 const HYPEREVM = 999;
 const TEMPO = 4217;
+const ARC = 5042;
 const ROBINHOOD = 4663;
 const BASE = 8453;
 const ARBITRUM = 42161;
 const AVALANCHE = 43114;
 const LINEA = 59144;
 
-const ALL = [ETHEREUM, OPTIMISM, BNB, UNICHAIN, POLYGON, MONAD, ZKSYNC, WORLD_CHAIN, HYPEREVM, TEMPO, ROBINHOOD, BASE, ARBITRUM, AVALANCHE, LINEA];
+const ALL = [ETHEREUM, OPTIMISM, BNB, UNICHAIN, POLYGON, MONAD, ZKSYNC, WORLD_CHAIN, HYPEREVM, TEMPO, ARC, ROBINHOOD, BASE, ARBITRUM, AVALANCHE, LINEA];
 // zkSync derives contract addresses differently, so a venue's one-address-everywhere contract isn't there.
 const NOT_ZKSYNC = ALL.filter((c) => c !== ZKSYNC);
 
@@ -74,7 +76,7 @@ export const RAVN_FEE_WALLETS = {
 // Permit2 could grant an allowance to anyone.
 const ENTRIES: [readonly number[], readonly string[], string][] = [
   [NOT_ZKSYNC, ["0x0000000000001fF3684f28c67538d4D072C22734"], "0x AllowanceHolder"],
-  [[ROBINHOOD, ETHEREUM, ARBITRUM, BASE, OPTIMISM, POLYGON, BNB, AVALANCHE, LINEA, UNICHAIN, HYPEREVM, MONAD], ["0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"], "KyberSwap"],
+  [[ROBINHOOD, ETHEREUM, ARBITRUM, BASE, OPTIMISM, POLYGON, BNB, AVALANCHE, LINEA, UNICHAIN, HYPEREVM, MONAD, ARC], ["0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"], "KyberSwap"],
   [[ETHEREUM, POLYGON, ARBITRUM, BASE, BNB, OPTIMISM, ROBINHOOD], ["0xBeb0009ACa35087ce7cCF11637E24dd1Aad3bf2A", "0xbbbbbBB520d69a9775E85b458C58c648259FAD5F"], "Bebop"],
   [
     ALL.filter((c) => c !== LINEA),
@@ -82,7 +84,9 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
     "Relay",
   ],
   [[LINEA], ["0x59916da825d2d2ec1bf878d71c88826f6633ecca", "0x8754bc615047de01228a7527b712806a71a8dc9a", "0x9ef6d3c2f60d7b9008d74cab1fc0f899c957c819"], "Relay (Linea)"],
-  [NOT_ZKSYNC, ["0x97CCDBea4632140639aD5eA9b944aa034eb15fD4"], "Across periphery"],
+  [NOT_ZKSYNC.filter((c) => c !== ARC), ["0x97CCDBea4632140639aD5eA9b944aa034eb15fD4"], "Across periphery"],
+  // Arc's is its own deployment: no code at 0x97CC… there; Across's Arc swap routes go through this one.
+  [[ARC], ["0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c"], "Across periphery (Arc)"],
   [[ZKSYNC], ["0x7c99ced6d8011af8a52488884f7ba2c61b0fa57d"], "Across periphery (zkSync)"],
   [NOT_ZKSYNC, ["0x337685fdaB40D39bd02028545a4FfA7D287cC3E2"], "Mayan forwarder"],
   [NOT_ZKSYNC, ["0xEC000769a73b70e16f361a442292500b3BCf4A85"], "Eco portal"],
@@ -103,6 +107,7 @@ const ACROSS_SPOKE_POOL: Record<number, string> = {
   [WORLD_CHAIN]: "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
   [HYPEREVM]: "0x35E63eA3eb0fb7A3bc543C71FB66412e1F6B0E04",
   [TEMPO]: "0x2d4710F04Da90184255782d3715224A6C776955D",
+  [ARC]: "0x9b4A302A548c7e313c2b74C461db7b84d3074A84",
   [ROBINHOOD]: "0xD29C85F15DF544bA632C9E25829fd29d767d7978",
   [BASE]: "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
   [ARBITRUM]: "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A",
@@ -137,6 +142,7 @@ const OKX: Record<number, [string, string]> = {
   [MONAD]: ["0xc1c76e784db8d68585fb608ce68fc5dcff14000e", "0xf534A8a1CAD0543Cd6438f7534CA3486c01998d4"],
   [ZKSYNC]: ["0x46eDEcEa0228f04Ab88dC34BE98314863bA40bE0", "0xc67879F4065d3B9fe1C09EE990B891Aa8E3a4c2f"],
   [HYPEREVM]: ["0xb193874f0c77948d2bcfec2efaf8bc65b4c2ca89", "0x56e6983D59bF472Ced0E63966A14d94A3A291589"],
+  [ARC]: ["0x4E3bcCE28cAf98A143Fd8BD9e4875ccAb3E7bBE0", "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af"],
   [ROBINHOOD]: ["0x6e2a35a7ad683cf634d91492d73bb7ff774c6919", "0x42170295F1173c9e5874ea9d00c6d137E1a4f53d"],
   [BASE]: ["0x67d03631fe51b741c0c00c4e16eb662ac84381df", "0x57df6092665eb6058DE53939612413ff4B09114E"],
   [ARBITRUM]: ["0x09f94b5fc68e227c323a6fbae3bd98c97fd8c849", "0x70cBb871E8f30Fc8Ce23609E9E0Ea87B6b222F58"],
@@ -161,6 +167,7 @@ const GARDEN: Record<number, string[]> = {
   [HYPEREVM]: ["0xDC74a45e86DEdf1fF7c6dac77e0c2F082f9E4F72"],
   [ROBINHOOD]: ["0x147bf8d6Fa3392D2376ef5F6738F3D2931BdDb49", "0xd8BF1D34AE05B6F631dE898aE9F8f91e08661B59"],
   [TEMPO]: ["0x0289b0da24962121b95400b572d08dbc01bb1281", "0x5fa58e4e89c85b8d678ade970bd6afd4311af17e"],
+  [ARC]: ["0x5fA58e4E89c85B8d678Ade970bD6afD4311aF17E", "0x89b6612A2121BFBd1c2Dc593504AbE4e5d5E9296"],
 };
 
 /** The contract approved to swap through `router`, where it's a different one (OKX's approval contract). */

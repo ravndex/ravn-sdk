@@ -117,6 +117,15 @@ describe("checkExecution: EVM transactions", () => {
     const { execution, intent } = swap();
     refuses(execution, { ...intent, inputChainId: 7777 }, /doesn't know chain 7777/);
   });
+
+  it("knows Arc's own Across periphery there, not the one other chains use (no code at it on Arc)", () => {
+    const { execution, intent } = fixture("5042->8453 swap+bridge across");
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const e = execution as Tx;
+    e.transaction.to = "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4";
+    e.calls![e.calls!.length - 1].to = e.transaction.to;
+    refuses(e, intent, /contract RAVN doesn't route through/);
+  });
 });
 
 describe("checkExecution: RAVN's fee", () => {

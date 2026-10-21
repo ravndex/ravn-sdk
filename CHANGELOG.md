@@ -3,6 +3,20 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.1
+
+Arc (Circle's chain, id 5042). 0.4.0 and earlier refuse every Arc execution with "This SDK version doesn't
+know chain 5042"; this release knows Arc's venue contracts, each checked against real RAVN /v1/execute
+builds on Arc (2026-10-21).
+
+### Added
+
+- Arc in the check (`checkExecution`): Relay (the same depository and routers as elsewhere), Across's Arc
+  SpokePool (`0x9b4A…4A84`) and its own Arc periphery (`0xE791…a32c`: the one other chains use,
+  `0x97CC…5fD4`, has no code on Arc and is refused there), Eco's portal, 0x AllowanceHolder and Permit2,
+  KyberSwap, Fly, OKX (router `0x4E3b…bBE0`, approvals `0x2B98…61Af`), Layerswap's depository and
+  Garden's Arc swap contracts.
+
 ## @ravnexchange/sdk 0.4.0, @ravnexchange/react 0.1.9
 
 Private swaps through Hinkal. Before Hinkal's swap can be built, the paying wallet signs twice (a
