@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import { executeAndTrack, ExecuteAndTrackError } from "./execute-and-track";
-import { checkExecution } from "./guard";
+import { checkExecution, checkRecovery } from "./guard";
+import { recoverStuckFunds } from "./recover";
 import type { SwapIntent } from "./guard";
 import { UnsafeExecutionError } from "./types";
-import type { AuthorizeDTO, ExecutionDTO } from "./types";
+import type { AuthorizeDTO, ExecutionDTO, RecoverDTO } from "./types";
 
 // Hinkal, a private swap: two AUTHORIZE steps (a read-only session, then the order), then the
 // deposit into Hinkal.sol. Shapes as ravn-mvp's hinkal adapter builds them (lib/hinkal/order.ts).
@@ -397,10 +398,10 @@ describe("checkExecution: Hinkal's deposit (TRANSACTION)", () => {
 
 // The API, as executeAndTrack calls it: each /execute answers the next of `executes` (a function:
 // called as the answer is sent).
-function api(executes: unknown[]) {
+function api(executes: unknown[], recovers: unknown[] = []) {
   return vi.fn(async (url: string, _init?: RequestInit) => {
     const path = new URL(url).pathname.split("/").pop();
-    const next = path === "execute" ? executes.shift() : { status: "success", venue: "hinkal" };
+    const next = path === "execute" ? executes.shift() : path === "recover" ? recovers.shift() : { status: "success", venue: "hinkal" };
     const data = typeof next === "function" ? next() : next;
     return { ok: true, status: 200, json: async () => ({ data }) };
   });
@@ -522,6 +523,24 @@ describe("executeAndTrack: AUTHORIZE (Hinkal)", () => {
     await expect(executeAndTrack(typed, { quoteToken: "qt-1" }, noTyped, { intent })).rejects.toThrow(/needs signTypedData/);
   });
 
+  it("counts the deposit's 10 minutes from when the order step arrived (Hinkal priced the route), not from its answer", async () => {
+    const start = Date.now();
+    const handlers = wallet([]);
+    // 3 minutes in the wallet, then 7.5 waiting on the approval: 10.5 since the route was priced.
+    handlers.signTypedData.mockImplementation(async () => {
+      vi.spyOn(Date, "now").mockReturnValue(start + 3 * 60_000);
+      return "0x0de4";
+    });
+    handlers.waitForReceipt.mockImplementation(async (hash: string) => {
+      vi.spyOn(Date, "now").mockReturnValue(start + 10.5 * 60_000);
+      return receipt(hash);
+    });
+    const client = new RavnClient({ fetch: api([placing(order()), tokenSell()]) as unknown as typeof fetch });
+    const failure = await executeAndTrack(client, { quoteToken: "qt-1" }, handlers, { intent }).catch((e) => e);
+    expect(failure.message).toMatch(/more than 10 minutes passed since the order was priced/);
+    expect(handlers.sendTransaction).toHaveBeenCalledOnce();
+  });
+
   it("doesn't send the deposit more than 10 minutes after the order was placed", async () => {
     const fetchImpl = api([placing(order()), tokenSell()]);
     const handlers = wallet([]);
@@ -582,5 +601,169 @@ describe("executeAndTrack: AUTHORIZE (Hinkal)", () => {
     });
     const result = await executeAndTrack(new RavnClient({ fetch: fetchImpl as unknown as typeof fetch }), { quoteToken: "qt-1" }, handlers, { intent, pollIntervalMs: 0 });
     expect(result.txHash).toBe(DEPOSIT_HASH);
+  });
+});
+
+describe("getQuote: the AUTHORIZE opt-in", () => {
+  it("sends authorizeSteps as given, streamed or not: without it RAVN leaves Hinkal out", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ data: { quoteToken: "qt-1", alternatives: [] } }) }));
+    const client = new RavnClient({ fetch: fetchImpl as unknown as typeof fetch });
+    const params = { ...intent, outputChainId: 42161, outputToken: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", confidential: true, authorizeSteps: true };
+    await client.getQuote(params);
+    await client.getQuoteStream(params);
+    for (const [, init] of fetchImpl.mock.calls) expect(JSON.parse(String(init!.body))).toMatchObject({ confidential: true, authorizeSteps: true });
+  });
+});
+
+// /v1/recover's answers, as ravn-mvp's lib/hinkal/recover builds them.
+const recoveryTyped = (kind: "RecoverStuckBridgeBalance" | "WithdrawStuckUtxos", over: { chainId?: unknown; tokenAddress?: string; recipient?: string } = {}) => ({
+  domain: { name: "Hinkal Enclave", chainId: 8453 } as Record<string, unknown>,
+  types: {
+    EIP712Domain: [{ name: "name", type: "string" }, { name: "chainId", type: "uint256" }],
+    [kind]: [
+      { name: "nonce", type: "string" },
+      { name: "sessionId", type: "string" },
+      { name: "chainId", type: "uint256" },
+      { name: "tokenAddress", type: "address" },
+      { name: "recipient", type: "address" },
+    ],
+  } as Partial<Record<string, { name: string; type: string }[]>>,
+  primaryType: kind as string,
+  message: { nonce: "n-1", sessionId: "3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b", chainId: 8453 as unknown, tokenAddress: USDC, recipient: USER, ...over },
+});
+const recoverSession = (authorization = "r-1"): RecoverDTO => ({ status: "sign", authorization, sign: { method: "personal_sign", message: SESSION }, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), step: 1 });
+const recovering = (typedData: Record<string, unknown>, authorization = "r-2"): RecoverDTO => ({ status: "sign", authorization, sign: { method: "eth_signTypedData_v4", typedData }, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), step: 2 });
+const done = (tokenAddress: string, authorization: string): RecoverDTO => ({ status: "done", recovered: [{ chainId: 8453, tokenAddress, amount: "1000" }], authorization });
+const STATUS_REF = "0b7d1c2e-1111-4222-8333-944455556666";
+
+describe("checkRecovery: what the paying wallet signs to get Hinkal's stuck funds back", () => {
+  const refusesRecovery = (answer: RecoverDTO, message: RegExp, user = USER) => {
+    expect(() => checkRecovery(answer, user)).toThrow(UnsafeExecutionError);
+    expect(() => checkRecovery(answer, user)).toThrow(message);
+  };
+
+  it("accepts the session, both recoveries back to the signer, done and nothing", () => {
+    expect(() => checkRecovery(recoverSession(), USER)).not.toThrow();
+    expect(() => checkRecovery(recovering(recoveryTyped("RecoverStuckBridgeBalance")), USER)).not.toThrow();
+    expect(() => checkRecovery(recovering(recoveryTyped("WithdrawStuckUtxos")), USER.toUpperCase().replace("0X", "0x"))).not.toThrow();
+    expect(() => checkRecovery(done(USDC, "r-3"), USER)).not.toThrow();
+    expect(() => checkRecovery({ status: "nothing" }, USER)).not.toThrow();
+  });
+
+  it("refuses a recovery to anyone but the signing wallet", () => {
+    refusesRecovery(recovering(recoveryTyped("RecoverStuckBridgeBalance", { recipient: ATTACKER })), /someone other than the signing wallet/);
+    refusesRecovery(recovering(recoveryTyped("WithdrawStuckUtxos")), /someone other than the signing wallet/, DEST);
+    refusesRecovery(recovering(recoveryTyped("WithdrawStuckUtxos")), /someone other than the signing wallet/, "");
+  });
+
+  it("refuses a normal-mode session, another kind, or fields other than Hinkal's", () => {
+    const normal = { ...recoverSession(), sign: { method: "personal_sign" as const, message: `${SESSION}\nThis signature can also be used to submit transactions.` } };
+    refusesRecovery(normal, /can move the user's funds/);
+    const withdraw = recoveryTyped("RecoverStuckBridgeBalance");
+    withdraw.types.Withdraw = withdraw.types.RecoverStuckBridgeBalance;
+    delete withdraw.types.RecoverStuckBridgeBalance;
+    withdraw.primaryType = "Withdraw";
+    refusesRecovery(recovering(withdraw), /kind this SDK doesn't recognise/);
+    const asText = recoveryTyped("WithdrawStuckUtxos");
+    asText.types.WithdrawStuckUtxos = asText.types.WithdrawStuckUtxos!.map((f) => (f.name === "recipient" ? { name: "recipient", type: "string" } : f));
+    refusesRecovery(recovering(asText), /signs other fields than its kind's/);
+    const rooted = recoveryTyped("WithdrawStuckUtxos");
+    rooted.types.Extra = [{ name: "x", type: "uint256" }];
+    refusesRecovery(recovering(rooted), /sign something other than its primaryType/);
+    const contract = recoveryTyped("WithdrawStuckUtxos");
+    contract.domain.verifyingContract = HINKAL;
+    refusesRecovery(recovering(contract), /isn't for Hinkal's enclave/);
+  });
+
+  it("refuses a recovery on a chain Hinkal doesn't run on, or naming no token", () => {
+    const optimism = recoveryTyped("WithdrawStuckUtxos", { chainId: 10 });
+    optimism.domain.chainId = 10;
+    refusesRecovery(recovering(optimism), /isn't for a chain Hinkal runs on/);
+    refusesRecovery(recovering(recoveryTyped("WithdrawStuckUtxos", { chainId: 1 })), /isn't for a chain Hinkal runs on/);
+    refusesRecovery(recovering(recoveryTyped("WithdrawStuckUtxos", { tokenAddress: "USDC" })), /names no token/);
+  });
+
+  it("refuses an answer it doesn't know", () => {
+    refusesRecovery({ status: "refunded" } as unknown as RecoverDTO, /can't check a recovery answer of status refunded/);
+  });
+
+  it("is what RavnClient.recover runs on every answer, unless the guard is off", async () => {
+    const bad = recovering(recoveryTyped("RecoverStuckBridgeBalance", { recipient: ATTACKER }));
+    const guarded = new RavnClient({ fetch: api([], [bad]) as unknown as typeof fetch });
+    await expect(guarded.recover({ statusRef: STATUS_REF }, { userAddress: USER })).rejects.toThrow(/someone other than the signing wallet/);
+    const open = new RavnClient({ guard: false, fetch: api([], [bad]) as unknown as typeof fetch });
+    await expect(open.recover({ statusRef: STATUS_REF }, { userAddress: USER })).resolves.toEqual(bad);
+  });
+});
+
+describe("recoverStuckFunds", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const OTHER = "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2";
+  const recoverCalls = (fetchImpl: ReturnType<typeof api>) =>
+    fetchImpl.mock.calls.filter(([url]) => url.endsWith("/recover")).map(([, init]) => JSON.parse(String(init!.body)));
+
+  it("signs the session, then each recovery, looking again after each until nothing is left", async () => {
+    const fetchImpl = api([], [
+      recoverSession(),
+      recovering(recoveryTyped("RecoverStuckBridgeBalance"), "r-2"),
+      done(USDC, "again-1"),
+      recovering(recoveryTyped("WithdrawStuckUtxos", { tokenAddress: OTHER }), "r-3"),
+      done(OTHER, "again-2"),
+      { status: "nothing" },
+    ]);
+    const steps: string[] = [];
+    const { signMessage, signTypedData, switchChain } = wallet(steps);
+    const result = await recoverStuckFunds(new RavnClient({ fetch: fetchImpl as unknown as typeof fetch }), { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData, switchChain });
+    expect(result.recovered.map((r) => r.tokenAddress)).toEqual([USDC, OTHER]);
+    expect(steps).toEqual([
+      "signMessage:Authorize Hinkal session",
+      "switchChain:8453",
+      "signTypedData:RecoverStuckBridgeBalance",
+      "switchChain:8453",
+      "signTypedData:WithdrawStuckUtxos",
+    ]);
+    expect(recoverCalls(fetchImpl)).toEqual([
+      { statusRef: STATUS_REF },
+      { statusRef: STATUS_REF, authorization: "r-1", signature: "0x5e55" },
+      { statusRef: STATUS_REF, authorization: "r-2", signature: "0x0de4" },
+      // The continuation: its authorization alone.
+      { statusRef: STATUS_REF, authorization: "again-1" },
+      { statusRef: STATUS_REF, authorization: "r-3", signature: "0x0de4" },
+      { statusRef: STATUS_REF, authorization: "again-2" },
+    ]);
+  });
+
+  it("resolves empty when nothing is stuck", async () => {
+    const { signMessage, signTypedData } = wallet([]);
+    const client = new RavnClient({ fetch: api([], [recoverSession(), { status: "nothing" }]) as unknown as typeof fetch });
+    await expect(recoverStuckFunds(client, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).resolves.toEqual({ recovered: [] });
+  });
+
+  it("never signs the same recovery (kind, chain, token) twice, nor a second session", async () => {
+    const { signMessage, signTypedData } = wallet([]);
+    const twice = new RavnClient({
+      fetch: api([], [recoverSession(), recovering(recoveryTyped("WithdrawStuckUtxos")), done(USDC, "a-1"), recovering(recoveryTyped("WithdrawStuckUtxos"), "r-3")]) as unknown as typeof fetch,
+    });
+    await expect(recoverStuckFunds(twice, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/a second time/);
+    expect(signTypedData).toHaveBeenCalledOnce();
+    const sessions = new RavnClient({ fetch: api([], [recoverSession(), recoverSession("r-9")]) as unknown as typeof fetch });
+    await expect(recoverStuckFunds(sessions, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/session a second time/);
+  });
+
+  it("refuses a done that answers no recovery, and a step past its expiresAt", async () => {
+    const { signMessage, signTypedData } = wallet([]);
+    const early = new RavnClient({ fetch: api([], [recoverSession(), done(USDC, "a-1")]) as unknown as typeof fetch });
+    await expect(recoverStuckFunds(early, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/done without a recovery/);
+    const stale = new RavnClient({ fetch: api([], [{ ...recoverSession(), expiresAt: new Date(Date.now() - 1).toISOString() }]) as unknown as typeof fetch });
+    signMessage.mockClear();
+    await expect(recoverStuckFunds(stale, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(/expired/);
+    expect(signMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a recovery to another wallet before the wallet sees it", async () => {
+    const { signMessage, signTypedData } = wallet([]);
+    const client = new RavnClient({ fetch: api([], [recoverSession(), recovering(recoveryTyped("RecoverStuckBridgeBalance", { recipient: ATTACKER }))]) as unknown as typeof fetch });
+    await expect(recoverStuckFunds(client, { statusRef: STATUS_REF, userAddress: USER }, { signMessage, signTypedData })).rejects.toThrow(UnsafeExecutionError);
+    expect(signTypedData).not.toHaveBeenCalled();
   });
 });

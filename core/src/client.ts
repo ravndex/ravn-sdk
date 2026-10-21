@@ -1,4 +1,4 @@
-import { verifyExecution } from "./guard";
+import { checkRecovery, verifyExecution } from "./guard";
 import type { GuardOptions, SwapIntent } from "./guard";
 import { RavnApiError, UnsafeExecutionError } from "./types";
 import type {
@@ -9,6 +9,8 @@ import type {
   GetQuoteParams,
   QuoteDTO,
   QuoteStreamOptions,
+  RecoverDTO,
+  RecoverParams,
   StatusDTO,
   SubmitSignatureParams,
   SubmitTransactionParams,
@@ -262,6 +264,18 @@ export class RavnClient {
       await verifyExecution(execution, params.destinationAddress ? { ...intent, destinationAddress: params.destinationAddress } : intent, this.guard, this.fetchImpl);
     }
     return execution;
+  }
+
+  /**
+   * POST /v1/recover: what a failed Hinkal swap left at Hinkal, back to the wallet that paid for it,
+   * `userAddress` (see RecoverDTO). Every "sign" answer is checked before it is returned
+   * (checkRecovery): the session read-only, a recovery only back to `userAddress`. recoverStuckFunds
+   * runs the whole recovery.
+   */
+  async recover(params: RecoverParams, options: { userAddress: string }): Promise<RecoverDTO> {
+    const answer = await this.request<RecoverDTO>("/recover", { method: "POST", body: JSON.stringify(params) });
+    if (this.guard !== false) checkRecovery(answer, options.userAddress);
+    return answer;
   }
 
   /** POST /v1/submit-signature: for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */
