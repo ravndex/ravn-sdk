@@ -1,20 +1,19 @@
 import { UnsafeExecutionError } from "./types";
-import type { DepositFeeDTO } from "./types";
 
 /**
  * Checks a Bitcoin deposit's PSBT (BIP174, version 0, as RAVN builds it): its outputs pay exactly
- * `deposit.amount` to the deposit address, RAVN's fee (when there is one) to RAVN's fee wallet, and
- * everything else back to the sender, from the sender's own coins, at a network fee no wallet would
- * call absurd. Anything else leaving the wallet is refused.
+ * `deposit.amount` to the deposit address, at most `feeAmount` to RAVN's fee wallet, and everything
+ * else back to the sender, from the sender's own coins, signed over every output (SIGHASH_ALL), at a
+ * network fee no wallet would call absurd. Anything else leaving the wallet is refused.
  */
 export function checkBitcoinPsbt(
   psbtBase64: string,
-  ctx: { deposit: { address: string; amount: string }; fee?: DepositFeeDTO; userAddress: string; feeWallet?: string }
+  ctx: { deposit: { address: string; amount: string }; feeAmount: bigint; userAddress: string; feeWallet: string }
 ): void {
   const { inputs, outputs } = parsePsbt(psbtBase64);
   const depositScript = hex(outputScript(ctx.deposit.address));
   const userScript = hex(outputScript(ctx.userAddress));
-  const feeScript = ctx.fee && ctx.feeWallet ? hex(outputScript(ctx.feeWallet)) : undefined;
+  const feeScript = hex(outputScript(ctx.feeWallet));
   if (depositScript === userScript) fail("The deposit address is the sender's own");
 
   let deposited = 0n;
@@ -23,11 +22,11 @@ export function checkBitcoinPsbt(
   for (const o of outputs) {
     out += o.value;
     if (o.script === depositScript) deposited += o.value;
-    else if (feeScript && o.script === feeScript) feePaid += o.value;
+    else if (o.script === feeScript) feePaid += o.value;
     else if (o.script !== userScript) fail("The Bitcoin transaction pays an address that is neither the deposit, RAVN's fee nor the sender");
   }
   if (deposited !== BigInt(ctx.deposit.amount)) fail("The Bitcoin transaction doesn't pay the deposit exactly its amount", { paid: deposited.toString() });
-  if (ctx.fee && feePaid > BigInt(ctx.fee.amount)) fail("The Bitcoin transaction pays RAVN more than the fee", { paid: feePaid.toString() });
+  if (feePaid > ctx.feeAmount) fail("The Bitcoin transaction pays RAVN more than the fee", { paid: feePaid.toString() });
 
   let into = 0n;
   for (const i of inputs) {
@@ -108,14 +107,18 @@ function parseTx(r: Reader): { inputs: { txid: string; vout: number }[]; outputs
   return { inputs, outputs };
 }
 
-// Key-value map: [keylen][key][valuelen][value]... up to a 0x00 separator.
+// Key-value map: [keylen][key][valuelen][value]... up to a 0x00 separator. A repeated key makes the
+// PSBT invalid (BIP174): a wallet might sign the other copy than the one checked.
 function readMap(r: Reader): Map<number, Uint8Array> {
   const map = new Map<number, Uint8Array>();
+  const seen = new Set<string>();
   for (;;) {
     const keyLen = r.varint();
     if (keyLen === 0) return map;
     const key = r.bytes(keyLen);
     const value = r.bytes(r.varint());
+    if (seen.has(hex(key))) fail("The Bitcoin PSBT repeats a key");
+    seen.add(hex(key));
     if (keyLen === 1) map.set(key[0], value);
   }
 }
@@ -129,24 +132,33 @@ function parsePsbt(b64: string): { inputs: { value?: bigint; script?: string }[]
   }
   const r = new Reader(bytes);
   if (hex(r.bytes(5)) !== "70736274ff") fail("The Bitcoin PSBT isn't a PSBT");
-  const unsigned = readMap(r).get(0x00);
+  const global = readMap(r);
+  const version = global.get(0xfb);
+  if (version && version.some((b) => b !== 0)) fail("The Bitcoin PSBT is of a version this SDK can't read");
+  const unsigned = global.get(0x00);
   if (!unsigned) fail("The Bitcoin PSBT carries no transaction (only version 0 is supported)");
   const tx = parseTx(new Reader(unsigned));
   const inputs = tx.inputs.map((prevout) => {
     const m = readMap(r);
+    // PSBT_IN_SIGHASH_TYPE: only SIGHASH_ALL (or taproot's default), which signs every output; with
+    // SIGHASH_NONE or SINGLE anyone who sees the signature could pay the coins elsewhere.
+    const sighash = m.get(0x03);
+    if (sighash && !(sighash.length === 4 && (sighash[0] === 0x01 || sighash[0] === 0x00) && sighash[1] === 0 && sighash[2] === 0 && sighash[3] === 0)) {
+      fail("The Bitcoin PSBT asks for a signature that doesn't cover every output");
+    }
     const witness = m.get(0x01);
-    if (witness) {
-      const o = parseOutput(new Reader(witness));
-      return { value: o.value, script: o.script };
-    }
     const full = m.get(0x00);
-    if (full) {
-      const prev = parseTx(new Reader(full));
-      const o = prev.outputs[prevout.vout];
-      return o ? { value: o.value, script: o.script } : {};
+    const fromWitness = witness ? parseOutput(new Reader(witness)) : undefined;
+    const fromFull = full ? parseTx(new Reader(full)).outputs[prevout.vout] : undefined;
+    if (full && !fromFull) fail("A Bitcoin input's previous transaction has no such output");
+    if (fromWitness && fromFull && (fromWitness.value !== fromFull.value || fromWitness.script !== fromFull.script)) {
+      fail("A Bitcoin input describes the coin it spends two different ways");
     }
-    return {};
+    const o = fromWitness ?? fromFull;
+    return o ? { value: o.value, script: o.script } : {};
   });
+  for (let k = 0; k < tx.outputs.length; k++) readMap(r);
+  if (!r.done) fail("The Bitcoin PSBT carries more than its transaction");
   return { inputs, outputs: tx.outputs };
 }
 

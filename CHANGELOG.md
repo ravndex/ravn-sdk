@@ -5,17 +5,20 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 
 ## @ravnexchange/sdk 0.3.0
 
-`execute()` checks what RAVN returns before it can reach a wallet. A compromised or tampered answer
-can no longer use your integration to move more than the amount being swapped.
+`execute()` checks what RAVN returns before it can reach a wallet. On EVM chains and Bitcoin, a
+compromised or tampered answer can no longer use your integration to move more than the amount being
+swapped (an allowance the user already gave the same venue contract elsewhere excepted). On Solana it
+holds transactions to RAVN's venue programs and checks what their system and token instructions move;
+a venue program's own instruction isn't read (see the README).
 
 ### Added
 
 - **The check** (`checkExecution`, run by `RavnClient.execute`, so by `executeAndTrack` and
   `useRavnExecute` too): every transaction, approval, signature, Solana transaction and Bitcoin PSBT
-  is held to the input token on the input chain, at most the input amount, venue contracts RAVN
-  routes through (a list per chain in this release), and RAVN's fee at most 1% to RAVN's own wallet.
-  Throws `UnsafeExecutionError` (`code: "UNSAFE_EXECUTION"`) before anything is sent or signed. See
-  the README's "The check before the wallet".
+  is held to the input token on the input chain, at most the input amount, venue contracts and
+  programs RAVN routes through (a list per chain in this release), and RAVN's fee at most 1% to RAVN's
+  own wallet. Throws `UnsafeExecutionError` (`code: "UNSAFE_EXECUTION"`) before anything is sent or
+  signed. See the README's "The check before the wallet".
 - `RavnClientConfig.guard`: `{ allowContracts }` to accept a venue's new contract before an SDK
   update, or `false` to turn the check off.
 - `execute(params, { intent })` and `ExecuteAndTrackOptions.intent`: what the user asked to swap, for a
@@ -25,7 +28,9 @@ can no longer use your integration to move more than the amount being swapped.
 
 - **`execute()` refuses a quoteToken this client didn't fetch unless you pass `intent`**, before calling
   the API. Quotes from `getQuote`/`getQuoteStream` (and their alternatives) on the same client are
-  remembered, so the usual quote-then-execute flow needs no change.
+  remembered, so the usual quote-then-execute flow needs no change. It also refuses a quote whose
+  input token was given as a symbol rather than an address, and a quoteToken RAVN returned for two
+  different requests.
 
 ## @ravnexchange/sdk 0.2.6
 

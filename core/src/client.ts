@@ -34,6 +34,8 @@ export interface RavnClientConfig {
 
 /** Quotes remembered for execute()'s check: plenty for any one user's session. */
 const MAX_REMEMBERED_QUOTES = 1_000;
+/** A quoteToken RAVN returned for two different requests (see remember). */
+const CONFLICT = Symbol("conflicting quote requests");
 
 interface Envelope<T> {
   data?: T;
@@ -61,7 +63,7 @@ export class RavnClient {
   private readonly guard: false | GuardOptions;
   // What each quoteToken this client fetched was asked for, from the caller's own request: the
   // independent side of execute()'s check, since RAVN's answers are what it checks.
-  private readonly intents = new Map<string, SwapIntent>();
+  private readonly intents = new Map<string, SwapIntent | typeof CONFLICT>();
 
   constructor(config: RavnClientConfig = {}) {
     this.apiKey = config.apiKey;
@@ -77,11 +79,17 @@ export class RavnClient {
       inputAmount: params.inputAmount,
       userAddress: params.userAddress,
       ...(params.destinationAddress ? { destinationAddress: params.destinationAddress } : {}),
+      ...(params.sandbox ? { sandbox: true } : {}),
     };
+    const key = JSON.stringify(intent);
     for (const token of [quote?.quoteToken, ...(quote?.alternatives ?? []).map((a) => a.quoteToken)]) {
       if (typeof token !== "string") continue;
+      // A token RAVN hands back for two different requests can't be checked against either: an
+      // answer could otherwise rebind an earlier quote to a later request.
+      const held = this.intents.get(token);
+      const value = held !== undefined && (held === CONFLICT || JSON.stringify(held) !== key) ? CONFLICT : intent;
       this.intents.delete(token);
-      this.intents.set(token, intent);
+      this.intents.set(token, value);
     }
     while (this.intents.size > MAX_REMEMBERED_QUOTES) this.intents.delete(this.intents.keys().next().value as string);
     return quote;
@@ -212,7 +220,11 @@ export class RavnClient {
     if (idempotencyKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
       throw new RavnApiError("INVALID_REQUEST", "idempotencyKey must be 1–255 printable ASCII characters, no spaces", undefined, undefined);
     }
-    const intent = options.intent ?? this.intents.get(params.quoteToken);
+    const remembered = this.intents.get(params.quoteToken);
+    if (this.guard !== false && !options.intent && remembered === CONFLICT) {
+      throw new UnsafeExecutionError("RAVN returned this quoteToken for two different quote requests, so execute() can't tell which one to check it against");
+    }
+    const intent = options.intent ?? (remembered === CONFLICT ? undefined : remembered);
     if (this.guard !== false && !intent) {
       throw new UnsafeExecutionError(
         "execute() can't check this quote: this client didn't fetch it. Pass { intent } (what your user asked to swap) as execute's second argument"

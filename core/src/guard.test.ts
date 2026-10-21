@@ -62,6 +62,7 @@ describe("checkExecution: EVM transactions", () => {
     const { execution, intent } = fixture("8453 token->native cow");
     const e = execution as Extract<ExecutionDTO, { executionType: "SIGNATURE" }>;
     e.approval!.data = approve("0xC92E8bdf79f0507f65a392b0ab4667716BFE0110", MAX);
+    e.approval!.amount = MAX.toString();
     expect(() => checkExecution(e, intent)).not.toThrow();
   });
 
@@ -288,7 +289,7 @@ describe("checkExecution: Solana", () => {
   });
 
   it("refuses SOL beyond rent on a token sell, and handing the user's account to a program", () => {
-    refuses(solSwap(solanaTx([solTransfer(OTHER, 100_000_000n)])), SOL_INTENT, /more SOL than the swap and its account rent/);
+    refuses(solSwap(solanaTx([solTransfer(OTHER, 100_000_000n)])), SOL_INTENT, /more SOL than its account rent/);
     refuses(solSwap(solanaTx([{ program: SYSTEM, accounts: [USER], data: [1, 0, 0, 0, ...b58decode(OTHER)] }])), SOL_INTENT, /hands the user's account to a program/);
   });
 
@@ -330,7 +331,7 @@ function p2wpkh(address: string): number[] {
   }
   return [0, 20, ...out];
 }
-function psbt(inputs: { value: bigint; owner: string }[], outputs: { value: bigint; to: string }[]): string {
+function psbt(inputs: { value: bigint; owner: string; extra?: number[] }[], outputs: { value: bigint; to: string }[]): string {
   const varint = (n: number) => [n];
   const tx = [2, 0, 0, 0, ...varint(inputs.length)];
   inputs.forEach((_, i) => tx.push(...new Array(32).fill(i + 1), 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff));
@@ -340,7 +341,7 @@ function psbt(inputs: { value: bigint; owner: string }[], outputs: { value: bigi
   const bytes = [0x70, 0x73, 0x62, 0x74, 0xff, 1, 0, ...varint(tx.length), ...tx, 0];
   for (const i of inputs) {
     const utxo = [...le(i.value, 8), ...varint(22), ...p2wpkh(i.owner)];
-    bytes.push(1, 1, ...varint(utxo.length), ...utxo, 0);
+    bytes.push(1, 1, ...varint(utxo.length), ...utxo, ...(i.extra ?? []), 0);
   }
   for (let k = 0; k < outputs.length; k++) bytes.push(0);
   return Buffer.from(bytes).toString("base64");
@@ -433,5 +434,125 @@ describe("RavnClient.execute runs the check", () => {
     (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).calls![1].to = ATTACKER;
     const client = new RavnClient({ fetch: api({ execute: execution }), guard: { allowContracts: { 8453: [ATTACKER] } } });
     await expect(client.execute({ quoteToken: "x" }, { intent })).resolves.toEqual(execution);
+  });
+});
+
+// ---- What an independent review broke in the first version, each now refused ---------------
+
+describe("checkExecution: hardened after review", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  type Dep = Extract<ExecutionDTO, { executionType: "DEPOSIT" }>;
+
+  it("refuses a negative amount, which would make a deposit plus fee look smaller", () => {
+    const { execution, intent } = fixture("8453 private token near_intents");
+    const e = execution as Dep;
+    e.deposit.amount = "9000000100000000";
+    (e.fee as unknown as { amount: number }).amount = -9_000_000_000_000_000;
+    delete e.fee!.transaction;
+    e.calls = [{ ...e.calls![0], data: transfer(e.deposit.address, 9_000_000_100_000_000n) }];
+    refuses(e, intent, /isn't a whole number/);
+  });
+
+  it("leaves a sandbox execution unchecked only when the quote asked for one", () => {
+    const { execution, intent } = fixture("8453 token->native relay");
+    const e = { ...execution, sandbox: true } as Tx;
+    e.transaction.to = ATTACKER;
+    refuses(e, intent, /marked this execution as a sandbox one/);
+    expect(() => checkExecution(e, { ...intent, sandbox: true })).not.toThrow();
+  });
+
+  it("refuses a transaction or approval that names no chain", () => {
+    const a = fixture("8453 native->token relay");
+    delete (a.execution as Tx).transaction.chainId;
+    refuses(a.execution, a.intent, /names no chain/);
+    const b = fixture("8453 token->native relay");
+    delete (b.execution as Tx).approval!.chainId;
+    refuses(b.execution, b.intent, /names no chain/);
+  });
+
+  it("refuses approval fields that don't say what the calldata approves", () => {
+    const a = fixture("8453 token->native relay");
+    (a.execution as Tx).approval!.spender = ATTACKER;
+    refuses(a.execution, a.intent, /spender isn't the one its calldata approves/);
+    const b = fixture("8453 token->native relay");
+    (b.execution as Tx).approval!.amount = MAX.toString();
+    refuses(b.execution, b.intent, /amount isn't the one its calldata approves/);
+    const c = fixture("8453 token->native relay");
+    (c.execution as Tx).approval!.unlimitedRecommended = true;
+    refuses(c.execution, c.intent, /unlimited approval is recommended/);
+  });
+
+  it("refuses RAVN's fee on top of approving the whole amount", () => {
+    const { execution, intent } = fixture("8453 xchain token eco");
+    const e = execution as Tx;
+    e.approval!.data = approve("0xEC000769a73b70e16f361a442292500b3BCf4A85", BigInt(intent.inputAmount));
+    e.approval!.amount = intent.inputAmount;
+    e.calls![0].data = e.approval!.data;
+    refuses(e, intent, /take more of the token than the swap's amount/);
+  });
+
+  it("refuses an order on a chain with no CoW, whatever it claims", () => {
+    const { execution, intent } = fixture("8453 token->native cow");
+    const e = execution as Extract<ExecutionDTO, { executionType: "SIGNATURE" }>;
+    delete e.approval;
+    e.typedData!.domain = { chainId: 10 };
+    refuses(e, { ...intent, inputChainId: 10 }, /names no contract/);
+  });
+
+  it("refuses an intent naming a token by symbol, which it can't hold RAVN to", () => {
+    const { execution, intent } = fixture("8453 token->native relay");
+    refuses(execution, { ...intent, inputToken: "USDC" }, /isn't an address/);
+  });
+
+  it("holds a SOL sell to one budget for SOL and wrapped SOL", () => {
+    const sol: SwapIntent = { ...SOL_INTENT, inputToken: "So11111111111111111111111111111111111111112", inputAmount: "500000000" };
+    const wsol = associatedTokenAddress(USER, "So11111111111111111111111111111111111111112", TOKEN)!;
+    const wrap = solTransfer(wsol, 500_000_000n);
+    expect(() => checkExecution(solSwap(solanaTx([wrap, JUPITER])), sol)).not.toThrow();
+    refuses(solSwap(solanaTx([solTransfer(OTHER, 500_000_000n), tokenIx(3, [wsol, OTHER, USER], 500_000_000n)])), sol, /more SOL than the swap/);
+  });
+
+  it("refuses paying RAVN more than its fee on Solana, and a durable nonce", () => {
+    const ravnUsdc = associatedTokenAddress("4pQtttNDe8kdQjhJ22LA2Tqnen9smPjoJj7HM3X8ZNYf", USDC, TOKEN)!;
+    const userUsdc = associatedTokenAddress(USER, USDC, TOKEN)!;
+    refuses(solSwap(solanaTx([tokenIx(3, [userUsdc, ravnUsdc, USER], 2_000_000n)])), SOL_INTENT, /pays RAVN more than its fee/);
+    refuses(solSwap(solanaTx([{ program: SYSTEM, accounts: [OTHER, SYSTEM, USER], data: [4, 0, 0, 0] }, JUPITER])), SOL_INTENT, /System call RAVN's swaps never make/);
+  });
+
+  it("refuses a PSBT asking for a signature that doesn't cover every output, or repeating a key", () => {
+    const intent: SwapIntent = { inputChainId: -1, inputToken: "native", inputAmount: "200000", userAddress: BTC_USER };
+    const deposit = (b64: string): ExecutionDTO => ({
+      executionType: "DEPOSIT",
+      quoteToken: "qt",
+      statusRef: BTC_DEPOSIT,
+      deposit: { address: BTC_DEPOSIT, amount: "199000", chainId: -1, psbt: b64 },
+      fee: { amount: "1000", address: BTC_FEE, chainId: -1 },
+    });
+    const outs = [
+      { value: 199_000n, to: BTC_DEPOSIT },
+      { value: 1_000n, to: BTC_FEE },
+      { value: 399_000n, to: BTC_USER },
+    ];
+    const sighash = (t: number) => [1, 3, 4, t, 0, 0, 0];
+    expect(() => checkExecution(deposit(psbt([{ value: 600_000n, owner: BTC_USER, extra: sighash(1) }], outs)), intent)).not.toThrow();
+    refuses(deposit(psbt([{ value: 600_000n, owner: BTC_USER, extra: sighash(2) }], outs)), intent, /doesn't cover every output/);
+    refuses(deposit(psbt([{ value: 600_000n, owner: BTC_USER, extra: [...sighash(1), ...sighash(1)] }], outs)), intent, /repeats a key/);
+  });
+});
+
+describe("RavnClient: a quoteToken RAVN returns for two requests", () => {
+  it("can't be executed against either", async () => {
+    const { execution, intent } = fixture("8453 token->native relay");
+    const answers = [{ quoteToken: "T", alternatives: [] }, { quoteToken: "other", alternatives: [{ quoteToken: "T" }] }];
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname.split("/").pop()!;
+      const data = path === "quote" ? answers.shift() : execution;
+      return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ data }) };
+    });
+    const client = new RavnClient({ fetch: fetchImpl as unknown as typeof fetch });
+    const base = { ...intent, outputChainId: 8453, outputToken: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" };
+    await client.getQuote(base);
+    await client.getQuote({ ...base, inputAmount: "1" });
+    await expect(client.execute({ quoteToken: "T" })).rejects.toThrow(/two different quote requests/);
   });
 });

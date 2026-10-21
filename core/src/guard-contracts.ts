@@ -174,8 +174,8 @@ export const KNOWN_CONTRACTS: Record<number, readonly string[]> = build();
 
 /**
  * Solana programs RAVN's venues call: Jupiter (its aggregator and RFQ order engine), OKX, 0x, Relay,
- * Mayan (from its SDK, with the Titan and DFlow routers it swaps through) and Wormhole/CCTP under
- * Mayan. System, token, associated-account, compute-budget and memo programs are read, not listed.
+ * Mayan (from its SDK, with the Titan and DFlow routers it swaps through), Wormhole/CCTP under
+ * Mayan, and Garden. System, token, associated-account, compute-budget and memo programs are read, not listed.
  */
 export const SOLANA_PROGRAMS: ReadonlySet<string> = new Set([
   "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
@@ -198,4 +198,7 @@ export const SOLANA_PROGRAMS: ReadonlySet<string> = new Set([
   "EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX",
   "T1TANpTeScyeqVzzgNViGDNrkQ6qHz9KrSBS4aNXvGT",
   "DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH",
+  // Garden's Solana swap programs (SPL tokens, SOL), from its /v2/assets.
+  "gdnvdMCHJgnidtU7SL8RkRshHPvDJU1pdfZEpoLvqdU",
+  "2bag6xpshpvPe7SJ9nSDLHpxqhEAoHPGpEkjNSv7gxoF",
 ]);

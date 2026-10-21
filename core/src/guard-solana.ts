@@ -1,15 +1,16 @@
 import { UnsafeExecutionError } from "./types";
-import type { DepositFeeDTO } from "./types";
 import { RAVN_FEE_WALLETS, SOLANA_PROGRAMS } from "./guard-contracts";
 
 /**
  * Checks a Solana transaction RAVN returned (a swap, or a deposit with RAVN's fee inside it): every
  * program it calls is one RAVN's venues use, and what it visibly moves out of the user's wallet stays
- * within the swap: the input token up to the input amount, SOL up to the input amount (when selling
- * SOL) plus account rent, never another token, never an approval or a change of owner.
+ * within the swap: the input token up to the input amount (selling SOL: SOL and wrapped SOL together)
+ * plus account rent, at most `feeCap` of it to RAVN, never another token, never an approval, a
+ * change of owner or a durable nonce.
  *
- * Instructions of a venue's own program (Jupiter, Relay, Mayan, 0x) can move the user's funds in
- * ways only that program knows; they are allowed by program, not read.
+ * Not read: what an instruction of a venue's own program (Jupiter, Relay, Mayan, 0x, OKX) moves. The
+ * user signs for every token account they own, so such an instruction could move any of them; only
+ * simulating the transaction shows what it does. Those programs are allowed by name.
  */
 export function checkSolanaTransaction(
   serialized: string,
@@ -17,8 +18,8 @@ export function checkSolanaTransaction(
     inputToken: string;
     inputAmount: string;
     userAddress: string;
+    /** The most RAVN may be paid: the stated fee, else 1% of the input. */
     feeCap: bigint;
-    fee?: DepositFeeDTO;
     deposit?: { address: string; amount: string };
   }
 ): void {
@@ -28,6 +29,11 @@ export function checkSolanaTransaction(
   const sellsSol = ctx.inputToken === WSOL_MINT;
   const feeWallet = RAVN_FEE_WALLETS.solana;
   if (!msg.signers.includes(user)) fail("The Solana transaction isn't signed by the user's wallet");
+  // SOL the user sends to their own wrapped-SOL account isn't gone yet: it's counted when it leaves.
+  // (An account loaded from a lookup table is undefined, so it's never one of these.)
+  const known = (list: (string | undefined)[]) => new Set(list.filter((a): a is string => a !== undefined));
+  const ownWsol = known(sellsSol ? [TOKEN_PROGRAM, TOKEN_2022_PROGRAM].map((p) => associatedTokenAddress(user, WSOL_MINT, p)) : []);
+  const ravn = known([feeWallet, ...[TOKEN_PROGRAM, TOKEN_2022_PROGRAM].map((p) => associatedTokenAddress(feeWallet, ctx.inputToken, p))]);
 
   // A deposit RAVN built itself pays only the deposit and RAVN's fee: hold it to exactly that.
   const strict = ctx.deposit
@@ -42,6 +48,7 @@ export function checkSolanaTransaction(
 
   let solOut = 0n;
   let tokenOut = 0n;
+  let toRavn = 0n;
   let computeLimit: bigint | undefined;
   let computePrice = 0n;
   const paidTo: Record<string, bigint> = { deposit: 0n, fee: 0n };
@@ -56,8 +63,10 @@ export function checkSolanaTransaction(
       if (kind === 2) {
         // Transfer { lamports }: [from, to]
         const lamports = u64(data, 4);
-        if (acct(0) === user) {
+        const to = acct(1);
+        if (acct(0) === user && !(to !== undefined && ownWsol.has(to))) {
           solOut += lamports;
+          if (to !== undefined && ravn.has(to)) toRavn += lamports;
           if (strict) paidTo[payee(strict, acct(1), "SOL")] += lamports;
         }
       } else if (kind === 0 || kind === 3) {
@@ -67,7 +76,8 @@ export function checkSolanaTransaction(
       } else if (kind === 1 || kind === 8 || kind === 9 || kind === 10) {
         // Assign / Allocate (with seed): never the user's own account.
         if (acct(0) === user) fail("The Solana transaction hands the user's account to a program");
-      } else if (kind !== 4) {
+      } else {
+        // Durable nonces too (4): a signed transaction that never expires could be sent whenever.
         fail("The Solana transaction makes a System call RAVN's swaps never make", { kind });
       }
       continue;
@@ -88,9 +98,10 @@ export function checkSolanaTransaction(
           mint !== undefined ? mint === ctx.inputToken : source !== undefined && source === associatedTokenAddress(user, ctx.inputToken, program);
         if (!isInput) fail("The Solana transaction moves a token other than the one being swapped", { mint, source });
         const moved = u64(data, 1);
+        const dest = acct(kind === 3 ? 1 : 2);
         tokenOut += moved;
+        if (dest !== undefined && ravn.has(dest)) toRavn += moved;
         if (strict) {
-          const dest = acct(kind === 3 ? 1 : 2);
           const owner = [...strict.payees.keys()].find((o) => dest !== undefined && dest === associatedTokenAddress(o, ctx.inputToken, program));
           paidTo[owner ? strict.payees.get(owner)! : payee(strict, undefined, "token")] += moved;
         }
@@ -125,16 +136,21 @@ export function checkSolanaTransaction(
     if (!SOLANA_PROGRAMS.has(program)) fail("The Solana transaction calls a program RAVN doesn't route through", { program });
   }
 
-  if (tokenOut > amount) fail("The Solana transaction moves more of the token than the swap's amount", { moved: tokenOut.toString() });
-  const solBudget = (sellsSol ? amount : 0n) + RENT_ALLOWANCE_LAMPORTS;
-  if (solOut > solBudget) fail("The Solana transaction sends more SOL than the swap and its account rent", { lamports: solOut.toString() });
+  // Selling SOL, SOL and wrapped SOL are the same funds: one budget.
+  if (sellsSol) {
+    if (solOut + tokenOut > amount + RENT_ALLOWANCE_LAMPORTS) fail("The Solana transaction sends more SOL than the swap and its account rent", { lamports: (solOut + tokenOut).toString() });
+  } else {
+    if (tokenOut > amount) fail("The Solana transaction moves more of the token than the swap's amount", { moved: tokenOut.toString() });
+    if (solOut > RENT_ALLOWANCE_LAMPORTS) fail("The Solana transaction sends more SOL than its account rent", { lamports: solOut.toString() });
+  }
+  if (toRavn > ctx.feeCap) fail("The Solana transaction pays RAVN more than its fee", { paid: toRavn.toString() });
   if (msg.feePayer === user) {
     const priority = ((computeLimit ?? 1_400_000n) * computePrice) / 1_000_000n;
     if (priority > PRIORITY_FEE_CAP_LAMPORTS) fail("The Solana transaction's priority fee is absurdly high", { lamports: priority.toString() });
   }
   if (strict && ctx.deposit) {
     if (paidTo.deposit !== BigInt(ctx.deposit.amount)) fail("The Solana deposit doesn't pay the deposit exactly its amount", { paid: paidTo.deposit.toString() });
-    if (paidTo.fee > (ctx.fee ? BigInt(ctx.fee.amount) : 0n)) fail("The Solana deposit pays RAVN more than the fee", { paid: paidTo.fee.toString() });
+    if (paidTo.fee > ctx.feeCap) fail("The Solana deposit pays RAVN more than the fee", { paid: paidTo.fee.toString() });
   }
 }
 

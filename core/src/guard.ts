@@ -18,6 +18,8 @@ export interface SwapIntent {
   /** The wallet that signs: change, refunds and order owners must be it. */
   userAddress: string;
   destinationAddress?: string;
+  /** The quote was asked for with `sandbox: true`: only then is an execution marked sandbox left unchecked. */
+  sandbox?: boolean;
 }
 
 export interface GuardOptions {
@@ -46,13 +48,10 @@ const SEL = {
 };
 
 const lower = (s: unknown): string => (typeof s === "string" ? s.toLowerCase() : "");
+// A non-negative whole number: a decimal or 0x-hex string, or a safe non-negative JS integer.
 const big = (v: unknown, what: string): bigint => {
-  try {
-    if (typeof v === "number" && Number.isSafeInteger(v)) return BigInt(v);
-    if (typeof v === "string" && /^(0x[0-9a-fA-F]+|\d+)$/.test(v)) return BigInt(v);
-  } catch {
-    /* falls through */
-  }
+  if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) return BigInt(v);
+  if (typeof v === "string" && /^(0x[0-9a-fA-F]{1,64}|\d{1,78})$/.test(v)) return BigInt(v);
   throw new UnsafeExecutionError(`${what} isn't a whole number`, { value: v });
 };
 // 32-byte ABI word i of calldata after its 4-byte selector, as hex without 0x.
@@ -85,10 +84,20 @@ function fail(message: string, details: Record<string, unknown> = {}): never {
   throw new UnsafeExecutionError(message, details);
 }
 
+// What a token must look like for the check to hold it: never a symbol, which RAVN resolves itself.
+const TOKEN_FORMAT: Record<string, RegExp> = {
+  evm: /^0x[0-9a-fA-F]{40}$/,
+  [SOLANA_CHAIN_ID]: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
+  [BITCOIN_CHAIN_ID]: /^native$/,
+};
+
 function context(intent: SwapIntent, options: GuardOptions): Ctx {
   const chainId = intent.inputChainId;
   const amount = big(intent.inputAmount, "The swap's input amount");
   if (amount <= 0n) fail("The swap's input amount must be positive");
+  if (!(TOKEN_FORMAT[chainId] ?? TOKEN_FORMAT.evm).test(String(intent.inputToken))) {
+    fail("The quote's input token isn't an address: quote with token addresses (not symbols) so execute() can check what comes back", { inputToken: intent.inputToken });
+  }
   const known = new Set<string>([...(KNOWN_CONTRACTS[chainId] ?? []), ...(options.allowContracts?.[chainId] ?? [])].map(lower));
   return {
     chainId,
@@ -103,26 +112,40 @@ function context(intent: SwapIntent, options: GuardOptions): Ctx {
   };
 }
 
-const sameChain = (ctx: Ctx, chainId: unknown, what: string) => {
-  if (chainId !== undefined && chainId !== null && Number(chainId) !== ctx.chainId) {
-    fail(`${what} is for chain ${chainId}, not the swap's chain ${ctx.chainId}`, { chainId });
+// A chain id, when given, must be the swap's; `required`: it must be given (an EVM transaction
+// without one goes out on whatever chain the wallet is on, in that chain's coin).
+const sameChain = (ctx: Ctx, chainId: unknown, what: string, required = false) => {
+  if (chainId === undefined || chainId === null) {
+    if (required) fail(`${what} names no chain`);
+    return;
   }
+  if (Number(chainId) !== ctx.chainId) fail(`${what} is for chain ${chainId}, not the swap's chain ${ctx.chainId}`, { chainId });
 };
 
 /** RAVN's fee as the execution states it: to RAVN's own wallet on that chain, at most 1% of the input. */
-function checkFeeTerms(ctx: Ctx, fee: DepositFeeDTO, wallet: string | undefined) {
+function checkFeeTerms(ctx: Ctx, fee: DepositFeeDTO, wallet: string | undefined): bigint {
   if (!wallet || lower(fee.address) !== lower(wallet)) fail("The fee doesn't go to RAVN's fee wallet", { address: fee.address });
-  if (big(fee.amount, "The fee") > ctx.feeCap) fail("The fee is more than 1% of the swap", { amount: fee.amount });
+  sameChain(ctx, fee.chainId, "The fee");
+  const amount = big(fee.amount, "The fee");
+  if (amount > ctx.feeCap) fail("The fee is more than 1% of the swap", { amount: fee.amount });
+  return amount;
 }
 
 type Call = { to?: string; data?: string; value?: string; chainId?: number };
 
 /**
- * Checks one EVM call in its role and returns the native coin it sends (for "deposit": what it
- * deposits, coin or token). `limit`: the most a fee or deposit call may move.
+ * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
+ * approved (beyond a signature-gated spender), pulled by 0x, transferred as RAVN's fee or deposited.
+ * `limit`: the most a fee or deposit call may move.
  */
-function classifyEvmCall(ctx: Ctx, call: Call, role: "approval" | "fee" | "swap" | "deposit", limit = 0n, depositTo?: string): bigint {
-  sameChain(ctx, call.chainId, "A transaction");
+function classifyEvmCall(
+  ctx: Ctx,
+  call: Call,
+  role: "approval" | "fee" | "swap" | "deposit",
+  limit = 0n,
+  depositTo?: string
+): { value: bigint; tokens: bigint } {
+  sameChain(ctx, call.chainId, "A transaction", true);
   const to = lower(call.to);
   const data = lower(call.data ?? "0x");
   const value = big(call.value ?? "0", "A transaction's value");
@@ -145,7 +168,7 @@ function classifyEvmCall(ctx: Ctx, call: Call, role: "approval" | "fee" | "swap"
     if (approved > ctx.amount && !ctx.gated.has(spender)) {
       fail("The approval is for more than the swap's amount", { spender, amount: approved.toString() });
     }
-    return 0n;
+    return { value: 0n, tokens: ctx.gated.has(spender) ? 0n : approved };
   }
 
   if (role === "fee") {
@@ -155,21 +178,21 @@ function classifyEvmCall(ctx: Ctx, call: Call, role: "approval" | "fee" | "swap"
       if (data.length > 2 + 64) fail("The fee payment carries more than a tag", { to });
       if (!ctx.native) fail("A coin fee was asked on a token swap", { to });
       if (value > limit) fail("The fee payment is more than the fee", { value: value.toString() });
-      return value;
+      return { value, tokens: 0n };
     }
     if (to === ctx.token && sel === SEL.transfer) {
       if (wordAddress(data, 0) !== feeWallet) fail("The fee transfer isn't to RAVN's fee wallet", { to: wordAddress(data, 0) });
       if (wordUint(data, 1) > limit) fail("The fee payment is more than the fee", { amount: wordUint(data, 1).toString() });
       if (data.length > 138 + 64) fail("The fee transfer carries more than a tag", { to });
       if (value !== 0n) fail("The fee transfer sends value", { to });
-      return 0n;
+      return { value: 0n, tokens: wordUint(data, 1) };
     }
     if (WETH_FEE_MINTERS[ctx.chainId] && to === lower(WETH_FEE_MINTERS[ctx.chainId]) && sel === SEL.depositTo) {
       if (!ctx.native) fail("A coin fee was asked on a token swap", { to });
       if (wordAddress(data, 0) !== feeWallet) fail("The fee isn't minted to RAVN's fee wallet", { to: wordAddress(data, 0) });
       if (data.length > 74 + 64) fail("The fee payment carries more than a tag", { to });
       if (value > limit) fail("The fee payment is more than the fee", { value: value.toString() });
-      return value;
+      return { value, tokens: 0n };
     }
     fail("The fee payment isn't a payment to RAVN's fee wallet", { to, selector: sel });
   }
@@ -188,16 +211,17 @@ function classifyEvmCall(ctx: Ctx, call: Call, role: "approval" | "fee" | "swap"
       deposited = wordUint(data, 1);
     }
     if (deposited > limit) fail("The deposit sends more than the deposit amount", { amount: deposited.toString() });
-    return deposited;
+    return ctx.native ? { value: deposited, tokens: 0n } : { value: 0n, tokens: deposited };
   }
 
   // The swap: a venue contract RAVN routes through, never a token or RAVN's own wallet.
   if (!ctx.known.has(to)) fail("The swap goes to a contract RAVN doesn't route through", { to });
+  let pulled = 0n;
   if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.
     const token = wordAddress(data, 1);
-    const pulled = wordUint(data, 2);
+    pulled = wordUint(data, 2);
     // A native sell names the coin as the zero address (or 0xEeee…).
     if (token !== ctx.token && !(ctx.native && (token === NATIVE_EVM || token === ZERO_ADDRESS))) {
       fail("The swap takes a token other than the one being swapped", { token });
@@ -205,16 +229,30 @@ function classifyEvmCall(ctx: Ctx, call: Call, role: "approval" | "fee" | "swap"
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
   }
   if (!ctx.native && value !== 0n) fail("A token swap sends the native coin too", { to, value: value.toString() });
-  return value;
+  return { value, tokens: ctx.native ? 0n : pulled };
 }
 
-function checkApproval(ctx: Ctx, approval: ApprovalDTO) {
-  sameChain(ctx, approval.chainId, "The approval");
+// The approval's calldata, and the fields that describe it, which an integrator may build its own
+// approve() from: they must say the same thing.
+function checkApproval(ctx: Ctx, approval: ApprovalDTO): bigint {
+  sameChain(ctx, approval.chainId, "The approval", true);
   if (approval.reset) {
     classifyEvmCall(ctx, { ...approval.reset, chainId: approval.chainId }, "approval");
     if (wordUint(lower(approval.reset.data), 1) !== 0n) fail("The approval reset isn't to zero");
   }
-  classifyEvmCall(ctx, approval, "approval");
+  const { tokens } = classifyEvmCall(ctx, approval, "approval");
+  const data = lower(approval.data);
+  const spender = wordAddress(data, 0);
+  if (approval.spender !== undefined && lower(approval.spender) !== spender) {
+    fail("The approval's spender isn't the one its calldata approves", { spender: approval.spender, approves: spender });
+  }
+  if (big(approval.amount, "The approval amount") !== wordUint(data, 1)) {
+    fail("The approval's amount isn't the one its calldata approves", { amount: approval.amount });
+  }
+  if (approval.unlimitedRecommended && !ctx.gated.has(spender)) {
+    fail("An unlimited approval is recommended for a spender that doesn't need the user's signature for each pull", { spender });
+  }
+  return tokens;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -232,8 +270,11 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
   if (domain.chainId === undefined) fail("The signature request names no chain");
   sameChain(ctx, domain.chainId, "The signature request");
 
+  if (!/^0x[0-9a-f]{40}$/.test(verifying)) fail("The signature request names no contract", { verifyingContract: domain.verifyingContract });
+
   // CoW order: sells the input token, at most the amount, paying the user (or their destination).
-  if (primaryType === "Order" && verifying === lower(COW_SETTLEMENT[ctx.chainId] ?? "")) {
+  const cow = COW_SETTLEMENT[ctx.chainId];
+  if (primaryType === "Order" && cow && verifying === lower(cow)) {
     if (lower(message.sellToken) !== ctx.token) fail("The order sells a token other than the one being swapped", { sellToken: message.sellToken });
     const sold = big(message.sellAmount, "The order's sell amount") + big(message.feeAmount ?? "0", "The order's fee");
     if (sold > ctx.amount) fail("The order sells more than the swap's amount", { sellAmount: sold.toString() });
@@ -246,7 +287,8 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
 
   // Permit2 one-time transfer: the input token, at most the amount. The spender may take exactly
   // that once, so it needn't be one RAVN knows (0x's settlement contracts change).
-  if (verifying === lower(PERMIT2[ctx.chainId] ?? "") && (primaryType === "PermitTransferFrom" || primaryType === "PermitWitnessTransferFrom")) {
+  const permit2 = PERMIT2[ctx.chainId];
+  if (permit2 && verifying === lower(permit2) && (primaryType === "PermitTransferFrom" || primaryType === "PermitWitnessTransferFrom")) {
     const permitted = isRecord(message.permitted) ? message.permitted : fail("The Permit2 transfer has no single token");
     if (lower(permitted.token) !== ctx.token) fail("The Permit2 transfer is for another token", { token: permitted.token });
     if (big(permitted.amount, "The Permit2 amount") > ctx.amount) fail("The Permit2 transfer is for more than the swap's amount", { amount: permitted.amount });
@@ -285,13 +327,20 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
  * another way.
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
- * inside a venue's contract (RAVN's server checks that against each venue). Your user's wallet
- * preview is still the last word.
+ * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder amount is read; others aren't);
+ * and on Solana, what a venue's own program instruction moves: the user signs for every token account
+ * they own, and only simulating the transaction shows what it moves. Your user's wallet preview
+ * is still the last word.
  */
 export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, options: GuardOptions = {}): void {
   if (!isRecord(execution)) fail("RAVN's answer isn't an execution");
-  // Nothing in a sandbox execution is ever sent (executeAndTrack sends none of it).
-  if (execution.sandbox) return;
+  // A sandbox execution is never sent, so it's left unchecked: but only when the quote asked for one.
+  // RAVN's own flag can't switch the check off.
+  if (execution.sandbox) {
+    if (intent.sandbox) return;
+    fail("RAVN marked this execution as a sandbox one, but its quote wasn't asked for as one");
+  }
   const ctx = context(intent, options);
 
   if (ctx.chainId === BITCOIN_CHAIN_ID || ctx.chainId === SOLANA_CHAIN_ID) {
@@ -303,13 +352,22 @@ export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, opti
   if (type === "TRANSACTION" && execution.executionType === "TRANSACTION") {
     if (execution.transaction.serialized) fail("A Solana transaction was returned for an EVM swap");
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
-    if (execution.approval) checkApproval(ctx, execution.approval);
-    let value = classifyEvmCall(ctx, execution.transaction, "swap");
+    // The input token the swap may take (approved, or pulled by 0x: the same funds) plus RAVN's fee
+    // transferred beside it, and the coin sent, each within the input amount.
+    const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
+    const swap = classifyEvmCall(ctx, execution.transaction, "swap");
+    let value = swap.value;
+    let tokens = approved > swap.tokens ? approved : swap.tokens;
     if (execution.fee) {
-      checkFeeTerms(ctx, execution.fee, RAVN_FEE_WALLETS.evm);
-      if (execution.fee.transaction) value += classifyEvmCall(ctx, execution.fee.transaction, "fee", big(execution.fee.amount, "The fee"));
+      const feeAmount = checkFeeTerms(ctx, execution.fee, RAVN_FEE_WALLETS.evm);
+      if (execution.fee.transaction) {
+        const fee = classifyEvmCall(ctx, execution.fee.transaction, "fee", feeAmount);
+        value += fee.value;
+        tokens += fee.tokens;
+      }
     }
     if (value > ctx.amount) fail("The swap sends more of the native coin than the swap's amount", { value: value.toString() });
+    if (tokens > ctx.amount) fail("The swap and RAVN's fee take more of the token than the swap's amount", { amount: tokens.toString() });
     if (execution.calls) checkCalls(ctx, execution.calls, [...approvalCalls(execution.approval), execution.transaction, ...(execution.fee?.transaction ? [execution.fee.transaction] : [])]);
     return;
   }
@@ -333,9 +391,9 @@ export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, opti
     }
     let total = big(deposit.amount, "The deposit amount");
     if (fee) {
-      checkFeeTerms(ctx, fee, RAVN_FEE_WALLETS.evm);
-      total += big(fee.amount, "The fee");
-      if (fee.transaction) classifyEvmCall(ctx, fee.transaction, "fee", big(fee.amount, "The fee"));
+      const feeAmount = checkFeeTerms(ctx, fee, RAVN_FEE_WALLETS.evm);
+      total += feeAmount;
+      if (fee.transaction) classifyEvmCall(ctx, fee.transaction, "fee", feeAmount);
     }
     if (total > ctx.amount) fail("The deposit and fee come to more than the swap's amount", { total: total.toString() });
     if (execution.calls?.length) {
@@ -358,7 +416,7 @@ function checkCalls(ctx: Ctx, calls: Call[], expected: Call[]) {
   if (calls.length !== expected.length || calls.some((c, i) => !same(c, expected[i]))) {
     fail("The execution's calls aren't the transactions it describes");
   }
-  for (const c of calls) sameChain(ctx, c.chainId, "A call");
+  for (const c of calls) sameChain(ctx, c.chainId, "A call", true);
 }
 
 function checkNonEvm(ctx: Ctx, execution: ExecutionDTO, intent: SwapIntent) {
@@ -366,8 +424,8 @@ function checkNonEvm(ctx: Ctx, execution: ExecutionDTO, intent: SwapIntent) {
   if (execution.executionType === "TRANSACTION") {
     if (!solana || !execution.transaction.serialized) fail("Only a Solana transaction can come back for this chain");
     if (execution.approval || execution.fee?.transaction || execution.calls?.length) fail("EVM transactions came back for a Solana swap");
-    if (execution.fee) checkFeeTerms(ctx, execution.fee, RAVN_FEE_WALLETS.solana);
-    checkSolanaTransaction(execution.transaction.serialized, { ...intent, feeCap: ctx.feeCap, fee: execution.fee });
+    const feeAmount = execution.fee ? checkFeeTerms(ctx, execution.fee, RAVN_FEE_WALLETS.solana) : ctx.feeCap;
+    checkSolanaTransaction(execution.transaction.serialized, { ...intent, feeCap: feeAmount });
     return;
   }
   if (execution.executionType === "DEPOSIT") {
@@ -375,19 +433,20 @@ function checkNonEvm(ctx: Ctx, execution: ExecutionDTO, intent: SwapIntent) {
     sameChain(ctx, deposit.chainId, "The deposit");
     if (execution.calls?.length) fail("EVM transactions came back for a Bitcoin or Solana deposit");
     let total = big(deposit.amount, "The deposit amount");
+    let feeAmount = 0n;
     if (fee) {
-      checkFeeTerms(ctx, fee, solana ? RAVN_FEE_WALLETS.solana : RAVN_FEE_WALLETS.bitcoin);
+      feeAmount = checkFeeTerms(ctx, fee, solana ? RAVN_FEE_WALLETS.solana : RAVN_FEE_WALLETS.bitcoin);
       if (fee.transaction) fail("An EVM fee transaction came back for a Bitcoin or Solana deposit");
-      total += big(fee.amount, "The fee");
+      total += feeAmount;
     }
     if (total > ctx.amount) fail("The deposit and fee come to more than the swap's amount", { total: total.toString() });
     if (deposit.psbt) {
       if (solana) fail("A Bitcoin PSBT came back for a Solana deposit");
-      checkBitcoinPsbt(deposit.psbt, { deposit, fee, userAddress: intent.userAddress, feeWallet: RAVN_FEE_WALLETS.bitcoin });
+      checkBitcoinPsbt(deposit.psbt, { deposit, feeAmount, userAddress: intent.userAddress, feeWallet: RAVN_FEE_WALLETS.bitcoin });
     }
     if (deposit.transaction) {
       if (!solana) fail("A Solana transaction came back for a Bitcoin deposit");
-      checkSolanaTransaction(deposit.transaction, { ...intent, feeCap: ctx.feeCap, fee, deposit });
+      checkSolanaTransaction(deposit.transaction, { ...intent, feeCap: feeAmount, deposit });
     }
     return;
   }
