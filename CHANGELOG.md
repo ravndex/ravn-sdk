@@ -3,6 +3,24 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.3.1
+
+On Solana, the check before the wallet can now simulate. Pass your Solana RPC and `execute()` runs every
+Solana transaction there before handing it back, so what a venue program's own instruction would move
+(Jupiter, Relay, Mayan, 0x, OKX, Garden), which can't be read from the transaction, is checked too.
+
+### Added
+
+- `RavnClientConfig.guard.solanaRpcUrl` (`GuardOptions`): your Solana RPC (Agave 2.3+). `execute()`
+  then simulates each Solana transaction there (one `simulateTransaction` call, ~150–400 ms) and throws
+  `UnsafeExecutionError` unless the simulation succeeds and, in it, the user's token accounts lose only
+  the input token, at most the input amount, their SOL only account rent (at most 0.02 SOL) beside the
+  network fee (selling SOL: plus the amount), and none of their token accounts changes hands or is left
+  with an allowance or a new authority. It also refuses when the RPC can't simulate or doesn't report
+  balance changes. Off unless you set it: without it, nothing changes from 0.3.0.
+- `verifyExecution(execution, intent, options)`: `checkExecution` plus that simulation, for an
+  execution you got another way.
+
 ## @ravnexchange/sdk 0.3.0
 
 `execute()` checks what RAVN returns before it can reach a wallet. On EVM chains and Bitcoin, a

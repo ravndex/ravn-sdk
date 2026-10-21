@@ -2,7 +2,7 @@ import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, DepositFeeDTO, ExecutionDTO } from "./types";
 import { COW_SETTLEMENT, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
-import { checkSolanaTransaction } from "./guard-solana";
+import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
 /**
  * What your user asked to swap, from your own code, never from RAVN's answer: the guard holds
@@ -29,6 +29,14 @@ export interface GuardOptions {
    * belong to that venue.
    */
   allowContracts?: Record<number, string[]>;
+  /**
+   * Your Solana RPC's URL (any provider on Agave 2.3+: Helius, Triton, QuickNode, …). With it, every
+   * Solana transaction is also simulated there before execute() hands it back, and refused unless
+   * what it would actually take from the user stays within the swap. That reads what a venue
+   * program's own instructions do, which the check otherwise can't. One RPC call (~150–400 ms) per
+   * Solana execute; refuses when the simulation can't run or fails (a stale quote: fetch a new one).
+   */
+  solanaRpcUrl?: string;
 }
 
 /** The largest fee RAVN's API lets any key set (100 bps), as a share of the input. */
@@ -333,8 +341,8 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
  * already gave one of those contracts elsewhere (0x's AllowanceHolder amount is read; others aren't);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
- * they own, and only simulating the transaction shows what it moves. Your user's wallet preview
- * is still the last word.
+ * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
+ * RPC). Your user's wallet preview is still the last word.
  */
 export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, options: GuardOptions = {}): void {
   if (!isRecord(execution)) fail("RAVN's answer isn't an execution");
@@ -417,6 +425,18 @@ export function checkExecution(execution: ExecutionDTO, intent: SwapIntent, opti
   }
 
   fail(`This SDK version can't check an execution of type ${type}: update @ravnexchange/sdk`);
+}
+
+/**
+ * checkExecution, then, for a Solana swap with `options.solanaRpcUrl`, a simulation of its transaction
+ * on that RPC (see GuardOptions.solanaRpcUrl). RavnClient.execute runs this; call it yourself only for
+ * an execution you got another way.
+ */
+export async function verifyExecution(execution: ExecutionDTO, intent: SwapIntent, options: GuardOptions = {}, fetchImpl: typeof fetch = globalThis.fetch): Promise<void> {
+  checkExecution(execution, intent, options);
+  if (!options.solanaRpcUrl || intent.inputChainId !== SOLANA_CHAIN_ID || execution.sandbox) return;
+  const serialized = execution.executionType === "TRANSACTION" ? execution.transaction.serialized : execution.executionType === "DEPOSIT" ? execution.deposit.transaction : undefined;
+  if (serialized) await checkSolanaSimulation(serialized, intent, { url: options.solanaRpcUrl, fetch: fetchImpl });
 }
 
 const approvalCalls = (a?: ApprovalDTO): Call[] => (a ? [...(a.reset ? [{ ...a.reset, chainId: a.chainId }] : []), a] : []);

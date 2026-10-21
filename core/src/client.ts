@@ -1,4 +1,4 @@
-import { checkExecution } from "./guard";
+import { verifyExecution } from "./guard";
 import type { GuardOptions, SwapIntent } from "./guard";
 import { RavnApiError, UnsafeExecutionError } from "./types";
 import type {
@@ -25,7 +25,8 @@ export interface RavnClientConfig {
   /**
    * execute() checks every execution RAVN returns against what your user asked to swap, before it
    * can reach a wallet (see checkExecution): only RAVN's venue contracts, at most the input amount,
-   * RAVN's fee at most 1% and only to RAVN. On by default; options here (allowContracts) tune it.
+   * RAVN's fee at most 1% and only to RAVN. On by default; options here tune it: allowContracts, and
+   * solanaRpcUrl to also simulate every Solana transaction on your RPC (recommended on Solana).
    * `false` turns it off: then nothing stands between a compromised or tampered answer and your
    * user's wallet but the wallet's own preview.
    */
@@ -249,7 +250,7 @@ export class RavnClient {
       ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
     });
     if (this.guard !== false && intent) {
-      checkExecution(execution, params.destinationAddress ? { ...intent, destinationAddress: params.destinationAddress } : intent, this.guard);
+      await verifyExecution(execution, params.destinationAddress ? { ...intent, destinationAddress: params.destinationAddress } : intent, this.guard, this.fetchImpl);
     }
     return execution;
   }
