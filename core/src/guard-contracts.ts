@@ -56,6 +56,12 @@ export const WETH_FEE_MINTERS: Record<number, string> = {
   [ARBITRUM]: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
 };
 
+/** Hinkal.sol, the same address on every chain Hinkal runs on (its GET /contract-addresses, 2026-10-21):
+ * a private swap's deposit. Known only to a TRANSACTION, as its target and approval spender, and then
+ * only calling prooflessDeposit: not in KNOWN_CONTRACTS, which signatures may also name. */
+export const HINKAL = "0x7cb60446d7635C68EDf1c568cac74A1f98c1Cfa4";
+export const HINKAL_CHAINS: readonly number[] = [ETHEREUM, BASE, ARBITRUM, POLYGON, BNB, ROBINHOOD];
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",

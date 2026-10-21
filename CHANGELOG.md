@@ -3,6 +3,61 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.0, @ravnexchange/react 0.1.9
+
+Private swaps through Hinkal. Before Hinkal's swap can be built, the paying wallet signs twice (a
+read-only Hinkal session, then the order), and `execute()` answers each with a new `executionType:
+"AUTHORIZE"`. 0.3.x refuses that answer as a type it doesn't know, safely; this release completes the
+swap. Signing moves no funds: the deposit transaction that follows does.
+
+### Added
+
+- `AuthorizeDTO`: `{ executionType: "AUTHORIZE", quoteToken, authorization, sign, expiresAt, step, steps }`,
+  `sign` being `{ method: "personal_sign", message }` or `{ method: "eth_signTypedData_v4", typedData }`.
+  Have the paying wallet sign it, then call `execute()` again with `{ quoteToken, authorization,
+  signature }` (and a new `idempotencyKey`) before `expiresAt`, until a TRANSACTION comes back; send that
+  within 10 minutes. `ExecuteParams` gains `authorization` and `signature`.
+- **The check covers it** (`checkExecution`): the `personal_sign` must be exactly a read-only Hinkal
+  session (`Authorize Hinkal session` / `Session ID` / `Public Key`, nothing more; Hinkal's normal mode,
+  "This signature can also be used to submit transactions.", is refused: its key can move funds). The
+  typed data must be a `PrivateSendBridge` order in Hinkal's own domain (`name: "Hinkal Enclave"` and the
+  input chain, no contract), on the input chain, for the input token (the coin as the zero address),
+  paying exactly one recipient at most the input amount: your `destinationAddress` (without one, the
+  user's own wallet). An AUTHORIZE is checked even when marked sandbox. Not checked: the bridge call in
+  the order's route (`quote`), which Hinkal runs as given; as with any venue, what pays out once funds
+  are inside it (README, "What that guarantees").
+- Hinkal.sol (`0x7cb6…Cfa4`) on Ethereum, Base, Arbitrum, Polygon, BNB Chain and Robinhood Chain, known
+  only to a TRANSACTION depositing into it (`prooflessDeposit` of the input token alone, at most the
+  input amount, read from the calldata) and to its approval; never to a signature.
+- **`executeAndTrack()` signs each step itself**: `signMessage` for the session, `signTypedData` for the
+  order (after `switchChain(inputChainId)`, when you pass it), each answer an `execute()` of its own, then
+  sends the approval, the deposit and RAVN's fee as for any TRANSACTION. One session and one order per
+  swap: a second of either is refused. It refuses to sign or answer a step past its `expiresAt`, and to
+  send the approval or the deposit more than 10 minutes after the order was asked for. New optional
+  handlers `signMessage(message)` and `switchChain(chainId)`.
+
+### Fixed
+
+- **Typed data whose `types` sign another struct than its `primaryType` is refused**, on every signature
+  (SIGNATURE executions too). ethers' `signer.signTypedData(domain, types, value)` ignores `primaryType`
+  and signs the struct `types` makes the root, so a tampered answer could pass the check as a one-time
+  Permit2 transfer while ethers signed an unlimited Permit2 allowance to anyone. `primaryType` must now
+  be the one struct in `types` no other references. Every real answer from RAVN's venues already is.
+- **A token's own permit (EIP-2612) or EIP-3009 authorization must sign exactly the standard's fields.**
+  The token verifies these itself, and DAI's `Permit` of the same name (`holder, spender, nonce, expiry,
+  allowed`) passed as one while signing an unlimited, never-expiring allowance. Every real answer from
+  RAVN's venues already signs the standard's fields.
+
+### Changed
+
+- **`client.execute()` returns `ExecutionDTO | AuthorizeDTO`**, and `checkExecution`/`verifyExecution`
+  take either. Code that tests `executionType` before reading a type's fields compiles as it is; an
+  `else` that assumed DEPOSIT, or passing the answer where an `ExecutionDTO` is required, needs
+  `executionType !== "AUTHORIZE"` first.
+  `ExecuteAndTrackResult.execution` is still an `ExecutionDTO`, the swap itself.
+- **react:** `useRavnExecute` types its answer as whatever the installed SDK's `execute()` returns (from
+  0.4.0, an `AuthorizeDTO` too). It still signs nothing: branch on `executionType`.
+
 ## @ravnexchange/sdk 0.3.2
 
 On Solana, the check before the wallet can now simulate. Pass your Solana RPC and `execute()` runs every

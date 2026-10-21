@@ -2,6 +2,7 @@ import { verifyExecution } from "./guard";
 import type { GuardOptions, SwapIntent } from "./guard";
 import { RavnApiError, UnsafeExecutionError } from "./types";
 import type {
+  AuthorizeDTO,
   ChainDTO,
   ExecuteParams,
   ExecutionDTO,
@@ -231,12 +232,13 @@ export class RavnClient {
   }
 
   /**
-   * POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT).
+   * POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT, or
+   * AUTHORIZE: sign it and call execute again, see AuthorizeDTO).
    * Throws UnsafeExecutionError, before anything reaches a wallet, when the answer could move more
    * than the quote asked (see RavnClientConfig.guard). For a quoteToken another client or your
    * server fetched, pass `intent`: what your user asked to swap, from your own records.
    */
-  async execute({ idempotencyKey, ...params }: ExecuteParams, options: { intent?: SwapIntent } = {}): Promise<ExecutionDTO> {
+  async execute({ idempotencyKey, ...params }: ExecuteParams, options: { intent?: SwapIntent } = {}): Promise<ExecutionDTO | AuthorizeDTO> {
     // The API's own rule: anything else fetch refuses to send (a reported NETWORK_ERROR) or RAVN answers 400.
     if (idempotencyKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
       throw new RavnApiError("INVALID_REQUEST", "idempotencyKey must be 1–255 printable ASCII characters, no spaces", undefined, undefined);
@@ -251,7 +253,7 @@ export class RavnClient {
         "execute() can't check this quote: this client didn't fetch it. Pass { intent } (what your user asked to swap) as execute's second argument"
       );
     }
-    const execution = await this.request<ExecutionDTO>("/execute", {
+    const execution = await this.request<ExecutionDTO | AuthorizeDTO>("/execute", {
       method: "POST",
       body: JSON.stringify(params),
       ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
