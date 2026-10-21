@@ -176,6 +176,9 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
     const own = fixture("usdc->bonk jupiter");
     inner(own, { programId: TOKEN, parsed: { type: "mintToChecked", info: { mint: ATTACKER, account: ATTACKER, mintAuthority: USER, tokenAmount: { amount: "5" } } } });
     await refuses(own, /mints with the user's mint authority/);
+    const multisig = fixture("usdc->bonk jupiter");
+    inner(multisig, { programId: TOKEN, parsed: { type: "mintTo", info: { mint: ATTACKER, account: ATTACKER, multisigMintAuthority: ATTACKER, signers: [USER], amount: "1000000000" } } });
+    await refuses(multisig, /mints with the user's mint authority/);
   });
 
   it("refuses an unreadable token call on one of the user's token accounts, even without the wallet", async () => {

@@ -289,8 +289,9 @@ export async function checkSolanaSimulation(
           // Wrapped SOL straight out as lamports; with no amount, all of it (unknown unless it stays the user's).
           transfer(info.source, info.destination, "SOL", info.amount === undefined && mine(info.destination) ? 0n : whole(info.amount));
         } else if (type === "mintTo" || type === "mintToChecked") {
-          // New tokens into an account (a stake pool's last hop): like any payment in. Never with the user's own mint authority.
-          if ((info.mintAuthority ?? info.multisigMintAuthority) === user) fail("The Solana transaction, simulated, mints with the user's mint authority");
+          // New tokens into an account (a stake pool's last hop): like any payment in. Never one naming the
+          // user's wallet: that's the user's own mint authority (or their signature on a multisig holding one).
+          if (names) fail("The Solana transaction, simulated, mints with the user's mint authority");
           transfer(MINTED, info.account, asset(info.account), whole(tokens));
         } else if (type === "burn" || type === "burnChecked") {
           // Gone for good (a CCTP deposit, an unstake): leaves like any transfer.
