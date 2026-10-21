@@ -6,18 +6,23 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 ## @ravnexchange/sdk 0.3.1
 
 On Solana, the check before the wallet can now simulate. Pass your Solana RPC and `execute()` runs every
-Solana transaction there before handing it back, so what a venue program's own instruction would move
-(Jupiter, Relay, Mayan, 0x, OKX, Garden), which can't be read from the transaction, is checked too.
+Solana transaction there before handing it back, so the transfers a venue program's own instruction
+would make (Jupiter, Relay, Mayan, 0x, OKX, Garden), which can't be read from the transaction, are
+checked too, as the chain stands when `execute()` runs.
 
 ### Added
 
 - `RavnClientConfig.guard.solanaRpcUrl` (`GuardOptions`): your Solana RPC (Agave 2.3+). `execute()`
   then simulates each Solana transaction there (one `simulateTransaction` call, ~150–400 ms) and throws
-  `UnsafeExecutionError` unless the simulation succeeds and, in it, the user's token accounts lose only
-  the input token, at most the input amount, their SOL only account rent (at most 0.02 SOL) beside the
-  network fee (selling SOL: plus the amount), and none of their token accounts changes hands or is left
-  with an allowance or a new authority. It also refuses when the RPC can't simulate or doesn't report
-  balance changes. Off unless you set it: without it, nothing changes from 0.3.0.
+  `UnsafeExecutionError` unless it succeeds and every transfer out of the user's wallet and token
+  accounts, counted in order, stays within the input token up to the input amount (plus what reached
+  them earlier in the transaction) and at most 0.02 SOL of rent beside the network fee (selling SOL:
+  plus the amount); none of the user's token accounts changes hands, closes to someone else or keeps an
+  allowance; and the user's authority is used for no other token, system, stake or loader call. It
+  also refuses when the RPC can't simulate or its answer is incomplete. Not covered: an amount that
+  depends on a pool's state changing before the transaction lands (an exact-out swap's input), and
+  assets other than SOL and SPL tokens in the user's own accounts (lending or LP positions, compressed
+  NFTs). Off unless you set it: without it, nothing changes from 0.3.0.
 - `verifyExecution(execution, intent, options)`: `checkExecution` plus that simulation, for an
   execution you got another way.
 

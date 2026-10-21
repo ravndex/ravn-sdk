@@ -32,9 +32,10 @@ export interface GuardOptions {
   /**
    * Your Solana RPC's URL (any provider on Agave 2.3+: Helius, Triton, QuickNode, …). With it, every
    * Solana transaction is also simulated there before execute() hands it back, and refused unless
-   * what it would actually take from the user stays within the swap. That reads what a venue
-   * program's own instructions do, which the check otherwise can't. One RPC call (~150–400 ms) per
-   * Solana execute; refuses when the simulation can't run or fails (a stale quote: fetch a new one).
+   * every transfer it makes out of the user's accounts stays within the swap (checkSolanaSimulation;
+   * the README says what that covers). That reads what a venue program's own instructions do, which
+   * the check otherwise can't. One RPC call (~150–400 ms) per Solana execute; refuses when the
+   * simulation can't run or fails (a stale quote: fetch a new one). Sent through the client's fetch.
    */
   solanaRpcUrl?: string;
 }

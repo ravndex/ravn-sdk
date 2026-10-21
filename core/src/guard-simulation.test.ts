@@ -20,6 +20,7 @@ interface Simulation {
   preTokenBalances: TokenBalance[];
   postTokenBalances: TokenBalance[];
   innerInstructions: { index: number; instructions: Record<string, unknown>[] }[];
+  loadedAddresses: { writable: string[]; readonly: string[] };
 }
 
 // Real Solana /v1/execute answers (2026-10-21) and what simulating each on a mainnet RPC (Agave 4.3)
@@ -31,6 +32,8 @@ const FIXTURES = JSON.parse(readFileSync(new URL("./guard-solana-sim.fixtures.js
   simulation: Simulation;
   /** The user's wallet among the transaction's accounts. */
   userIndex: number;
+  /** The user's token accounts in the transaction, by mint. */
+  userTokenAccounts: Record<string, string>;
 }[];
 const fixture = (name: string) => {
   const f = FIXTURES.find((x) => x.name === name);
@@ -41,8 +44,11 @@ const fixture = (name: string) => {
 const RPC = "https://rpc.example";
 const USER = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+const WSOL = "So11111111111111111111111111111111111111112";
 const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const ATTACKER = "8LjUgMjzZuHj8VdyxzkmLLQVmW4C3gd56md1nLd76TNW";
+const SYSTEM = "11111111111111111111111111111111";
+const ATTACKER = "AttackerAttackerAttackerAttackerAttacker111";
 
 const rpcAnswering = (body: unknown) =>
   vi.fn(async () => ({ ok: true, status: 200, json: async () => body })) as unknown as typeof fetch & ReturnType<typeof vi.fn>;
@@ -55,6 +61,7 @@ const refuses = async (f: ReturnType<typeof fixture>, message: RegExp) => {
 };
 const userBalance = (s: Simulation, mint: string) => s.postTokenBalances.find((b) => b.owner === USER && b.mint === mint)!;
 const inner = (f: ReturnType<typeof fixture>, ...instructions: Record<string, unknown>[]) => f.simulation.innerInstructions.push({ index: 0, instructions });
+const tokenTransfer = (source: string, destination: string, amount: bigint, authority = USER) => ({ programId: TOKEN, parsed: { type: "transfer", info: { source, destination, amount: amount.toString(), authority } } });
 
 describe("verifyExecution simulates Solana transactions on the integrator's RPC", () => {
   it.each(FIXTURES.map((f) => f.name))("passes RAVN's real %s transaction", async (name) => {
@@ -95,9 +102,9 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
   });
 
   it("counts wrapped SOL leaving the user's wrapped-SOL account as SOL", async () => {
-    const f = fixture("usdc->bonk jupiter");
-    const wsol = f.simulation.preTokenBalances.find((b) => b.owner === USER && b.mint === "So11111111111111111111111111111111111111112");
-    if (!wsol) return; // this route holds no wrapped SOL of the user's
+    const f = fixture("usdc->bonk 0x_solana");
+    const wsol = f.simulation.preTokenBalances.find((b) => b.owner === USER && b.mint === WSOL)!;
+    expect(wsol).toBeDefined();
     f.simulation.postBalances[wsol.accountIndex] = 0;
     f.simulation.postTokenBalances = f.simulation.postTokenBalances.filter((b) => b.accountIndex !== wsol.accountIndex);
     f.simulation.preBalances[wsol.accountIndex] += 1_000_000_000;
@@ -110,41 +117,103 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
     await refuses(f, /hands one of the user's token accounts to someone else/);
   });
 
-  it("refuses an allowance a venue program leaves on the user's tokens, but not one it revokes", async () => {
-    const approve = { programId: TOKEN, parsed: { type: "approve", info: { source: ATTACKER, delegate: ATTACKER, owner: USER, amount: "1" } } };
-    const f = fixture("sol->usdc okx");
-    inner(f, approve);
-    await refuses(f, /leaves an allowance/);
+  it("counts every transfer out of the user's accounts, not just the net: a refund leg can't hide a drain", async () => {
+    // All 1,095 USDC out to a pool and 995 back: the net is the swap's 100, but on chain the pool's
+    // side can be made to pay nothing.
+    const f = fixture("usdc->bonk jupiter");
+    const usdc = f.userTokenAccounts[USDC];
+    inner(f, tokenTransfer(usdc, ATTACKER, 1_095_000_000n), tokenTransfer(ATTACKER, usdc, 995_000_000n, ATTACKER));
+    await refuses(f, /more of the token than the swap's amount/);
+  });
+
+  it("lets a token pass through the user's own account, but not leave before it arrived", async () => {
+    const through = fixture("usdc->bonk jupiter");
+    const bonk = through.userTokenAccounts[BONK];
+    inner(through, tokenTransfer(ATTACKER, bonk, 5n, ATTACKER), tokenTransfer(bonk, ATTACKER, 5n));
+    await expect(verify(through)).resolves.toBeUndefined();
+    const early = fixture("usdc->bonk jupiter");
+    inner(early, tokenTransfer(bonk, ATTACKER, 5n), tokenTransfer(ATTACKER, bonk, 5n, ATTACKER));
+    await refuses(early, /moves a token other than the one being swapped/);
+  });
+
+  it("counts wrapped SOL unwrapped straight to someone else as SOL leaving", async () => {
+    const f = fixture("usdc->sol relay");
+    inner(f, { programId: TOKEN, parsed: { type: "unwrapLamports", info: { source: f.userTokenAccounts[WSOL], destination: ATTACKER, authority: USER, amount: "1000000000" } } });
+    await refuses(f, /sends more SOL than its account rent/);
+  });
+
+  it("refuses closing the user's token account to someone else", async () => {
+    const f = fixture("usdc->bonk 0x_solana");
+    inner(f, { programId: TOKEN, parsed: { type: "closeAccount", info: { account: f.userTokenAccounts[WSOL], destination: ATTACKER, owner: USER } } });
+    await refuses(f, /closes one of the user's token accounts to someone else/);
+  });
+
+  it("refuses an allowance a venue program leaves on the user's tokens, but not one it revokes or uses up", async () => {
+    const f0 = fixture("sol->usdc okx");
+    const usdc = f0.userTokenAccounts[USDC];
+    const approve = { programId: TOKEN, parsed: { type: "approve", info: { source: usdc, delegate: ATTACKER, owner: USER, amount: "1" } } };
+    inner(f0, approve);
+    await refuses(f0, /leaves an allowance/);
     const revoked = fixture("sol->usdc okx");
-    inner(revoked, approve, { programId: TOKEN, parsed: { type: "revoke", info: { source: ATTACKER, owner: USER } } });
+    inner(revoked, approve, { programId: TOKEN, parsed: { type: "revoke", info: { source: usdc, owner: USER } } });
     await expect(verify(revoked)).resolves.toBeUndefined();
+    const used = fixture("sol->usdc okx");
+    inner(used, approve, tokenTransfer(ATTACKER, usdc, 1n, ATTACKER), tokenTransfer(usdc, ATTACKER, 1n, ATTACKER));
+    await expect(verify(used)).resolves.toBeUndefined();
     const checked = fixture("sol->usdc okx");
-    inner(checked, { programId: TOKEN, parsed: { type: "approveChecked", info: { source: ATTACKER, delegate: ATTACKER, multisigOwner: USER, tokenAmount: {} } } });
+    inner(checked, { programId: TOKEN, parsed: { type: "approveChecked", info: { source: usdc, delegate: ATTACKER, multisigOwner: USER, tokenAmount: { amount: "1" } } } });
     await refuses(checked, /leaves an allowance/);
   });
 
-  it("refuses a change of authority over the user's tokens", async () => {
+  it.each([
+    ["a change of authority", { type: "setAuthority", info: { account: ATTACKER, authorityType: "closeAccount", newAuthority: ATTACKER, authority: USER } }],
+    ["minting with the user's mint authority", { type: "mintTo", info: { mint: ATTACKER, account: ATTACKER, mintAuthority: USER, amount: "1" } }],
+    ["withdrawing fees the user may withdraw", { type: "withdrawWithheldTokensFromMint", info: { mint: ATTACKER, feeRecipient: ATTACKER, withdrawWithheldAuthority: USER } }],
+  ])("refuses %s", async (_, parsed) => {
     const f = fixture("sol->usdc 0x_solana");
-    inner(f, { programId: TOKEN, parsed: { type: "setAuthority", info: { account: ATTACKER, authorityType: "closeAccount", newAuthority: ATTACKER, authority: USER } } });
-    await refuses(f, /changes an authority over the user's tokens/);
+    inner(f, { programId: TOKEN, parsed });
+    await refuses(f, /token call with the user's authority that RAVN's swaps never make/);
   });
 
-  it("refuses handing the user's wallet to a program", async () => {
+  it.each([
+    ["handing the user's wallet to a program", { type: "assign", info: { account: USER, owner: ATTACKER } }],
+    ["emptying a nonce account the user controls", { type: "withdrawFromNonce", info: { nonceAccount: ATTACKER, destination: ATTACKER, nonceAuthority: USER, lamports: 1 } }],
+    ["moving SOL from an account derived from the user's", { type: "transferWithSeed", info: { source: ATTACKER, sourceBase: USER, destination: ATTACKER, lamports: 1 } }],
+  ])("refuses %s", async (_, parsed) => {
     const f = fixture("sol->usdc relay");
-    inner(f, { programId: "11111111111111111111111111111111", parsed: { type: "assign", info: { account: USER, owner: ATTACKER } } });
-    await refuses(f, /hands the user's wallet to a program/);
+    inner(f, { programId: SYSTEM, parsed });
+    await refuses(f, /system call with the user's wallet that RAVN's swaps never make/);
   });
 
-  it("refuses a token or system call on the user's behalf the RPC couldn't read", async () => {
+  it("refuses a token or system call naming the user that the RPC couldn't read", async () => {
     const f = fixture("sol->base usdc mayan");
     inner(f, { programId: TOKEN, accounts: [ATTACKER, USER], data: "x" });
-    await refuses(f, /token call on the user's behalf that can't be read/);
+    await refuses(f, /token call with the user's authority/);
+    const g = fixture("sol->base usdc mayan");
+    inner(g, { programId: SYSTEM, accounts: [USER, ATTACKER], data: "x" });
+    await refuses(g, /system call with the user's wallet/);
   });
 
-  it("refuses the user's authority used on a stake account", async () => {
+  it("refuses the user's authority used on a stake account, read or not", async () => {
     const f = fixture("sol->usdc via ravn jupiter");
     inner(f, { programId: "Stake11111111111111111111111111111111111111", parsed: { type: "authorize", info: { stakeAccount: ATTACKER, authority: USER, newAuthority: ATTACKER } } });
-    await refuses(f, /stake account or program/);
+    await refuses(f, /stake account, program or lookup table/);
+    const raw = fixture("sol->usdc via ravn jupiter");
+    inner(raw, { programId: "Stake11111111111111111111111111111111111111", accounts: [ATTACKER, USER], data: "x" });
+    await refuses(raw, /stake account, program or lookup table/);
+  });
+
+  it("refuses an incomplete answer instead of passing it", async () => {
+    const noOwner = fixture("usdc->bonk jupiter");
+    delete (noOwner.simulation.postTokenBalances[0] as Partial<TokenBalance>).owner;
+    await refuses(noOwner, /token balance without its account, mint or owner/);
+    const short = fixture("usdc->bonk jupiter");
+    short.simulation.preBalances = [];
+    short.simulation.postBalances = [];
+    await refuses(short, /doesn't give every account's balance/);
+    const noTables = fixture("usdc->bonk jupiter");
+    noTables.simulation.loadedAddresses = { writable: [], readonly: [] };
+    await refuses(noTables, /doesn't give every account's balance/);
   });
 
   it("refuses a transaction that fails in simulation: what it moves is unknown", async () => {
@@ -163,6 +232,24 @@ describe("verifyExecution simulates Solana transactions on the integrator's RPC"
     const old = { ...f.simulation } as Partial<Simulation>;
     delete old.preTokenBalances;
     await expect(verify(f, simulated(old))).rejects.toThrow(/doesn't report balance changes/);
+  });
+
+  it("gives up after 10 s even when the fetch ignores the abort, and never repeats the RPC's URL", async () => {
+    const f = fixture("sol->usdc jupiter");
+    vi.useFakeTimers();
+    try {
+      const hanging = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+      const pending = verify(f, hanging).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(String(await pending)).toMatch(/Couldn't simulate .* on your RPC/);
+    } finally {
+      vi.useRealTimers();
+    }
+    const leaky = vi.fn(async () => {
+      throw new Error(`request to ${RPC} failed`);
+    }) as unknown as typeof fetch;
+    const err = (await verify(f, leaky).catch((e: unknown) => e)) as UnsafeExecutionError;
+    expect(JSON.stringify(err.details)).not.toContain(RPC);
   });
 
   it("catches what reading the transaction can't: a Jupiter route selling more than the swap", async () => {
