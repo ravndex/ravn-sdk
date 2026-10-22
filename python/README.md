@@ -44,6 +44,37 @@ Pass `"sandbox": True` on `get_quote` to test the full quote → execute → sta
 real funds; see the API's own docs for per-venue exceptions (THORChain BTC-source,
 Chainflip, and Houdini Swap can't be sandboxed).
 
+## Hinkal private swaps (0.1.7)
+
+Hinkal races on a `confidential` quote only when you pass `"authorizeSteps": True` (or
+`"onlyVenues": ["hinkal"]`). `execute` then answers `executionType: "AUTHORIZE"` twice before the
+deposit `TRANSACTION`: have the paying wallet sign `sign` (`personal_sign` its `message`, or
+`eth_signTypedData_v4` its `typedData`) and call `execute` again with the same `quoteToken`, the
+`authorization` and the `signature`. Check each step before signing it, and send the deposit within
+10 minutes of the second answer: see
+[AUTHORIZE steps](https://docs.ravn.exchange/execution-types#authorize-steps-hinkal).
+
+A failed Hinkal swap isn't refunded on its own. `recover_stuck_funds` gets the funds back to the
+wallet that paid, checking every step before that wallet signs it:
+
+```python
+from ravnexchange import recover_stuck_funds
+
+recovered = recover_stuck_funds(
+    client,
+    status_ref=execution["statusRef"],
+    user_address=paying_wallet,  # from your own wallet connection, never from a RAVN answer
+    sign_message=lambda message: wallet.sign_message(message),  # personal_sign, returns 0x hex
+    sign_typed_data=lambda typed: wallet.sign_typed_data(typed),  # eth_signTypedData_v4
+)
+# [{"chainId", "tokenAddress", "amount"}]: amounts before Hinkal's recovery fee
+```
+
+`client.recover(params, user_address)` makes one call of that flow (`POST /v1/recover`), checked
+the same way (`check_recovery`; a bad answer raises `UnsafeExecutionError`). A recovery is public:
+an ordinary on-chain payment back to the paying wallet. See
+[POST /recover](https://docs.ravn.exchange/api-reference/recover).
+
 ## Parity with `@ravnexchange/sdk` 0.2.0
 
 Same calls and the same wire shapes: responses are plain dicts, so new API fields such as an
@@ -65,6 +96,8 @@ one doesn't yet:
 - **`timeoutMs` isn't in `GetQuoteParams` yet**: pass it anyway (a dict key goes through as is).
 - **A network failure raises `urllib.error.URLError`**, not a `RavnApiError` (the TS client wraps it
   as `NETWORK_ERROR`).
+- **No check before the wallet on executions** (the TS client's from 0.3.0), `AUTHORIZE` steps
+  included: only `/v1/recover` answers are checked. Check what you sign yourself.
 
 ## Status
 

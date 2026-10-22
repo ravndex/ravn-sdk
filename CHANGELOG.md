@@ -3,6 +3,26 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## ravnexchange (Python) 0.1.7
+
+Hinkal for Python integrators, as in `@ravnexchange/sdk` 0.4.1. Merging publishes it to PyPI
+(`.github/workflows/publish-python-sdk.yml`).
+
+### Added
+
+- `GetQuoteParams.authorizeSteps`, and `ExecuteParams.authorization` / `signature` to answer an
+  `AUTHORIZE` step. Never sent on their own.
+- `RavnClient.recover(params, user_address)` (POST /v1/recover, `RecoverParams`) and
+  `recover_stuck_funds(client, status_ref, user_address, sign_message, sign_typed_data,
+  switch_chain=None)`, which runs the whole recovery and returns what was sent back (amounts before
+  Hinkal's recovery fee). Every answer goes through `check_recovery` first, the TS client's
+  `checkRecovery`: a read-only session, or a `RecoverStuckBridgeBalance` / `WithdrawStuckUtxos` on a
+  chain Hinkal runs on, of one token, back to `user_address` alone; anything else raises
+  `UnsafeExecutionError` before it's signed. Same limits per run: one session, up to 8 recoveries on
+  one chain, each kind and token once.
+- Also first published here: `onlyVenues` typed, from earlier TS-only releases (it already went
+  through as a dict key).
+
 ## @ravnexchange/sdk 0.4.2
 
 Arc (Circle's chain, id 5042). 0.3.0–0.4.1 refuse Arc executions with "This SDK version doesn't know

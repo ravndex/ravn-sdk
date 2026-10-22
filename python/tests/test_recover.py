@@ -1,0 +1,173 @@
+"""check_recovery and recover_stuck_funds, against the same answers as core/src/hinkal.test.ts."""
+
+import copy
+import json
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from ravnexchange import RavnClient, UnsafeExecutionError, check_recovery, recover_stuck_funds
+
+USER = "0x1111111111111111111111111111111111111111"
+ATTACKER = "0x9999999999999999999999999999999999999999"
+USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+OTHER = "0x4200000000000000000000000000000000000006"
+SESSION = "Authorize Hinkal session\nSession ID: 3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b\nPublic Key: 02" + "ab" * 32
+LATER = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+
+
+def recovery_typed(kind, **over):
+    message = {"nonce": "n-1", "sessionId": "3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b", "chainId": 8453, "tokenAddress": USDC, "recipient": USER}
+    message.update(over)
+    return {
+        "domain": {"name": "Hinkal Enclave", "chainId": 8453},
+        "types": {
+            "EIP712Domain": [{"name": "name", "type": "string"}, {"name": "chainId", "type": "uint256"}],
+            kind: [
+                {"name": "nonce", "type": "string"},
+                {"name": "sessionId", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "tokenAddress", "type": "address"},
+                {"name": "recipient", "type": "address"},
+            ],
+        },
+        "primaryType": kind,
+        "message": message,
+    }
+
+
+def session(authorization="r-1"):
+    return {"status": "sign", "authorization": authorization, "sign": {"method": "personal_sign", "message": SESSION}, "expiresAt": LATER, "step": 1}
+
+
+def recovering(typed, authorization="r-2"):
+    return {"status": "sign", "authorization": authorization, "sign": {"method": "eth_signTypedData_v4", "typedData": typed}, "expiresAt": LATER, "step": 2}
+
+
+def done(token, authorization):
+    return {"status": "done", "recovered": [{"chainId": 8453, "tokenAddress": token, "amount": "1000"}], "authorization": authorization}
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.status = 200
+        self._body = json.dumps(body).encode("utf-8")
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+
+def client_answering(answers, sent):
+    queue = list(answers)
+
+    def _urlopen(req):
+        sent.append(json.loads(req.data))
+        return FakeResponse({"data": queue.pop(0)})
+
+    return RavnClient(urlopen=_urlopen)
+
+
+class CheckRecoveryTest(unittest.TestCase):
+    def refuses(self, answer, message, user=USER):
+        with self.assertRaisesRegex(UnsafeExecutionError, message):
+            check_recovery(answer, user)
+
+    def test_accepts_the_session_both_recoveries_done_and_nothing(self):
+        check_recovery(session(), USER)
+        check_recovery(recovering(recovery_typed("RecoverStuckBridgeBalance")), USER)
+        check_recovery(recovering(recovery_typed("WithdrawStuckUtxos")), "0x" + USER[2:].upper())
+        check_recovery(done(USDC, "r-3"), USER)
+        check_recovery({"status": "nothing"}, USER)
+
+    def test_refuses_a_recovery_to_anyone_but_the_signing_wallet(self):
+        self.refuses(recovering(recovery_typed("RecoverStuckBridgeBalance", recipient=ATTACKER)), "someone other than the signing wallet")
+        self.refuses(recovering(recovery_typed("WithdrawStuckUtxos")), "someone other than the signing wallet", ATTACKER)
+        self.refuses(recovering(recovery_typed("WithdrawStuckUtxos")), "someone other than the signing wallet", "")
+
+    def test_refuses_normal_mode_another_kind_or_other_fields(self):
+        normal = session()
+        normal["sign"]["message"] = SESSION + "\nThis signature can also be used to submit transactions."
+        self.refuses(normal, "can move the user's funds")
+        renamed = recovery_typed("RecoverStuckBridgeBalance")
+        renamed["types"]["Withdraw"] = renamed["types"].pop("RecoverStuckBridgeBalance")
+        renamed["primaryType"] = "Withdraw"
+        self.refuses(recovering(renamed), "kind this SDK doesn't recognise")
+        as_text = recovery_typed("WithdrawStuckUtxos")
+        as_text["types"]["WithdrawStuckUtxos"][4] = {"name": "recipient", "type": "string"}
+        self.refuses(recovering(as_text), "signs other fields than its kind's")
+        rooted = recovery_typed("WithdrawStuckUtxos")
+        rooted["types"]["Extra"] = [{"name": "x", "type": "uint256"}]
+        self.refuses(recovering(rooted), "something other than its primaryType")
+
+    def test_refuses_another_domain_or_chain(self):
+        contract = recovery_typed("WithdrawStuckUtxos")
+        contract["domain"]["verifyingContract"] = USDC
+        self.refuses(recovering(contract), "isn't for Hinkal's enclave")
+        optimism = recovery_typed("WithdrawStuckUtxos", chainId=10)
+        optimism["domain"]["chainId"] = 10
+        self.refuses(recovering(optimism), "isn't for a chain Hinkal runs on")
+        self.refuses(recovering(recovery_typed("WithdrawStuckUtxos", chainId=1)), "isn't for a chain Hinkal runs on")
+        self.refuses(recovering(recovery_typed("WithdrawStuckUtxos", tokenAddress="usdc")), "names no token")
+        self.refuses({"status": "refund"}, "update ravnexchange")
+
+
+class RecoverStuckFundsTest(unittest.TestCase):
+    def test_signs_the_session_then_each_recovery_until_nothing(self):
+        sent, steps = [], []
+        answers = [
+            session(),
+            recovering(recovery_typed("RecoverStuckBridgeBalance"), "r-2"),
+            done(USDC, "again-1"),
+            recovering(recovery_typed("WithdrawStuckUtxos", tokenAddress=OTHER), "r-3"),
+            done(OTHER, "again-2"),
+            {"status": "nothing"},
+        ]
+        recovered = recover_stuck_funds(
+            client_answering(answers, sent),
+            "ref-1",
+            USER,
+            sign_message=lambda m: steps.append("message") or "0xaa",
+            sign_typed_data=lambda t: steps.append(t["primaryType"]) or "0xbb",
+            switch_chain=lambda c: steps.append(c),
+        )
+        self.assertEqual([r["tokenAddress"] for r in recovered], [USDC, OTHER])
+        self.assertEqual(steps, ["message", 8453, "RecoverStuckBridgeBalance", 8453, "WithdrawStuckUtxos"])
+        self.assertEqual(
+            sent,
+            [
+                {"statusRef": "ref-1"},
+                {"statusRef": "ref-1", "authorization": "r-1", "signature": "0xaa"},
+                {"statusRef": "ref-1", "authorization": "r-2", "signature": "0xbb"},
+                {"statusRef": "ref-1", "authorization": "again-1"},
+                {"statusRef": "ref-1", "authorization": "r-3", "signature": "0xbb"},
+                {"statusRef": "ref-1", "authorization": "again-2"},
+            ],
+        )
+
+    def test_refuses_a_tampered_answer_before_signing(self):
+        signed = []
+        answers = [session(), recovering(recovery_typed("RecoverStuckBridgeBalance", recipient=ATTACKER))]
+        with self.assertRaises(UnsafeExecutionError):
+            recover_stuck_funds(client_answering(answers, []), "ref-1", USER, signed.append, signed.append)
+        self.assertEqual(signed, [SESSION])
+
+    def test_stops_on_a_repeat_and_refuses_done_unasked_or_a_second_session(self):
+        again = [session(), recovering(recovery_typed("WithdrawStuckUtxos")), done(USDC, "a-1"), recovering(recovery_typed("WithdrawStuckUtxos"), "r-3")]
+        self.assertEqual(len(recover_stuck_funds(client_answering(again, []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")), 1)
+        with self.assertRaisesRegex(ValueError, "done without a recovery"):
+            recover_stuck_funds(client_answering([session(), done(USDC, "a-1")], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
+        with self.assertRaisesRegex(ValueError, "session a second time"):
+            recover_stuck_funds(client_answering([session(), session("r-9")], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
+        expired = copy.deepcopy(session())
+        expired["expiresAt"] = "2020-01-01T00:00:00.000Z"
+        with self.assertRaisesRegex(ValueError, "expired"):
+            recover_stuck_funds(client_answering([expired], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
+
+
+if __name__ == "__main__":
+    unittest.main()

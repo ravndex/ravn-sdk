@@ -1,8 +1,8 @@
 """Typed client for RAVN's public /api/v1 surface.
 
 Deliberately a standalone mirror of @ravnexchange/sdk's RavnClient
-(sdk/core/src/client.ts): same scope (quote, execute, submit-signature, submit-transaction, status, tokens,
-chains), same envelope-unwrapping/error-throwing behavior, snake_cased. Keep the two in sync
+(sdk/core/src/client.ts): same scope (quote, execute, submit-signature, submit-transaction, status,
+recover, tokens, chains), same envelope-unwrapping/error-throwing behavior, snake_cased. Keep the two in sync
 by hand when the API's public contract changes; ships to PyPI on its own and can't import
 from the TS package or the app's internal source tree.
 
@@ -17,6 +17,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, TypedDict
+
+from .recover import check_recovery
 
 # ravn.exchange is the marketing site (separate deployment, no /api/* routes at all); the
 # actual app, including this API, is served from the app subdomain.
@@ -61,9 +63,13 @@ class GetQuoteParams(TypedDict, total=False):
     # also needs "0x_swap". Venues that swap for you may route on their own (see the API's /quote
     # docs). An empty list is rejected.
     onlyVenues: List[str]
-    # Private swap: NEAR Intents + Houdini Swap only. See the API's /quote docs for Houdini's
-    # compliance rules (it is sent the request's IP, user-agent and clientTimezone).
+    # Private swap: NEAR Intents, Houdini Swap, and Hinkal with authorizeSteps. See the API's /quote
+    # docs for Houdini's compliance rules (it is sent the request's IP, user-agent and clientTimezone).
     confidential: bool
+    # Your execute flow answers AUTHORIZE steps (Hinkal: the paying wallet signs twice, each answer
+    # an execute of its own). Without it (or onlyVenues naming "hinkal") a private race leaves
+    # Hinkal out. Never sent on its own.
+    authorizeSteps: bool
     clientTimezone: str  # end user's IANA timezone, forwarded only to Houdini; default UTC
     quoteSessionId: str  # analytics only: same value while re-pricing one swap, max 64 chars
     sandbox: bool
@@ -77,6 +83,16 @@ class ExecuteParams(TypedDict, total=False):
     destinationAddress: str
     refundAddress: str
     clientTimezone: str
+    # Only after an AUTHORIZE answer: its authorization, with the paying wallet's signature over its
+    # `sign`. Both or neither.
+    authorization: str
+    signature: str
+
+
+class RecoverParams(TypedDict, total=False):
+    statusRef: str  # the Hinkal swap's TRANSACTION statusRef (its order id)
+    authorization: str
+    signature: str
 
 
 class SubmitSignatureParams(TypedDict, total=False):
@@ -150,8 +166,19 @@ class RavnClient:
         return self._request("/quote", "POST", dict(params))
 
     def execute(self, params: ExecuteParams) -> Dict[str, Any]:
-        """POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT)."""
+        """POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT;
+        AUTHORIZE only on an authorizeSteps quote: sign `sign` with the paying wallet and execute
+        again with the same quoteToken, authorization and signature, until a TRANSACTION comes back)."""
         return self._request("/execute", "POST", dict(params))
+
+    def recover(self, params: RecoverParams, user_address: str) -> Dict[str, Any]:
+        """POST /v1/recover: one step of getting back what a failed Hinkal swap left at Hinkal.
+        `user_address` is the wallet that paid, from your own wallet connection: the answer is
+        checked to send funds back to it alone (check_recovery) before you can sign it.
+        recover_stuck_funds runs the whole flow."""
+        answer = self._request("/recover", "POST", dict(params))
+        check_recovery(answer, user_address)
+        return answer
 
     def submit_signature(self, params: SubmitSignatureParams) -> Dict[str, Any]:
         """POST /v1/submit-signature: SIGNATURE-type executions only. Pass the quoteToken execute
