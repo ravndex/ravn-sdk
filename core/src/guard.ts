@@ -300,8 +300,12 @@ const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 function soleRoot(typed: Record<string, unknown>) {
   const types = isRecord(typed.types) ? typed.types : fail("The signature request names no types");
   const structs = Object.keys(types).filter((name) => name !== "EIP712Domain");
+  // Only a string type can name a struct: String() would read a missing or null one as a struct
+  // called "undefined" or "null".
   const used = new Set(
-    structs.flatMap((name) => (Array.isArray(types[name]) ? (types[name] as unknown[]) : []).map((f) => String(isRecord(f) ? f.type : "").replace(/(\[\d*\])+$/, "")))
+    structs.flatMap((name) =>
+      (Array.isArray(types[name]) ? (types[name] as unknown[]) : []).flatMap((f) => (isRecord(f) && typeof f.type === "string" ? [f.type.replace(/(\[\d*\])+$/, "")] : []))
+    )
   );
   const roots = structs.filter((name) => !used.has(name));
   if (roots.length !== 1 || roots[0] !== typed.primaryType) {
@@ -316,8 +320,20 @@ function soleRoot(typed: Record<string, unknown>) {
  */
 function signsExactly(typed: Record<string, unknown>, fields: string[]) {
   const listed = (typed.types as Record<string, unknown>)[String(typed.primaryType)];
-  const signed = Array.isArray(listed) ? listed.map((f) => (isRecord(f) ? `${f.name}:${f.type}` : "")) : [];
-  if (signed.join() !== fields.join()) fail("The signature request signs other fields than its kind's", { primaryType: typed.primaryType, signed });
+  const signed = Array.isArray(listed) ? (listed as unknown[]) : [];
+  // Field by field, name and type each: a joined string would take one field whose type is
+  // "string,sessionId:string,…" for the whole list.
+  const exact =
+    signed.length === fields.length &&
+    fields.every((field, i) => {
+      const f = signed[i];
+      const [name, type] = field.split(":");
+      return isRecord(f) && f.name === name && f.type === type;
+    });
+  if (!exact) {
+    const shown = signed.map((f) => (isRecord(f) ? `${String(f.name)}:${String(f.type)}` : ""));
+    fail("The signature request signs other fields than its kind's", { primaryType: typed.primaryType, signed: shown });
+  }
 }
 
 /**
@@ -464,7 +480,10 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
   if (typeof domain.chainId !== "number" || !HINKAL_CHAINS.includes(domain.chainId) || message.chainId !== domain.chainId) {
     fail("The recovery isn't for a chain Hinkal runs on", { chainId: domain.chainId, messageChainId: message.chainId });
   }
-  if (!EVM_ADDRESS.test(String(message.tokenAddress))) fail("The recovery names no token", { tokenAddress: message.tokenAddress });
+  // A string: String() of a one-element array is that element.
+  if (typeof message.tokenAddress !== "string" || !EVM_ADDRESS.test(message.tokenAddress)) {
+    fail("The recovery names no token", { tokenAddress: message.tokenAddress });
+  }
   if (!EVM_ADDRESS.test(userAddress) || lower(message.recipient) !== lower(userAddress)) {
     fail("The recovery sends the funds to someone other than the signing wallet", { recipient: message.recipient });
   }

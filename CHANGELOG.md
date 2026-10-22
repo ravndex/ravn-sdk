@@ -3,6 +3,22 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.3
+
+The check before the wallet reads three typed-data fields more strictly. Each refused answer could
+only come from a tampered RAVN response, never from a real venue's: every real fixture still passes.
+
+### Fixed
+
+- **A field list is compared field by field** (a token's own permit or EIP-3009 authorization, and
+  Hinkal's recoveries). It was compared as one joined string, so a single field whose type spelled
+  out the rest (`{ name: "owner", type: "address,spender:address,…" }`) passed as the standard's
+  list.
+- **A recovery's `tokenAddress` must be a string.** `String()` of a one-element array is its element,
+  so `[address]` passed.
+- **A field type that isn't a string names no struct** when finding the struct a wallet signs: a
+  missing or `null` type read as a struct named `"undefined"` or `"null"`, hiding a second root.
+
 ## @ravnexchange/sdk 0.4.2
 
 Arc (Circle's chain, id 5042). 0.3.0–0.4.1 refuse Arc executions with "This SDK version doesn't know
