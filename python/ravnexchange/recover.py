@@ -60,10 +60,13 @@ def check_recovery(answer: Dict[str, Any], user_address: str) -> None:
     primary = typed.get("primaryType")
     # A wallet signs the one struct no other references, whatever primaryType says.
     structs = [name for name in types if name != "EIP712Domain"]
+    # Only a string type can name a struct; \Z and [0-9], not $ and \d: no trailing newline, ASCII digits.
     used = {
-        re.sub(r"(\[\d*\])+$", "", str(_dict(f).get("type", "")))
+        re.sub(r"(\[[0-9]*\])+\Z", "", t)
         for name in structs
         for f in (types[name] if isinstance(types[name], list) else [])
+        for t in [_dict(f).get("type")]
+        if isinstance(t, str)
     }
     if [name for name in structs if name not in used] != [primary]:
         raise UnsafeExecutionError("The signature request's types sign something other than its primaryType")
@@ -78,7 +81,8 @@ def check_recovery(answer: Dict[str, Any], user_address: str) -> None:
     if domain.get("name") != "Hinkal Enclave" or set(domain) - {"name", "chainId"}:
         raise UnsafeExecutionError("The signature request isn't for Hinkal's enclave")
     chain = domain.get("chainId")
-    if type(chain) is not int or chain not in HINKAL_CHAINS or message.get("chainId") != chain:
+    # type() is int, not ==: True == 1 and 8453.0 == 8453 in Python.
+    if type(chain) is not int or chain not in HINKAL_CHAINS or type(message.get("chainId")) is not int or message.get("chainId") != chain:
         raise UnsafeExecutionError("The recovery isn't for a chain Hinkal runs on")
     if not EVM_ADDRESS.fullmatch(str(message.get("tokenAddress"))):
         raise UnsafeExecutionError("The recovery names no token")
@@ -89,7 +93,7 @@ def check_recovery(answer: Dict[str, Any], user_address: str) -> None:
 def _live(expires_at: str) -> None:
     try:
         live = datetime.fromisoformat(expires_at.replace("Z", "+00:00")) > datetime.now(timezone.utc)
-    except (AttributeError, ValueError):
+    except (AttributeError, TypeError, ValueError):  # TypeError: a time with no zone
         live = False
     if not live:
         raise ValueError("recover_stuck_funds: the signature request expired: start the recovery again")

@@ -2,6 +2,7 @@
 
 import copy
 import json
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -103,6 +104,15 @@ class CheckRecoveryTest(unittest.TestCase):
         rooted = recovery_typed("WithdrawStuckUtxos")
         rooted["types"]["Extra"] = [{"name": "x", "type": "uint256"}]
         self.refuses(recovering(rooted), "something other than its primaryType")
+        # A second root hidden behind a type Python would read as its name: refused like the TS check.
+        for name, field in [("None", {"name": "x", "type": None}), ("", {"name": "x"}), ("Extra", {"name": "x", "type": "Extra[٣]"}), ("X\n", {"name": "x", "type": "X[]\n"})]:
+            hidden = recovery_typed("WithdrawStuckUtxos")
+            hidden["types"][name] = [field]
+            self.refuses(recovering(hidden), "something other than its primaryType")
+        for message in [SESSION + "\n", SESSION + "\nx"]:
+            extended = session()
+            extended["sign"]["message"] = message
+            self.refuses(extended, "isn't a read-only Hinkal session")
 
     def test_refuses_another_domain_or_chain(self):
         contract = recovery_typed("WithdrawStuckUtxos")
@@ -113,6 +123,14 @@ class CheckRecoveryTest(unittest.TestCase):
         self.refuses(recovering(optimism), "isn't for a chain Hinkal runs on")
         self.refuses(recovering(recovery_typed("WithdrawStuckUtxos", chainId=1)), "isn't for a chain Hinkal runs on")
         self.refuses(recovering(recovery_typed("WithdrawStuckUtxos", tokenAddress="usdc")), "names no token")
+        self.refuses(recovering(recovery_typed("WithdrawStuckUtxos", tokenAddress=USDC + "00")), "names no token")
+        for chain in [True, 8453.0]:
+            loose = recovery_typed("WithdrawStuckUtxos")
+            loose["domain"]["chainId"] = chain
+            self.refuses(recovering(loose), "isn't for a chain Hinkal runs on")
+        ethereum = recovery_typed("WithdrawStuckUtxos", chainId=True)
+        ethereum["domain"]["chainId"] = 1
+        self.refuses(recovering(ethereum), "isn't for a chain Hinkal runs on")
         self.refuses({"status": "refund"}, "update ravnexchange")
 
 
@@ -163,10 +181,37 @@ class RecoverStuckFundsTest(unittest.TestCase):
             recover_stuck_funds(client_answering([session(), done(USDC, "a-1")], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
         with self.assertRaisesRegex(ValueError, "session a second time"):
             recover_stuck_funds(client_answering([session(), session("r-9")], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
-        expired = copy.deepcopy(session())
-        expired["expiresAt"] = "2020-01-01T00:00:00.000Z"
+        for stamp in ["2020-01-01T00:00:00.000Z", "2099-01-01T00:00:00"]:  # past; no time zone
+            expired = copy.deepcopy(session())
+            expired["expiresAt"] = stamp
+            with self.assertRaisesRegex(ValueError, "expired"):
+                recover_stuck_funds(client_answering([expired], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
+
+    def test_a_step_that_expires_while_signing_is_never_sent(self):
+        sent = []
+        answer = session()
+        answer["expiresAt"] = (datetime.now(timezone.utc) + timedelta(milliseconds=200)).isoformat()
+
+        def slow_signer(message):
+            time.sleep(0.3)  # the wallet took longer than the step lasts
+            return "0xaa"
+
         with self.assertRaisesRegex(ValueError, "expired"):
-            recover_stuck_funds(client_answering([expired], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
+            recover_stuck_funds(client_answering([answer], sent), "ref-1", USER, slow_signer, lambda t: "0xbb")
+        self.assertEqual(sent, [{"statusRef": "ref-1"}])
+
+    def test_caps_recoveries_at_eight_on_one_chain(self):
+        tokens = ["0x" + f"{i:040x}" for i in range(1, 10)]
+        answers = [session()]
+        for i, token in enumerate(tokens):
+            answers += [recovering(recovery_typed("WithdrawStuckUtxos", tokenAddress=token), f"r-{i}"), done(token, f"a-{i}")]
+        with self.assertRaisesRegex(ValueError, "more than 8 recoveries"):
+            recover_stuck_funds(client_answering(answers, []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
+        on_ethereum = recovery_typed("WithdrawStuckUtxos", chainId=1, tokenAddress=OTHER)
+        on_ethereum["domain"]["chainId"] = 1
+        two_chains = [session(), recovering(recovery_typed("WithdrawStuckUtxos")), done(USDC, "a-1"), recovering(on_ethereum, "r-3")]
+        with self.assertRaisesRegex(ValueError, "on chain 1 after one on chain 8453"):
+            recover_stuck_funds(client_answering(two_chains, []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
 
 
 if __name__ == "__main__":
