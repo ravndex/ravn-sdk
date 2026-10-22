@@ -295,6 +295,12 @@ describe("checkExecution: signatures", () => {
     Object.assign(permit.message, { holder: intent.userAddress, expiry: 0, allowed: true });
     refuses(execution, intent, /signs other fields than its kind's/);
 
+    // One field whose type spells out the rest of the standard's list: compared joined, it passed.
+    const joined = fixture("8453 token->native 0x_gasless");
+    const joinedPermit = (joined.execution as Sig).approvalData! as { types: Record<string, unknown> };
+    joinedPermit.types.Permit = [{ name: "owner", type: "address,spender:address,value:uint256,nonce:uint256,deadline:uint256" }];
+    refuses(joined.execution, joined.intent, /signs other fields than its kind's/);
+
     const relay = fixture("8453 xchain token relay");
     const auth = (relay.execution as Sig).typedData! as { types: Record<string, { name: string; type: string }[]> };
     auth.types.ReceiveWithAuthorization = auth.types.ReceiveWithAuthorization.map((f) => (f.name === "value" ? { name: "amount", type: "uint256" } : f));
