@@ -106,6 +106,19 @@ class SubmitTransactionParams(TypedDict, total=False):
     signedTransaction: str  # transaction.serialized after the user's wallet signed it, base64
 
 
+def _hex_signatures(params: Any) -> Dict[str, Any]:
+    """The API takes signatures as 0x hex. eth_account's `.signature` is bytes (HexBytes), whose
+    `.hex()` has no 0x prefix from hexbytes 1.0: send either as 0x hex."""
+    body = dict(params)
+    for key in ("signature", "approvalSignature"):
+        sig = body.get(key)
+        if isinstance(sig, (bytes, bytearray)):
+            body[key] = "0x" + bytes(sig).hex()
+        elif isinstance(sig, str) and sig and not sig.startswith("0x"):
+            body[key] = "0x" + sig
+    return body
+
+
 # Injectable transport, mirroring RavnClientConfig.fetch in the TS client: lets tests (and
 # unusual runtimes) supply their own opener instead of hitting the network.
 UrlOpener = Callable[[urllib.request.Request], Any]
@@ -167,16 +180,17 @@ class RavnClient:
 
     def execute(self, params: ExecuteParams) -> Dict[str, Any]:
         """POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT;
-        AUTHORIZE only on an authorizeSteps quote: sign `sign` with the paying wallet and execute
-        again with the same quoteToken, authorization and signature, until a TRANSACTION comes back)."""
-        return self._request("/execute", "POST", dict(params))
+        AUTHORIZE only on an authorizeSteps quote: check it with check_authorize, sign `sign` with
+        the paying wallet and execute again with the same quoteToken, authorization and signature,
+        until a TRANSACTION comes back)."""
+        return self._request("/execute", "POST", _hex_signatures(params))
 
     def recover(self, params: RecoverParams, user_address: str) -> Dict[str, Any]:
         """POST /v1/recover: one step of getting back what a failed Hinkal swap left at Hinkal.
         `user_address` is the wallet that paid, from your own wallet connection: the answer is
         checked to send funds back to it alone (check_recovery) before you can sign it.
         recover_stuck_funds runs the whole flow."""
-        answer = self._request("/recover", "POST", dict(params))
+        answer = self._request("/recover", "POST", _hex_signatures(params))
         check_recovery(answer, user_address)
         return answer
 
@@ -184,7 +198,7 @@ class RavnClient:
         """POST /v1/submit-signature: SIGNATURE-type executions only. Pass the quoteToken execute
         returned, not the quote's own (compose refuses it). Returns {"statusRef": ...} to poll
         get_status with."""
-        return self._request("/submit-signature", "POST", dict(params))
+        return self._request("/submit-signature", "POST", _hex_signatures(params))
 
     def submit_transaction(self, params: SubmitTransactionParams) -> Dict[str, Any]:
         """POST /v1/submit-transaction: only for a TRANSACTION execution carrying `submit`

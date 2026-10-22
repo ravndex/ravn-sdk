@@ -20,8 +20,20 @@ Hinkal for Python integrators, as in `@ravnexchange/sdk` 0.4.1. Merging publishe
   chain Hinkal runs on, of one token, back to `user_address` alone; anything else raises
   `UnsafeExecutionError` before it's signed. Same limits per run: one session, up to 8 recoveries on
   one chain, each kind and token once.
+- `check_authorize(execution, intent)`, the TS client's `checkAuthorize`: run it on each `AUTHORIZE`
+  step before signing. Step 1 must be a read-only Hinkal session; step 2 a `PrivateSendBridge` order
+  in Hinkal's domain on the input chain, for the input token, at most the input amount, paying
+  exactly one recipient, your `destinationAddress`. `intent` is the dict you quoted with. The deposit
+  `TRANSACTION` isn't checked here: the README says what to check before sending it.
 - Also first published here: `onlyVenues` typed, from earlier TS-only releases (it already went
   through as a dict key).
+
+### Fixed
+
+- **Signatures go out as 0x hex.** `execute`, `recover` and `submit_signature` now send a
+  `signature` (and `approvalSignature`) given as bytes, or as hex without `0x`, as `0x` hex. With
+  eth_account 0.13 / hexbytes 1.x, `.signature.hex()` has no `0x` prefix, and RAVN refused it with
+  `INVALID_REQUEST`.
 
 ## @ravnexchange/sdk 0.4.2
 

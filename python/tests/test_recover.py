@@ -6,7 +6,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from ravnexchange import RavnClient, UnsafeExecutionError, check_recovery, recover_stuck_funds
+from ravnexchange import RavnClient, UnsafeExecutionError, check_authorize, check_recovery, recover_stuck_funds
 
 USER = "0x1111111111111111111111111111111111111111"
 ATTACKER = "0x9999999999999999999999999999999999999999"
@@ -136,6 +136,109 @@ class CheckRecoveryTest(unittest.TestCase):
         ethereum["domain"]["chainId"] = 1
         self.refuses(recovering(ethereum), "isn't for a chain Hinkal runs on")
         self.refuses({"status": "refund"}, "update ravnexchange")
+
+
+DEST = "0x2222222222222222222222222222222222222222"
+INTENT = {"inputChainId": 8453, "inputToken": USDC, "inputAmount": "20000000", "userAddress": USER, "destinationAddress": DEST}
+
+
+def order(token=USDC, amount="19900000", recipients=None):
+    return {
+        "domain": {"name": "Hinkal Enclave", "chainId": 8453},
+        "types": {
+            "EIP712Domain": [{"name": "name", "type": "string"}, {"name": "chainId", "type": "uint256"}],
+            "BridgeRecipientAmount": [{"name": "recipient", "type": "string"}, {"name": "amount", "type": "int256"}],
+            "PrivateSendBridge": [
+                {"name": "nonce", "type": "string"},
+                {"name": "sessionId", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "tokenAddress", "type": "address"},
+                {"name": "destinationChainId", "type": "uint256"},
+                {"name": "destinationTokenAddress", "type": "string"},
+                {"name": "recipients", "type": "BridgeRecipientAmount[]"},
+                {"name": "quote", "type": "string"},
+            ],
+        },
+        "primaryType": "PrivateSendBridge",
+        "message": {
+            "nonce": "5d0c3a8e-0000-4000-8000-000000000001",
+            "sessionId": "3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b",
+            "chainId": 8453,
+            "tokenAddress": token,
+            "destinationChainId": 42161,
+            "destinationTokenAddress": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+            "recipients": [{"recipient": DEST, "amount": amount}] if recipients is None else recipients,
+            "quote": "route",
+        },
+    }
+
+
+def step(sign):
+    return {"executionType": "AUTHORIZE", "quoteToken": "qt-1", "authorization": "hk_" + "0" * 32, "sign": sign, "expiresAt": LATER, "step": 1, "steps": 2}
+
+
+def placing(typed):
+    return step({"method": "eth_signTypedData_v4", "typedData": typed})
+
+
+class CheckAuthorizeTest(unittest.TestCase):
+    def refuses(self, execution, message, intent=INTENT):
+        with self.assertRaisesRegex(UnsafeExecutionError, message):
+            check_authorize(execution, intent)
+
+    def test_accepts_the_session_and_an_order_for_a_token_or_the_coin(self):
+        check_authorize(step({"method": "personal_sign", "message": SESSION}), INTENT)
+        check_authorize(placing(order()), INTENT)
+        check_authorize(placing(order(recipients=[{"recipient": DEST.upper().replace("0X", "0x"), "amount": 19900000}])), INTENT)
+        coin = dict(INTENT, inputToken="0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", inputAmount="10000000000000000")
+        check_authorize(placing(order(token="0x0000000000000000000000000000000000000000", amount="9900000000000000")), coin)
+        # No destination asked: the order pays the user's own wallet.
+        check_authorize(placing(order(recipients=[{"recipient": USER, "amount": "1"}])), dict(INTENT, destinationAddress=""))
+
+    def test_refuses_a_session_that_can_move_funds(self):
+        self.refuses(step({"method": "personal_sign", "message": SESSION + "\nThis signature can also be used to submit transactions."}), "can move the user's funds")
+        self.refuses(step({"method": "personal_sign", "message": "Sign in"}), "isn't a read-only Hinkal session")
+
+    def test_refuses_an_order_paying_anyone_else_or_more_than_the_swap(self):
+        self.refuses(placing(order(recipients=[{"recipient": ATTACKER, "amount": "1"}])), "someone other than the destination")
+        self.refuses(placing(order(recipients=[{"recipient": [DEST], "amount": "1"}])), "someone other than the destination")
+        self.refuses(placing(order(recipients=[{"recipient": DEST, "amount": "1"}, {"recipient": ATTACKER, "amount": "1"}])), "exactly one recipient")
+        self.refuses(placing(order(recipients=[])), "exactly one recipient")
+        self.refuses(placing(order(amount="20000001")), "more than the swap's amount")
+        self.refuses(placing(order(amount="-1")), "isn't a whole number")
+        self.refuses(placing(order(amount=True)), "isn't a whole number")
+
+    def test_refuses_another_token_chain_kind_or_domain(self):
+        self.refuses(placing(order(token=OTHER)), "token other than the one being swapped")
+        other_chain = order()
+        other_chain["message"]["chainId"] = 42161
+        self.refuses(placing(other_chain), "order isn't for the swap's chain")
+        loose = order()
+        loose["domain"]["chainId"] = True
+        self.refuses(placing(loose), "signature request isn't for the swap's chain")
+        contract = order()
+        contract["domain"]["verifyingContract"] = USDC
+        self.refuses(placing(contract), "isn't for Hinkal's enclave")
+        renamed = order()
+        renamed["types"]["Permit"] = renamed["types"].pop("PrivateSendBridge")
+        renamed["primaryType"] = "Permit"
+        self.refuses(placing(renamed), "kind this SDK doesn't recognise")
+        rooted = order()
+        rooted["types"]["Extra"] = [{"name": "x", "type": "uint256"}]
+        self.refuses(placing(rooted), "something other than its primaryType")
+        self.refuses(step({"method": "eth_signTypedData_v4"}), "typed data is missing")
+        self.refuses(placing(order()), "doesn't know Hinkal on chain 10", dict(INTENT, inputChainId=10))
+        self.refuses(dict(placing(order()), executionType="TRANSACTION"), "Not an AUTHORIZE step")
+
+
+class HexSignatureTest(unittest.TestCase):
+    def test_signatures_go_out_as_0x_hex(self):
+        sent = []
+        client = client_answering([{"executionType": "AUTHORIZE"}, {"status": "nothing"}, {"statusRef": "s"}], sent)
+        client.execute({"quoteToken": "qt", "authorization": "hk_1", "signature": "ab" * 65})  # hexbytes 1.x .hex()
+        client.recover({"statusRef": "ref", "authorization": "hk_2", "signature": bytes.fromhex("cd" * 65)}, USER)
+        client.submit_signature({"quoteToken": "qt", "signature": "0x" + "ef" * 65})
+        self.assertEqual([s["signature"] for s in sent], ["0x" + "ab" * 65, "0x" + "cd" * 65, "0x" + "ef" * 65])
 
 
 class RecoverStuckFundsTest(unittest.TestCase):

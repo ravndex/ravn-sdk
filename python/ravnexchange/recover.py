@@ -22,6 +22,8 @@ HINKAL_NORMAL_MODE = "This signature can also be used to submit transactions."
 # Hinkal's own field list for both recoveries (its enclave rebuilds it): `recipient` is signed.
 RECOVERY_FIELDS = ["nonce:string", "sessionId:string", "chainId:uint256", "tokenAddress:address", "recipient:address"]
 EVM_ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+NATIVE_EVM = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 # RAVN offers a swap's recoveries on its source chain, one per stuck token: a handful at most.
 MAX_RECOVERIES = 8
 
@@ -36,28 +38,23 @@ def _dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def check_recovery(answer: Dict[str, Any], user_address: str) -> None:
-    """Raises UnsafeExecutionError unless `answer` is one `user_address`, the wallet that paid for
-    the swap, may sign: a read-only Hinkal session, or a recovery (RecoverStuckBridgeBalance /
-    WithdrawStuckUtxos) on a chain Hinkal runs on that sends one token back to that same wallet."""
-    status = _dict(answer).get("status")
-    if status in ("nothing", "done"):
-        return
-    if status != "sign":
-        raise UnsafeExecutionError(f"Can't check a recovery answer of status {status!r}: update ravnexchange")
-    sign = _dict(answer.get("sign"))
+def _hinkal_sign(sign: Any) -> Optional[Dict[str, Any]]:
+    """What a Hinkal step asks to sign (core/src/guard.ts hinkalSign): None for the read-only session
+    personal_sign, else its typed data, checked to sign `primaryType` in Hinkal's enclave domain."""
+    sign = _dict(sign)
     if sign.get("method") == "personal_sign":
         message = sign.get("message") if isinstance(sign.get("message"), str) else ""
         if HINKAL_NORMAL_MODE in message:
             raise UnsafeExecutionError("The message would open a Hinkal session that can move the user's funds")
         if not HINKAL_SESSION.fullmatch(message):
             raise UnsafeExecutionError("The message to sign isn't a read-only Hinkal session")
-        return
+        return None
     if sign.get("method") != "eth_signTypedData_v4":
         raise UnsafeExecutionError("RAVN asked for a signature of a kind this SDK doesn't recognise")
-    typed = _dict(sign.get("typedData"))
+    if not isinstance(sign.get("typedData"), dict):
+        raise UnsafeExecutionError("The authorization's typed data is missing")
+    typed = sign["typedData"]
     types = _dict(typed.get("types"))
-    primary = typed.get("primaryType")
     # A wallet signs the one struct no other references, whatever primaryType says.
     structs = [name for name in types if name != "EIP712Domain"]
     # Only a string type can name a struct; \Z and [0-9], not $ and \d: no trailing newline, ASCII digits.
@@ -68,8 +65,80 @@ def check_recovery(answer: Dict[str, Any], user_address: str) -> None:
         for t in [_dict(f).get("type")]
         if isinstance(t, str)
     }
-    if [name for name in structs if name not in used] != [primary]:
+    if [name for name in structs if name not in used] != [typed.get("primaryType")]:
         raise UnsafeExecutionError("The signature request's types sign something other than its primaryType")
+    # Hinkal's domain names no contract: a field more would make the signature good somewhere else.
+    domain = _dict(typed.get("domain"))
+    if domain.get("name") != "Hinkal Enclave" or set(domain) - {"name", "chainId"}:
+        raise UnsafeExecutionError("The signature request isn't for Hinkal's enclave")
+    return typed
+
+
+def _amount(value: Any, what: str) -> int:
+    """A non-negative whole number: an int, or a decimal or 0x-hex string (core/src/guard.ts big)."""
+    if type(value) is int and value >= 0:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"0x[0-9a-fA-F]{1,64}|[0-9]{1,78}", value):
+        return int(value, 0) if value.startswith("0x") else int(value)
+    raise UnsafeExecutionError(f"{what} isn't a whole number")
+
+
+def check_authorize(execution: Dict[str, Any], intent: Dict[str, Any]) -> None:
+    """Raises UnsafeExecutionError unless a Hinkal AUTHORIZE step is one the paying wallet may sign
+    (core/src/guard.ts checkAuthorize): step 1 a read-only Hinkal session; step 2 a PrivateSendBridge
+    order in Hinkal's domain on the input chain, for the input token (the zero address for the coin),
+    at most the input amount, paying exactly one recipient: your destinationAddress (without one,
+    userAddress). `intent` is what you asked /v1/quote for, the same camelCase dict: inputChainId,
+    inputToken, inputAmount, userAddress and destinationAddress. Not checked: the bridge route inside
+    the order (`quote`), which Hinkal runs as given."""
+    chain = intent.get("inputChainId")
+    if type(chain) is not int or chain not in HINKAL_CHAINS:
+        raise UnsafeExecutionError(f"This SDK version doesn't know Hinkal on chain {chain}: update ravnexchange")
+    if _dict(execution).get("executionType") != "AUTHORIZE":
+        raise UnsafeExecutionError("Not an AUTHORIZE step")
+    typed = _hinkal_sign(execution.get("sign"))
+    if typed is None:
+        return
+    domain = _dict(typed.get("domain"))
+    message = _dict(typed.get("message"))
+    if type(domain.get("chainId")) is not int or domain.get("chainId") != chain:
+        raise UnsafeExecutionError(f"The signature request isn't for the swap's chain {chain}")
+    if typed.get("primaryType") != "PrivateSendBridge":
+        raise UnsafeExecutionError("RAVN asked for a signature of a kind this SDK doesn't recognise")
+    if type(message.get("chainId")) is not int or message.get("chainId") != chain:
+        raise UnsafeExecutionError(f"The order isn't for the swap's chain {chain}")
+    token = str(intent.get("inputToken", "")).lower()
+    expected = ZERO_ADDRESS if token == NATIVE_EVM else token
+    if not isinstance(message.get("tokenAddress"), str) or message["tokenAddress"].lower() != expected:
+        raise UnsafeExecutionError("The order is for a token other than the one being swapped")
+    recipients = message.get("recipients") if isinstance(message.get("recipients"), list) else []
+    if len(recipients) != 1 or not isinstance(recipients[0], dict):
+        raise UnsafeExecutionError("The order doesn't pay exactly one recipient")
+    only = recipients[0]
+    if _amount(only.get("amount"), "The order's amount") > _amount(intent.get("inputAmount"), "The swap's inputAmount"):
+        raise UnsafeExecutionError("The order sends more than the swap's amount")
+    # No destination asked: the user's own wallet, as for any order.
+    payee = intent.get("destinationAddress") or intent.get("userAddress") or ""
+    recipient = only.get("recipient")
+    same = isinstance(payee, str) and payee != "" and isinstance(recipient, str) and (recipient.lower() == payee.lower() if EVM_ADDRESS.fullmatch(payee) else recipient == payee)
+    if not same:
+        raise UnsafeExecutionError("The order pays someone other than the destination address")
+
+
+def check_recovery(answer: Dict[str, Any], user_address: str) -> None:
+    """Raises UnsafeExecutionError unless `answer` is one `user_address`, the wallet that paid for
+    the swap, may sign: a read-only Hinkal session, or a recovery (RecoverStuckBridgeBalance /
+    WithdrawStuckUtxos) on a chain Hinkal runs on that sends one token back to that same wallet."""
+    status = _dict(answer).get("status")
+    if status in ("nothing", "done"):
+        return
+    if status != "sign":
+        raise UnsafeExecutionError(f"Can't check a recovery answer of status {status!r}: update ravnexchange")
+    typed = _hinkal_sign(answer.get("sign"))
+    if typed is None:
+        return
+    types = _dict(typed.get("types"))
+    primary = typed.get("primaryType")
     if primary not in ("RecoverStuckBridgeBalance", "WithdrawStuckUtxos"):
         raise UnsafeExecutionError("RAVN asked for a signature of a kind this SDK doesn't recognise")
     fields = types[primary] if isinstance(types[primary], list) else []
@@ -77,16 +146,14 @@ def check_recovery(answer: Dict[str, Any], user_address: str) -> None:
         raise UnsafeExecutionError("The signature request signs other fields than its kind's")
     domain = _dict(typed.get("domain"))
     message = _dict(typed.get("message"))
-    # Hinkal's domain names no contract: a field more would make the signature good somewhere else.
-    if domain.get("name") != "Hinkal Enclave" or set(domain) - {"name", "chainId"}:
-        raise UnsafeExecutionError("The signature request isn't for Hinkal's enclave")
     chain = domain.get("chainId")
     # type() is int, not ==: True == 1 and 8453.0 == 8453 in Python.
     if type(chain) is not int or chain not in HINKAL_CHAINS or type(message.get("chainId")) is not int or message.get("chainId") != chain:
         raise UnsafeExecutionError("The recovery isn't for a chain Hinkal runs on")
-    if not EVM_ADDRESS.fullmatch(str(message.get("tokenAddress"))):
+    if not isinstance(message.get("tokenAddress"), str) or not EVM_ADDRESS.fullmatch(message["tokenAddress"]):
         raise UnsafeExecutionError("The recovery names no token")
-    if not EVM_ADDRESS.fullmatch(user_address or "") or str(message.get("recipient")).lower() != user_address.lower():
+    recipient = message.get("recipient")
+    if not EVM_ADDRESS.fullmatch(user_address or "") or not isinstance(recipient, str) or recipient.lower() != user_address.lower():
         raise UnsafeExecutionError("The recovery sends the funds to someone other than the signing wallet")
 
 
