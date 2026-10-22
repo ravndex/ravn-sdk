@@ -674,8 +674,9 @@ describe("checkRecovery: what the paying wallet signs to get Hinkal's stuck fund
     const rooted = recoveryTyped("WithdrawStuckUtxos");
     rooted.types.Extra = [{ name: "x", type: "uint256" }];
     refusesRecovery(recovering(rooted), /sign something other than its primaryType/);
-    // A second root behind a type that isn't a string: String() would name it "null" or "undefined".
-    for (const [name, field] of [["null", { name: "x", type: null }], ["undefined", { name: "x" }]] as const) {
+    // A second root behind a type that isn't a string: String() would name it "null", "undefined", or
+    // for an array, any struct at all.
+    for (const [name, field] of [["null", { name: "x", type: null }], ["undefined", { name: "x" }], ["Other", { name: "a", type: ["Other"] }]] as const) {
       const hidden = recoveryTyped("WithdrawStuckUtxos");
       (hidden.types as Record<string, unknown>)[name] = [field];
       refusesRecovery(recovering(hidden), /sign something other than its primaryType/);

@@ -17,7 +17,8 @@ only come from a tampered RAVN response, never from a real venue's: every real f
 - **A recovery's `tokenAddress` must be a string.** `String()` of a one-element array is its element,
   so `[address]` passed.
 - **A field type that isn't a string names no struct** when finding the struct a wallet signs: a
-  missing or `null` type read as a struct named `"undefined"` or `"null"`, hiding a second root.
+  missing, `null` or array type (`["Extra"]`) read as a struct of that name (`"undefined"`,
+  `"null"`, `"Extra"`), hiding a second root.
 
 ## @ravnexchange/sdk 0.4.2
 
