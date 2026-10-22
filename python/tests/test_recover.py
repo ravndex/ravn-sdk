@@ -118,6 +118,10 @@ class CheckRecoveryTest(unittest.TestCase):
         contract = recovery_typed("WithdrawStuckUtxos")
         contract["domain"]["verifyingContract"] = USDC
         self.refuses(recovering(contract), "isn't for Hinkal's enclave")
+        renamed = recovery_typed("WithdrawStuckUtxos")
+        renamed["domain"]["name"] = "Other"
+        self.refuses(recovering(renamed), "isn't for Hinkal's enclave")
+        self.refuses(recovering(recovery_typed("WithdrawStuckUtxos", recipient="")), "someone other than the signing wallet", "")
         optimism = recovery_typed("WithdrawStuckUtxos", chainId=10)
         optimism["domain"]["chainId"] = 10
         self.refuses(recovering(optimism), "isn't for a chain Hinkal runs on")
@@ -184,8 +188,10 @@ class RecoverStuckFundsTest(unittest.TestCase):
         for stamp in ["2020-01-01T00:00:00.000Z", "2099-01-01T00:00:00"]:  # past; no time zone
             expired = copy.deepcopy(session())
             expired["expiresAt"] = stamp
+            asked = []
             with self.assertRaisesRegex(ValueError, "expired"):
-                recover_stuck_funds(client_answering([expired], []), "ref-1", USER, lambda m: "0xaa", lambda t: "0xbb")
+                recover_stuck_funds(client_answering([expired], []), "ref-1", USER, asked.append, asked.append)
+            self.assertEqual(asked, [])  # refused before the wallet was asked
 
     def test_a_step_that_expires_while_signing_is_never_sent(self):
         sent = []
