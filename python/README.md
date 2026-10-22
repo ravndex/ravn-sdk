@@ -44,6 +44,71 @@ Pass `"sandbox": True` on `get_quote` to test the full quote → execute → sta
 real funds; see the API's own docs for per-venue exceptions (THORChain BTC-source,
 Chainflip, and Houdini Swap can't be sandboxed).
 
+## Hinkal private swaps (0.1.7)
+
+Hinkal races on a `confidential` quote only when you pass `"authorizeSteps": True` (or
+`"onlyVenues": ["hinkal"]`). `execute` then answers `executionType: "AUTHORIZE"` twice before the
+deposit `TRANSACTION`: check the step with `check_authorize`, have the paying wallet sign `sign`
+(`personal_sign` its `message`, or `eth_signTypedData_v4` its `typedData`) and call `execute` again
+with the same `quoteToken`, the `authorization` and the `signature`. See
+[AUTHORIZE steps](https://docs.ravn.exchange/execution-types#authorize-steps-hinkal).
+
+```python
+import time
+from eth_account import Account
+from eth_account.messages import encode_defunct
+from ravnexchange import check_authorize, check_hinkal_deposit
+
+account = Account.from_key(private_key)  # the paying wallet: userAddress
+params = {"inputChainId": 8453, "inputToken": USDC, "inputAmount": "20000000", "userAddress": account.address,
+          "destinationAddress": recipient, "confidential": True, "authorizeSteps": True}
+quote = client.get_quote(params)
+execution = client.execute({"quoteToken": quote["quoteToken"]})
+while execution["executionType"] == "AUTHORIZE":
+    check_authorize(execution, params)  # raises UnsafeExecutionError before anything is signed
+    sign = execution["sign"]
+    if sign["method"] == "personal_sign":
+        signature = account.sign_message(encode_defunct(text=sign["message"])).signature
+    else:
+        order_received = time.time()  # the deposit must be sent within 10 minutes of this
+        signature = account.sign_typed_data(full_message=sign["typedData"]).signature
+    # Bytes or hex without 0x (hexbytes 1.x's .hex()) both go out as 0x hex.
+    execution = client.execute({"quoteToken": quote["quoteToken"], "authorization": execution["authorization"],
+                                "signature": signature})
+check_hinkal_deposit(execution, params)  # before sending anything: approval, deposit, RAVN's fee
+# then send execution["calls"] (or approval, transaction, fee["transaction"]) as for any TRANSACTION
+```
+
+Sign step 2 within about 6 minutes of receiving it (with under 4 of the 10 left, the order is
+refused), and send the deposit within 10 minutes of receiving it: the `TRANSACTION` has no deadline
+field. `check_hinkal_deposit` raises `UnsafeExecutionError` unless that `TRANSACTION` only pays
+the deposit, as the TS client's check does: Hinkal's `prooflessDeposit` of the input token alone
+for at most the input amount; on a token sell, an `approve()` of that token to Hinkal's contract
+for at most the input amount; RAVN's fee only to RAVN's fee wallet and at most 1%; all of it within
+the input amount; `calls` exactly those transactions. This client checks only Hinkal's answers:
+nothing for other venues.
+
+A failed Hinkal swap isn't refunded on its own. `recover_stuck_funds` gets the funds back to the
+wallet that paid, checking every step before that wallet signs it:
+
+```python
+from ravnexchange import recover_stuck_funds
+
+recovered = recover_stuck_funds(
+    client,
+    status_ref=execution["statusRef"],
+    user_address=account.address,  # from your own wallet, never from a RAVN answer
+    sign_message=lambda message: account.sign_message(encode_defunct(text=message)).signature,
+    sign_typed_data=lambda typed: account.sign_typed_data(full_message=typed).signature,
+)
+# [{"chainId", "tokenAddress", "amount"}]: amounts before Hinkal's recovery fee
+```
+
+`client.recover(params, user_address)` makes one call of that flow (`POST /v1/recover`), checked
+the same way (`check_recovery`; a bad answer raises `UnsafeExecutionError`). A recovery is public:
+an ordinary on-chain payment back to the paying wallet. See
+[POST /recover](https://docs.ravn.exchange/api-reference/recover).
+
 ## Parity with `@ravnexchange/sdk` 0.2.0
 
 Same calls and the same wire shapes: responses are plain dicts, so new API fields such as an
@@ -65,6 +130,9 @@ one doesn't yet:
 - **`timeoutMs` isn't in `GetQuoteParams` yet**: pass it anyway (a dict key goes through as is).
 - **A network failure raises `urllib.error.URLError`**, not a `RavnApiError` (the TS client wraps it
   as `NETWORK_ERROR`).
+- **No check before the wallet on executions** (the TS client's from 0.3.0), except Hinkal's:
+  `check_authorize`, `check_hinkal_deposit` and the recovery answers (`check_recovery`, run by
+  `recover`). Check what you sign or send for any other venue yourself.
 
 ## Status
 
