@@ -6,7 +6,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from ravnexchange import RavnClient, UnsafeExecutionError, check_authorize, check_recovery, recover_stuck_funds
+from ravnexchange import RavnClient, UnsafeExecutionError, check_authorize, check_hinkal_deposit, check_recovery, recover_stuck_funds
 
 USER = "0x1111111111111111111111111111111111111111"
 ATTACKER = "0x9999999999999999999999999999999999999999"
@@ -229,6 +229,174 @@ class CheckAuthorizeTest(unittest.TestCase):
         self.refuses(step({"method": "eth_signTypedData_v4"}), "typed data is missing")
         self.refuses(placing(order()), "doesn't know Hinkal on chain 10", dict(INTENT, inputChainId=10))
         self.refuses(dict(placing(order()), executionType="TRANSACTION"), "Not an AUTHORIZE step")
+        arbitrum = order()
+        arbitrum["domain"]["chainId"] = 42161
+        self.refuses(placing(arbitrum), "signature request isn't for the swap's chain")
+        for chain in [8453.0, True]:
+            loose = order()
+            loose["message"]["chainId"] = chain
+            self.refuses(placing(loose), "order isn't for the swap's chain")
+        self.refuses(placing(order()), "doesn't know Hinkal on chain", dict(INTENT, inputChainId=8453.0))
+        self.refuses(placing(order(amount=-1)), "isn't a whole number")
+        self.refuses(placing(order(recipients=["0x2222222222222222222222222222222222222222"])), "exactly one recipient")
+        self.refuses(step({"method": "eth_sign", "typedData": order()}), "kind this SDK doesn't recognise")
+        self.refuses(placing(order(recipients=[{"recipient": "", "amount": "1"}])), "someone other than the destination", dict(INTENT, destinationAddress="", userAddress=""))
+        self.refuses(placing(order()), "isn't an address", dict(INTENT, inputToken="USDC"))
+        self.refuses(placing(order(amount="0")), "must be positive", dict(INTENT, inputAmount="0"))
+
+    def test_a_solana_destination_is_compared_exactly(self):
+        solana = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+        check_authorize(placing(order(recipients=[{"recipient": solana, "amount": "1"}])), dict(INTENT, destinationAddress=solana))
+        self.refuses(placing(order(recipients=[{"recipient": solana.lower(), "amount": "1"}])), "someone other than the destination", dict(INTENT, destinationAddress=solana))
+
+
+HINKAL = "0x7cb60446d7635C68EDf1c568cac74A1f98c1Cfa4"
+FEE_WALLET = "0x12d2425fD88c693EDB4dE004E0c747879B7D6933"
+NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+ZERO = "0x0000000000000000000000000000000000000000"
+DEPOSIT_INTENT = dict(INTENT, inputAmount="100000000")
+COIN_INTENT = dict(DEPOSIT_INTENT, inputToken=NATIVE, inputAmount="1000000000000000000")
+AMOUNT_IN, FEE = 99_400_000, 500_000
+
+
+def word(v):
+    return (format(v, "x") if isinstance(v, int) else v[2:].lower()).rjust(64, "0")
+
+
+def approve(spender, amount):
+    return "0x095ea7b3" + word(spender) + word(amount)
+
+
+def transfer(to, amount):
+    return "0xa9059cbb" + word(to) + word(amount)
+
+
+def deposit(token, amount, selector="0xbb3b5d78"):
+    # prooflessDeposit([token], [amount], [(1,2,3,4,5)], [0xabcd], true, "order-123"), as viem encodes it.
+    args = [0xC0, 0x100, 0x140, 0x200, 1, 0x280, 1, token, 1, amount, 1, 1, 2, 3, 4, 5, 1, 0x20, 2]
+    return selector + "".join(word(a) for a in args) + "abcd".ljust(64, "0") + word(9) + b"order-123".hex().ljust(64, "0")
+
+
+def token_sell():
+    approval = {"to": USDC, "data": approve(HINKAL, AMOUNT_IN), "value": "0", "chainId": 8453, "spender": HINKAL, "amount": str(AMOUNT_IN)}
+    transaction = {"to": HINKAL, "data": deposit(USDC, AMOUNT_IN), "value": "0", "chainId": 8453}
+    fee = {"to": USDC, "data": transfer(FEE_WALLET, FEE) + word("0x5a"), "value": "0", "chainId": 8453}
+    return {
+        "executionType": "TRANSACTION",
+        "quoteToken": "qt-2",
+        "approval": approval,
+        "transaction": transaction,
+        "fee": {"amount": str(FEE), "address": FEE_WALLET, "chainId": 8453, "transaction": fee},
+        "calls": [{"to": USDC, "data": approval["data"], "value": "0", "chainId": 8453}, dict(transaction), dict(fee)],
+        "batch": True,
+    }
+
+
+def coin_sell(value=990_000_000_000_000_000):
+    return {"executionType": "TRANSACTION", "quoteToken": "qt-2", "transaction": {"to": HINKAL, "data": deposit(ZERO, value), "value": str(value), "chainId": 8453}}
+
+
+def with_tx(**change):
+    e = token_sell()
+    e["transaction"].update(change)
+    e.pop("calls")
+    return e
+
+
+class CheckHinkalDepositTest(unittest.TestCase):
+    def refuses(self, execution, message, intent=DEPOSIT_INTENT):
+        with self.assertRaisesRegex(UnsafeExecutionError, message):
+            check_hinkal_deposit(execution, intent)
+
+    def test_accepts_a_token_sell_and_a_coin_sell(self):
+        check_hinkal_deposit(token_sell(), DEPOSIT_INTENT)
+        check_hinkal_deposit(coin_sell(), COIN_INTENT)
+        coin_fee = coin_sell(980_000_000_000_000_000)
+        coin_fee["fee"] = {"amount": "10000000000000000", "address": FEE_WALLET, "chainId": 8453,
+                           "transaction": {"to": FEE_WALLET, "data": "0x" + word("0x5a"), "value": "10000000000000000", "chainId": 8453}}
+        check_hinkal_deposit(coin_fee, COIN_INTENT)
+        reset = token_sell()
+        reset["approval"]["reset"] = {"to": USDC, "data": approve(HINKAL, 0), "value": "0"}
+        reset["calls"].insert(0, {"to": USDC, "data": approve(HINKAL, 0), "value": "0", "chainId": 8453})
+        check_hinkal_deposit(reset, DEPOSIT_INTENT)
+
+    def test_refuses_a_deposit_that_isnt_hinkals_for_the_input(self):
+        self.refuses(with_tx(to=ATTACKER), "isn't a deposit into Hinkal's contract")
+        self.refuses(with_tx(data=deposit(USDC, AMOUNT_IN, "0x12345678")), "isn't a deposit")
+        self.refuses(with_tx(data=deposit(OTHER, AMOUNT_IN)), "token other than the one being swapped")
+        self.refuses(with_tx(data=deposit(USDC, 100_000_001)), "more than the swap's amount")
+        two = deposit(USDC, AMOUNT_IN)
+        two = two[: 10 + 64 * 6] + word(2) + two[10 + 64 * 7 :]
+        self.refuses(with_tx(data=two), "exactly one token")
+        self.refuses(with_tx(data="0xbb3b5d78" + word(0xC1)), "isn't ABI-encoded")
+        self.refuses(with_tx(data="0xbb3b5d78" + word(0xC0)), "shorter than its function's arguments")
+        self.refuses(with_tx(value="1"), "sends the native coin too")
+        self.refuses(with_tx(chainId=1), "isn't for the swap's chain")
+        self.refuses(with_tx(chainId=True), "isn't for the swap's chain")
+        self.refuses(coin_sell(1_000_000_000_000_000_001), "more than the swap's amount", COIN_INTENT)
+        self.refuses(coin_sell(), "token other than the one being swapped")
+        self.refuses(dict(coin_sell(), sandbox=True), "never send it", COIN_INTENT)
+        self.refuses(token_sell(), "isn't an address", dict(DEPOSIT_INTENT, inputToken="USDC"))
+        self.refuses(token_sell(), "must be positive", dict(DEPOSIT_INTENT, inputAmount="0"))
+
+    def test_refuses_an_approval_beyond_the_deposit(self):
+        for change, message in [
+            ({"to": OTHER, "data": approve(HINKAL, AMOUNT_IN)}, "token other than the one being swapped"),
+            ({"data": approve(ATTACKER, AMOUNT_IN), "spender": ATTACKER}, "contract the swap doesn't call"),
+            ({"data": approve(HINKAL, 100_000_001), "amount": "100000001"}, "more than the swap's amount"),
+            ({"spender": ATTACKER}, "spender isn't the one its calldata approves"),
+            ({"amount": "1"}, "amount isn't the one its calldata approves"),
+            ({"data": approve(HINKAL, AMOUNT_IN) + "00"}, "isn't a plain approve"),
+            ({"unlimitedRecommended": True}, "unlimited approval"),
+        ]:
+            e = token_sell()
+            e["approval"].update(change)
+            e.pop("calls")
+            self.refuses(e, message)
+        bad_reset = token_sell()
+        bad_reset["approval"]["reset"] = {"to": USDC, "data": approve(HINKAL, 1), "value": "0"}
+        bad_reset.pop("calls")
+        self.refuses(bad_reset, "reset isn't to zero")
+        coin_approval = coin_sell()
+        coin_approval["approval"] = token_sell()["approval"]
+        self.refuses(coin_approval, "native coin", COIN_INTENT)
+
+    def test_refuses_a_fee_to_anyone_but_ravn_or_over_one_percent(self):
+        for fee_change, message in [
+            ({"address": ATTACKER}, "doesn't go to RAVN's fee wallet"),
+            ({"amount": "1000001"}, "more than 1% of the swap"),
+            ({"chainId": 1}, "fee isn't for the swap's chain"),
+        ]:
+            e = token_sell()
+            e["fee"].update(fee_change)
+            self.refuses(e, message)
+        for tx_change, message in [
+            ({"data": transfer(ATTACKER, FEE)}, "isn't to RAVN's fee wallet"),
+            ({"data": transfer(FEE_WALLET, FEE + 1)}, "more than the fee"),
+            ({"to": OTHER}, "isn't a payment to RAVN's fee wallet"),
+            ({"to": FEE_WALLET, "data": "0x", "value": str(FEE)}, "coin fee was asked on a token swap"),
+        ]:
+            e = token_sell()
+            e["fee"]["transaction"].update(tx_change)
+            e.pop("calls")
+            self.refuses(e, message)
+        over = token_sell()  # each within its own limit, together more than the input
+        over["approval"].update({"data": approve(HINKAL, 99_600_000), "amount": "99600000"})
+        over.pop("calls")
+        self.refuses(over, "take more of the token than the swap's amount")
+        coin_over = coin_sell()
+        coin_over["fee"] = {"amount": "10000000000000000", "address": FEE_WALLET, "chainId": 8453,
+                            "transaction": {"to": FEE_WALLET, "data": "0x", "value": "10000000000000001", "chainId": 8453}}
+        self.refuses(coin_over, "more than the fee", COIN_INTENT)
+
+    def test_refuses_calls_that_arent_the_transactions_described(self):
+        extra = token_sell()
+        extra["calls"].append({"to": USDC, "data": transfer(ATTACKER, 1), "value": "0", "chainId": 8453})
+        self.refuses(extra, "calls aren't the transactions it describes")
+        swapped = token_sell()
+        swapped["calls"][1] = dict(swapped["calls"][1], data=deposit(USDC, 1))
+        self.refuses(swapped, "calls aren't the transactions it describes")
+        self.refuses(dict(token_sell(), calls="0x"), "isn't for the swap's chain")
 
 
 class HexSignatureTest(unittest.TestCase):
@@ -237,8 +405,9 @@ class HexSignatureTest(unittest.TestCase):
         client = client_answering([{"executionType": "AUTHORIZE"}, {"status": "nothing"}, {"statusRef": "s"}], sent)
         client.execute({"quoteToken": "qt", "authorization": "hk_1", "signature": "ab" * 65})  # hexbytes 1.x .hex()
         client.recover({"statusRef": "ref", "authorization": "hk_2", "signature": bytes.fromhex("cd" * 65)}, USER)
-        client.submit_signature({"quoteToken": "qt", "signature": "0x" + "ef" * 65})
+        client.submit_signature({"quoteToken": "qt", "signature": "ef" * 65, "approvalSignature": bytearray(b"\x12" * 65)})
         self.assertEqual([s["signature"] for s in sent], ["0x" + "ab" * 65, "0x" + "cd" * 65, "0x" + "ef" * 65])
+        self.assertEqual(sent[2]["approvalSignature"], "0x" + "12" * 65)
 
 
 class RecoverStuckFundsTest(unittest.TestCase):

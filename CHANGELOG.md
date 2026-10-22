@@ -23,8 +23,13 @@ Hinkal for Python integrators, as in `@ravnexchange/sdk` 0.4.1. Merging publishe
 - `check_authorize(execution, intent)`, the TS client's `checkAuthorize`: run it on each `AUTHORIZE`
   step before signing. Step 1 must be a read-only Hinkal session; step 2 a `PrivateSendBridge` order
   in Hinkal's domain on the input chain, for the input token, at most the input amount, paying
-  exactly one recipient, your `destinationAddress`. `intent` is the dict you quoted with. The deposit
-  `TRANSACTION` isn't checked here: the README says what to check before sending it.
+  exactly one recipient, your `destinationAddress`. `intent` is the dict you quoted with.
+- `check_hinkal_deposit(execution, intent)`, the TS client's check of Hinkal's `TRANSACTION`: run it
+  before sending anything. Hinkal's `prooflessDeposit` of the input token alone (the zero address
+  for the coin), at most the input amount; on a token sell, `approve()` of that token to Hinkal's
+  contract, at most the input amount (and a reset to 0), its `spender`/`amount` fields matching its
+  calldata; RAVN's fee only to RAVN's fee wallet, at most 1%; all of it within the input amount;
+  `calls` exactly those transactions, in order.
 - Also first published here: `onlyVenues` typed, from earlier TS-only releases (it already went
   through as a dict key).
 

@@ -57,7 +57,7 @@ with the same `quoteToken`, the `authorization` and the `signature`. See
 import time
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from ravnexchange import check_authorize
+from ravnexchange import check_authorize, check_hinkal_deposit
 
 account = Account.from_key(private_key)  # the paying wallet: userAddress
 params = {"inputChainId": 8453, "inputToken": USDC, "inputAmount": "20000000", "userAddress": account.address,
@@ -75,16 +75,18 @@ while execution["executionType"] == "AUTHORIZE":
     # Bytes or hex without 0x (hexbytes 1.x's .hex()) both go out as 0x hex.
     execution = client.execute({"quoteToken": quote["quoteToken"], "authorization": execution["authorization"],
                                 "signature": signature})
+check_hinkal_deposit(execution, params)  # before sending anything: approval, deposit, RAVN's fee
+# then send execution["calls"] (or approval, transaction, fee["transaction"]) as for any TRANSACTION
 ```
 
 Sign step 2 within about 6 minutes of receiving it (with under 4 of the 10 left, the order is
 refused), and send the deposit within 10 minutes of receiving it: the `TRANSACTION` has no deadline
-field. This client checks only the `AUTHORIZE` steps and recovery answers, not the `TRANSACTION`.
-Before sending it, check that `transaction["to"]` is Hinkal's contract
-`0x7cb60446d7635C68EDf1c568cac74A1f98c1Cfa4`; on a token sell, that `approval` is the input token's
-`approve` with `approval["spender"]` that same contract and `approval["amount"]` at most the input
-amount, and `transaction["value"]` is `"0"`; on a coin sell, that `transaction["value"]` is at most
-the input amount; and that any `fee["transaction"]` pays `fee["address"]` exactly as given.
+field. `check_hinkal_deposit` raises `UnsafeExecutionError` unless that `TRANSACTION` only pays
+the deposit, as the TS client's check does: Hinkal's `prooflessDeposit` of the input token alone
+for at most the input amount; on a token sell, an `approve()` of that token to Hinkal's contract
+for at most the input amount; RAVN's fee only to RAVN's fee wallet and at most 1%; all of it within
+the input amount; `calls` exactly those transactions. This client checks only Hinkal's answers:
+nothing for other venues.
 
 A failed Hinkal swap isn't refunded on its own. `recover_stuck_funds` gets the funds back to the
 wallet that paid, checking every step before that wallet signs it:
@@ -128,8 +130,9 @@ one doesn't yet:
 - **`timeoutMs` isn't in `GetQuoteParams` yet**: pass it anyway (a dict key goes through as is).
 - **A network failure raises `urllib.error.URLError`**, not a `RavnApiError` (the TS client wraps it
   as `NETWORK_ERROR`).
-- **No check before the wallet on executions** (the TS client's from 0.3.0), `AUTHORIZE` steps
-  included: only `/v1/recover` answers are checked. Check what you sign yourself.
+- **No check before the wallet on executions** (the TS client's from 0.3.0), except Hinkal's:
+  `check_authorize`, `check_hinkal_deposit` and the recovery answers (`check_recovery`, run by
+  `recover`). Check what you sign or send for any other venue yourself.
 
 ## Status
 
