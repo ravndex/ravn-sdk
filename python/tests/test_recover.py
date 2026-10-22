@@ -398,6 +398,57 @@ class CheckHinkalDepositTest(unittest.TestCase):
         self.refuses(swapped, "calls aren't the transactions it describes")
         self.refuses(dict(token_sell(), calls="0x"), "isn't for the swap's chain")
 
+    def test_more_refusals_each_check_needs(self):
+        # On a coin sell the total is the only bound on what the deposit sends.
+        two_eth = coin_sell()
+        two_eth["transaction"]["value"] = "2000000000000000000"
+        self.refuses(two_eth, "more of the native coin than the swap's amount", COIN_INTENT)
+        coin_fee = coin_sell()  # 0.99 deposited + 0.02 fee: over the 1 ETH input
+        coin_fee["fee"] = {"amount": "10000000000000000", "address": FEE_WALLET, "chainId": 8453,
+                           "transaction": {"to": FEE_WALLET, "data": "0x", "value": "10000000000000000", "chainId": 8453}}
+        coin_fee["transaction"]["value"] = "1000000000000000000"
+        self.refuses(coin_fee, "more of the native coin than the swap's amount", COIN_INTENT)
+        tagged = coin_sell(980_000_000_000_000_000)
+        tagged["fee"] = dict(coin_fee["fee"], transaction=dict(coin_fee["fee"]["transaction"], data="0x" + "00" * 33))
+        self.refuses(tagged, "more than the fee", COIN_INTENT)
+        check_hinkal_deposit(coin_sell(), COIN_INTENT)
+        eeee = coin_sell()
+        eeee["transaction"]["data"] = deposit(NATIVE, 990_000_000_000_000_000)
+        self.refuses(eeee, "token other than the one being swapped", COIN_INTENT)
+        for change, message in [({"data": transfer(HINKAL, AMOUNT_IN)}, "isn't a plain approve"), ({"value": "1"}, "isn't a plain approve")]:
+            e = token_sell()
+            e["approval"].update(change)
+            e.pop("calls")
+            self.refuses(e, message)
+        empty_reset = token_sell()
+        empty_reset["approval"]["reset"] = {}
+        self.refuses(empty_reset, "no valid recipient")
+        # Deposit-side half of the token total: approval 1, deposit 99.6M, fee 0.5M.
+        deposit_side = token_sell()
+        deposit_side["approval"].update({"data": approve(HINKAL, 1), "amount": "1"})
+        deposit_side["transaction"]["data"] = deposit(USDC, 99_600_000)
+        deposit_side.pop("calls")
+        self.refuses(deposit_side, "take more of the token than the swap's amount")
+        for tx_change in [{"value": "1"}, {"data": transfer(FEE_WALLET, FEE) + "00" * 33}]:
+            e = token_sell()
+            e["fee"]["transaction"].update(tx_change)
+            e.pop("calls")
+            self.refuses(e, "more than the fee")
+        dirty = with_tx(data=deposit(USDC, AMOUNT_IN))
+        dirty["transaction"]["data"] = dirty["transaction"]["data"][: 10 + 64 * 7] + "ff" + dirty["transaction"]["data"][12 + 64 * 7 :]
+        self.refuses(dirty, "isn't an address")
+        self.refuses(dict(token_sell(), executionType="DEPOSIT"), "Not a TRANSACTION")
+        self.refuses(dict(token_sell(), transaction=dict(token_sell()["transaction"], serialized="AQ==")), "Solana or submit")
+        self.refuses(dict(token_sell(), submit={"url": "/api/v1/submit-transaction"}), "Solana or submit")
+        for where in ["fee", "call"]:
+            e = token_sell()
+            if where == "fee":
+                e["fee"]["chainId"] = 8453.0
+                self.refuses(e, "fee isn't for the swap's chain")
+            else:
+                e["calls"][0]["chainId"] = 8453.0
+                self.refuses(e, "A call isn't for the swap's chain")
+
 
 class HexSignatureTest(unittest.TestCase):
     def test_signatures_go_out_as_0x_hex(self):

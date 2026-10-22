@@ -181,7 +181,8 @@ def check_hinkal_deposit(execution: Dict[str, Any], intent: Dict[str, Any]) -> N
         if native:
             raise UnsafeExecutionError("An approval was asked for a swap paying in the native coin")
         approval = _dict(ex["approval"])
-        steps = ([dict(_dict(approval.get("reset")), chainId=approval.get("chainId"))] if approval.get("reset") else []) + [approval]
+        reset = approval.get("reset")
+        steps = ([dict(_dict(reset), chainId=approval.get("chainId"))] if reset is not None else []) + [approval]
         for i, a in enumerate(steps):
             ato, adata, avalue = _call(a, chain, "The approval")
             if ato != token:
