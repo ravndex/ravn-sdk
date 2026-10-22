@@ -667,9 +667,20 @@ describe("checkRecovery: what the paying wallet signs to get Hinkal's stuck fund
     const asText = recoveryTyped("WithdrawStuckUtxos");
     asText.types.WithdrawStuckUtxos = asText.types.WithdrawStuckUtxos!.map((f) => (f.name === "recipient" ? { name: "recipient", type: "string" } : f));
     refusesRecovery(recovering(asText), /signs other fields than its kind's/);
+    // One field whose type spells out the rest: joined, it reads as Hinkal's five.
+    const joined = recoveryTyped("WithdrawStuckUtxos");
+    joined.types.WithdrawStuckUtxos = [{ name: "nonce", type: "string,sessionId:string,chainId:uint256,tokenAddress:address,recipient:address" }];
+    refusesRecovery(recovering(joined), /signs other fields than its kind's/);
     const rooted = recoveryTyped("WithdrawStuckUtxos");
     rooted.types.Extra = [{ name: "x", type: "uint256" }];
     refusesRecovery(recovering(rooted), /sign something other than its primaryType/);
+    // A second root behind a type that isn't a string: String() would name it "null", "undefined", or
+    // for an array, any struct at all.
+    for (const [name, field] of [["null", { name: "x", type: null }], ["undefined", { name: "x" }], ["Other", { name: "a", type: ["Other"] }]] as const) {
+      const hidden = recoveryTyped("WithdrawStuckUtxos");
+      (hidden.types as Record<string, unknown>)[name] = [field];
+      refusesRecovery(recovering(hidden), /sign something other than its primaryType/);
+    }
     const contract = recoveryTyped("WithdrawStuckUtxos");
     contract.domain.verifyingContract = HINKAL;
     refusesRecovery(recovering(contract), /isn't for Hinkal's enclave/);
@@ -681,6 +692,10 @@ describe("checkRecovery: what the paying wallet signs to get Hinkal's stuck fund
     refusesRecovery(recovering(optimism), /isn't for a chain Hinkal runs on/);
     refusesRecovery(recovering(recoveryTyped("WithdrawStuckUtxos", { chainId: 1 })), /isn't for a chain Hinkal runs on/);
     refusesRecovery(recovering(recoveryTyped("WithdrawStuckUtxos", { tokenAddress: "USDC" })), /names no token/);
+    // String([USDC]) is USDC itself.
+    const wrapped = recoveryTyped("WithdrawStuckUtxos");
+    (wrapped.message as Record<string, unknown>).tokenAddress = [USDC];
+    refusesRecovery(recovering(wrapped), /names no token/);
   });
 
   it("refuses an answer it doesn't know", () => {
