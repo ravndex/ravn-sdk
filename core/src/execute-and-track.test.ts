@@ -121,14 +121,14 @@ describe("executeAndTrack: TRANSACTION", () => {
 
   it("hands the swap's gas limit to sendTransaction with the rest of it", async () => {
     const fetchImpl = scriptedFetch({
-      execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453, gas: "300000" } }],
+      execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453, gasLimit: "300000" } }],
       status: [{ status: "success", venue: "kyberswap" }],
     });
     const handlers = { sendTransaction: vi.fn(async () => "0xMainHash"), waitForReceipt: vi.fn(async (hash: string) => receipt(hash)) };
 
     await executeAndTrack(new RavnClient({ guard: false, fetch: fetchImpl }), baseParams, handlers, { pollIntervalMs: 0 });
 
-    expect(handlers.sendTransaction).toHaveBeenCalledWith({ to: "0xRouter", data: "0xswap", value: "0", chainId: 8453, gas: "300000" });
+    expect(handlers.sendTransaction).toHaveBeenCalledWith({ to: "0xRouter", data: "0xswap", value: "0", chainId: 8453, gasLimit: "300000" });
   });
 
   it("skips sending the approval when hasAllowance reports it's already sufficient", async () => {

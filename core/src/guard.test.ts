@@ -108,6 +108,20 @@ describe("checkExecution: EVM transactions", () => {
     refuses(e, intent, /calls aren't the transactions it describes/);
   });
 
+  it("holds the swap's call in `calls` to the swap's gasLimit, and refuses one on any other call", () => {
+    const { execution, intent } = swap();
+    const e = execution as Tx;
+    const swapCall = e.calls!.findIndex((c) => c.data === e.transaction.data);
+    e.transaction.gasLimit = "300000";
+    e.calls![swapCall].gasLimit = "300000";
+    expect(() => checkExecution(e, intent)).not.toThrow();
+    e.calls![swapCall].gasLimit = "21000";
+    refuses(e, intent, /calls aren't the transactions it describes/);
+    e.calls![swapCall].gasLimit = "300000";
+    e.calls![0].gasLimit = "21000";
+    refuses(e, intent, /calls aren't the transactions it describes/);
+  });
+
   it("refuses a transaction for another chain", () => {
     const { execution, intent } = swap();
     (execution as Tx).transaction.chainId = 1;

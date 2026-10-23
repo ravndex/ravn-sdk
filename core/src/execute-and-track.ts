@@ -4,7 +4,7 @@ import { RavnApiError } from "./types";
 import type { ApprovalDTO, DepositFeeDTO, ExecuteParams, ExecutionDTO, StatusDTO } from "./types";
 import { isPollingTerminal } from "./polling";
 
-type TxLike = { to?: string; data?: string; value?: string; chainId?: number; gas?: string; serialized?: string };
+type TxLike = { to?: string; data?: string; value?: string; chainId?: number; gasLimit?: string; serialized?: string };
 
 /**
  * The parts of a transaction receipt executeAndTrack reads. viem's and wagmi's
@@ -16,8 +16,9 @@ export type TransactionReceiptLike =
   | { status?: unknown; hash: string };
 
 export interface ExecuteAndTrackHandlers {
-  /** Broadcast a transaction (an approval, the main swap tx, or RAVN's fee) and return its hash. When `tx.gas`
-   * is set (the swap, from RAVN 2026-10), send it as the gas limit: a wallet's own estimate can leave too little. */
+  /** Broadcast a transaction (an approval, the main swap tx, or RAVN's fee) and return its hash. When
+   * `tx.gasLimit` is set (the swap), send it as the gas limit: ethers takes it as is, viem/wagmi as
+   * `gas: BigInt(tx.gasLimit)`. A wallet's own estimate can leave too little. */
   sendTransaction(tx: TxLike): Promise<string>;
   /**
    * Wait for a transaction hash to confirm and resolve to its receipt. Called on the approval
