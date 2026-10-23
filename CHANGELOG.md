@@ -3,6 +3,19 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.4
+
+### Added
+
+- **`transaction.gas`** on a `TRANSACTION` execution (and `gas` on the swap's entry in `calls`): the
+  gas limit to send the swap with, in gas units as a decimal string. RAVN runs the swap from your
+  user's wallet (`userAddress`) after its approval and adds 50%, as RAVN's own app does. Pass it to
+  the wallet (viem/wagmi `gas: BigInt(tx.gas)`, ethers `gasLimit`): a wallet left to estimate adds
+  little or no headroom (MetaMask none), and a swap whose route costs a bit more by the time it lands
+  runs out of gas. Absent when RAVN couldn't measure it (the wallet doesn't hold the input yet,
+  zkSync, Tempo, a slow node): the wallet estimates it then. `executeAndTrack` hands it to your
+  `sendTransaction` / `sendCalls` as part of the transaction (`TxLike.gas`); nothing else changes.
+
 ## ravnexchange (Python) 0.1.7
 
 Hinkal for Python integrators, as in `@ravnexchange/sdk` 0.4.1. Merging publishes it to PyPI
