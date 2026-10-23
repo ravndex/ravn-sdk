@@ -149,7 +149,7 @@ function checkFeeTerms(ctx: Ctx, fee: DepositFeeDTO, wallet: string | undefined)
   return amount;
 }
 
-type Call = { to?: string; data?: string; value?: string; chainId?: number };
+type Call = { to?: string; data?: string; value?: string; chainId?: number; gasLimit?: string };
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
@@ -608,7 +608,8 @@ const approvalCalls = (a?: ApprovalDTO): Call[] => (a ? [...(a.reset ? [{ ...a.r
 // `calls` must be exactly the fields already checked, in order: nothing extra rides along.
 function checkCalls(ctx: Ctx, calls: Call[], expected: Call[]) {
   const same = (a: Call, b: Call) =>
-    lower(a.to) === lower(b.to) && lower(a.data ?? "0x") === lower(b.data ?? "0x") && big(a.value ?? "0", "A call's value") === big(b.value ?? "0", "A call's value");
+    lower(a.to) === lower(b.to) && lower(a.data ?? "0x") === lower(b.data ?? "0x") && big(a.value ?? "0", "A call's value") === big(b.value ?? "0", "A call's value") &&
+    a.gasLimit === b.gasLimit;
   if (calls.length !== expected.length || calls.some((c, i) => !same(c, expected[i]))) {
     fail("The execution's calls aren't the transactions it describes");
   }

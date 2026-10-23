@@ -155,6 +155,11 @@ export type ExecutionDTO =
         data?: string;
         value?: string;
         chainId?: number;
+        /** EVM: the gas limit to send it with (decimal gas units): what RAVN measured running it from
+         * your user's wallet after `approval`, plus 50%. Send it as the limit (ethers takes `gasLimit`
+         * as is; viem/wagmi `gas: BigInt(gasLimit)`). Absent when RAVN couldn't measure it, or your
+         * user couldn't cover it: the wallet estimates then. */
+        gasLimit?: string;
         serialized?: string;
       };
       /** Only on quotes made with `broadcastViaRavn: true`. Don't broadcast this one: sign
@@ -278,6 +283,8 @@ export interface CallDTO {
   data: string;
   value: string;
   chainId: number;
+  /** The swap's call only, when `transaction.gasLimit` is set: the same gas limit. */
+  gasLimit?: string;
 }
 
 /** RAVN's integrator fee beside a deposit (or a transaction), in the input token, paid by your user

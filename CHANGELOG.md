@@ -3,6 +3,29 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.4
+
+### Added
+
+- **`transaction.gasLimit`** on a `TRANSACTION` execution (and `gasLimit` on the swap's entry in
+  `calls`): the gas limit to send the swap with, in gas units as a decimal string. RAVN runs the swap
+  from your user's wallet (`userAddress`) after its approval and adds 50%, as RAVN's own app does.
+  Send it as the limit: ethers (v5 and v6) takes `gasLimit` as is; viem/wagmi need
+  `gas: BigInt(tx.gasLimit)`. A wallet left to estimate adds little or no headroom (MetaMask none),
+  and a swap whose route costs a bit more by the time it lands runs out of gas. Absent when RAVN
+  couldn't measure it (the wallet doesn't hold the input yet, zkSync, Tempo, Monad, a slow node), when
+  it's more than a transaction may carry (the block's limit, or 2^24), or when your user couldn't cover
+  it and the approval at twice today's gas price: the wallet estimates it then, as before. A Max sell
+  of the chain's coin sent with it must leave `gasLimit` × the wallet's max fee unspent.
+- `executeAndTrack` hands it to your `sendTransaction` with the rest of the swap (`TxLike.gasLimit`).
+  A batch (`sendCalls`, EIP-5792) carries no gas limit, so RAVN marks a swap measured above 400k gas
+  as not batchable (`batch: false`), and `executeAndTrack` then sends it on its own.
+
+### Changed
+
+- The wallet check holds `calls` to the swap's `gasLimit` too: each call's must be the field's it
+  comes from (none on an approval or a fee).
+
 ## ravnexchange (Python) 0.1.7
 
 Hinkal for Python integrators, as in `@ravnexchange/sdk` 0.4.1. Merging publishes it to PyPI
