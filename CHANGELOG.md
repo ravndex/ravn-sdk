@@ -13,8 +13,10 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   Send it as the limit: ethers (v5 and v6) takes `gasLimit` as is; viem/wagmi need
   `gas: BigInt(tx.gasLimit)`. A wallet left to estimate adds little or no headroom (MetaMask none),
   and a swap whose route costs a bit more by the time it lands runs out of gas. Absent when RAVN
-  couldn't measure it (the wallet doesn't hold the input yet, zkSync, Tempo, Monad, a slow node) or
-  your user couldn't cover it at twice today's gas price: the wallet estimates it then, as before.
+  couldn't measure it (the wallet doesn't hold the input yet, zkSync, Tempo, Monad, a slow node), when
+  it's more than a transaction may carry (the block's limit, or 2^24), or when your user couldn't cover
+  it and the approval at twice today's gas price: the wallet estimates it then, as before. A Max sell
+  of the chain's coin sent with it must leave `gasLimit` × the wallet's max fee unspent.
 - `executeAndTrack` hands it to your `sendTransaction` with the rest of the swap (`TxLike.gasLimit`).
   A batch (`sendCalls`, EIP-5792) carries no gas limit, so RAVN marks a swap measured above 400k gas
   as not batchable (`batch: false`), and `executeAndTrack` then sends it on its own.
