@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -58,6 +58,12 @@ const SEL = {
   prooflessDeposit: "0xbb3b5d78",
   /** RouteEntry swap((tokenIn, tokenOut, amountIn, minOut, recipient, deadline, feeBps, partner, partnerFeeBps), steps[], bytes). */
   routeSwap: "0x16c7ad17",
+  /** Metric SimpleRouter exactInput((tokens[], pools[], extensionDatas[], zeroForOneBitMap, amountIn, amountOutMinimum, recipient, deadline)). */
+  metricExactInput: "0x87c0cdaa",
+  /** Metric SimpleRouter multicall(bytes[]): an exactInput then unwrapWETH9 for an ETH payout. */
+  metricMulticall: "0xac9650d8",
+  /** Metric SimpleRouter unwrapWETH9(amountMinimum, recipient): pays out WETH the router holds, as ETH. */
+  metricUnwrap: "0x49404b7c",
 };
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
@@ -84,6 +90,44 @@ const wordAddress = (data: string, i: number): string => {
   return `0x${w.slice(24)}`.toLowerCase();
 };
 const wordUint = (data: string, i: number): bigint => BigInt(`0x${word(data, i)}`);
+// An ABI offset at word i, as a word count from `from` (the start of the enclosing tuple or array).
+const offsetAt = (data: string, i: number, from: number): number => {
+  const offset = wordUint(data, i);
+  if (offset % 32n !== 0n || offset > BigInt(data.length * 16)) fail("Calldata isn't ABI-encoded", { data: data.slice(0, 10) });
+  return from + Number(offset / 32n);
+};
+
+/**
+ * The token and amount a Metric SimpleRouter call pulls from the sender: one exactInput (amountIn of
+ * tokens[0]), alone or in a multicall beside unwrapWETH9 calls, which pay out only what the router
+ * holds. Anything else to the router is refused, two exactInputs included (each could pull an amount).
+ */
+function metricPull(data: string): { token: string; amount: bigint } {
+  const sel = data.slice(0, 10);
+  if (sel === SEL.metricExactInput) {
+    const tuple = offsetAt(data, 0, 0);
+    const tokens = offsetAt(data, tuple, tuple);
+    if (wordUint(data, tokens) === 0n) fail("The Metric swap names no tokens");
+    return { token: wordAddress(data, tokens + 1), amount: wordUint(data, tuple + 4) };
+  }
+  if (sel !== SEL.metricMulticall) fail("The call to Metric isn't a swap", { selector: sel });
+  const list = offsetAt(data, 0, 0);
+  const n = wordUint(data, list);
+  if (n < 1n || n > 4n) fail("The call to Metric isn't a swap", { calls: n.toString() });
+  let pull: { token: string; amount: bigint } | null = null;
+  for (let k = 0; k < Number(n); k++) {
+    const item = offsetAt(data, list + 1 + k, list + 1);
+    const length = wordUint(data, item);
+    const start = 10 + 64 * (item + 1);
+    if (length < 4n || start + Number(length) * 2 > data.length) fail("Calldata isn't ABI-encoded", { data: sel });
+    const inner = `0x${data.slice(start, start + Number(length) * 2)}`;
+    const innerSel = inner.slice(0, 10);
+    if (innerSel === SEL.metricUnwrap) continue;
+    if (innerSel !== SEL.metricExactInput || pull) fail("The call to Metric isn't a swap", { selector: innerSel });
+    pull = metricPull(inner);
+  }
+  return pull ?? fail("The call to Metric isn't a swap");
+}
 
 interface Ctx {
   chainId: number;
@@ -155,7 +199,7 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x or Route, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route or Metric, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -261,6 +305,16 @@ function classifyEvmCall(
     pulled = wordUint(data, 2);
     if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+  } else if (to === lower(METRIC_ROUTER)) {
+    // Metric's router pulls the swap's amountIn of its first token from the sender in its callback, so
+    // a standing allowance to it is held to the swap. An ETH sell names WETH, paid with the coin sent.
+    const swap = metricPull(data);
+    pulled = swap.amount;
+    if (swap.token !== (ctx.native ? lower(METRIC_WETH) : ctx.token)) fail("The swap takes a token other than the one being swapped", { token: swap.token });
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+    // An ETH sell's amountIn is exactly the coin sent: short of it, the router wraps what it was sent and
+    // pulls the rest as WETH from the user; past it, the extra waits in the router for anyone's refundETH.
+    if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.
@@ -508,7 +562,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder and Route's amounts are read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's and Metric's amounts are read; others aren't);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.
@@ -537,7 +591,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x or Route: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route or Metric: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");

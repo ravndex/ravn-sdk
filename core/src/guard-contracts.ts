@@ -7,7 +7,8 @@
  * knows it: RAVN's server runs this same check on what it hands out and alerts on a refusal, and
  * GuardOptions.allowContracts covers the gap meanwhile. Arc (5042) added 2026-10-21 from the same kind of
  * sweep: 33 builds across Relay, Across, Eco, 0x Swap/Gasless, KyberSwap, Fly and OKX, plus Garden's /assets.
- * Route's RouteEntry (Robinhood) added 2026-10-25 from Route's own builds.
+ * Route's RouteEntry (Robinhood) added 2026-10-25 from Route's own builds; Metric's SimpleRouter
+ * (Robinhood) added 2026-10-25 from RAVN's own builds for it.
  */
 
 const ETHEREUM = 1;
@@ -69,6 +70,12 @@ export const HINKAL_CHAINS: readonly number[] = [ETHEREUM, BASE, ARBITRUM, POLYG
  * swap calls it and its approval names it. The guard reads the token and amount its swap pulls. */
 export const ROUTE_ENTRY = "0x15dBb64b42EABe52A6ddc377e966F408756815BE";
 
+/** Metric's MetricOmmSimpleRouter (metric.xyz; the same address on every chain Metric runs on), raced
+ * on Robinhood Chain only: every Metric swap calls it and its approval names it. The guard reads the
+ * token and amount its swap pulls. An ETH sell pays WETH (Robinhood's, below) with the coin sent. */
+export const METRIC_ROUTER = "0x02201E6f13c41506c7Bb635d7543F98826229aB7";
+export const METRIC_WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -100,6 +107,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [NOT_ZKSYNC, ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
   [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
+  [[ROBINHOOD], [METRIC_ROUTER], "Metric SimpleRouter"],
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).
