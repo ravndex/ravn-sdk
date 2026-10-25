@@ -155,7 +155,7 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x or Route, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -253,6 +253,14 @@ function classifyEvmCall(
     pulled = wordUint(data, single(1));
     if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The Hinkal deposit is for a token other than the one being swapped", { token });
     if (pulled > ctx.amount) fail("The Hinkal deposit is for more than the swap's amount", { amount: pulled.toString() });
+  } else if (to === lower(ROUTE_ENTRY)) {
+    // Route's swap, its only call RAVN routes through: RouteEntry pulls the order's amountIn of tokenIn
+    // (the coin as the zero address) from the sender, so a standing allowance to it is held to the swap.
+    if (sel !== SEL.routeSwap) fail("The call to Route isn't a swap", { selector: sel });
+    const token = wordAddress(data, 0);
+    pulled = wordUint(data, 2);
+    if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.
@@ -262,14 +270,6 @@ function classifyEvmCall(
     if (token !== ctx.token && !(ctx.native && (token === NATIVE_EVM || token === ZERO_ADDRESS))) {
       fail("The swap takes a token other than the one being swapped", { token });
     }
-    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
-  } else if (to === lower(ROUTE_ENTRY)) {
-    // Route's swap, its only call RAVN routes through: RouteEntry pulls the order's amountIn of tokenIn
-    // (the coin as the zero address) from the sender, so a standing allowance to it is held to the swap.
-    if (sel !== SEL.routeSwap) fail("The call to Route isn't a swap", { selector: sel });
-    const token = wordAddress(data, 0);
-    pulled = wordUint(data, 2);
-    if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
   }
   if (!ctx.native && value !== 0n) fail("A token swap sends the native coin too", { to, value: value.toString() });
@@ -508,7 +508,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder amount is read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder and Route's amounts are read; others aren't);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.
@@ -537,7 +537,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x or Route: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");

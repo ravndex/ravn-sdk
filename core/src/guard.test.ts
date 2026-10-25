@@ -172,14 +172,27 @@ describe("checkExecution: EVM transactions", () => {
   });
 
   it("holds a Route swap to the token and amount being swapped (a standing allowance to RouteEntry would cover more)", () => {
-    // The order's words: 0 tokenIn, 2 amountIn.
-    for (const [i, value, message] of [[2, word(10_000_001n), /takes more than the swap's amount/], [0, word(ATTACKER), /token other than the one being swapped/]] as const) {
-      const { execution, intent } = fixture("4663 usdg->uhi routefun (route token fee)");
+    // The order's words: 0 tokenIn, 2 amountIn. An ETH sell names the coin as the zero address.
+    const usdg = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+    for (const [name, i, value, message] of [
+      ["4663 usdg->uhi routefun (route token fee)", 2, word(10_000_001n), /takes more than the swap's amount/],
+      ["4663 usdg->uhi routefun (route token fee)", 0, word(ATTACKER), /token other than the one being swapped/],
+      ["4663 eth->usdg routefun (route weth fee)", 0, word(usdg), /token other than the one being swapped/],
+    ] as const) {
+      const { execution, intent } = fixture(name);
       const e = execution as Tx;
       const data = e.transaction.data!;
       e.transaction.data = data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
-      e.calls![1].data = e.transaction.data;
+      e.calls!.find((c) => c.to === e.transaction.to)!.data = e.transaction.data;
       refuses(e, intent, message);
+    }
+    // RouteEntry's other functions, 0x's exec included, are refused.
+    for (const sel of ["0xdeadbeef", "0x2213bc0b"]) {
+      const { execution, intent } = fixture("4663 usdg->uhi routefun (route token fee)");
+      const e = execution as Tx;
+      e.transaction.data = sel + e.transaction.data!.slice(10);
+      e.calls![1].data = e.transaction.data;
+      refuses(e, intent, /call to Route isn't a swap/);
     }
   });
 });
