@@ -7,6 +7,7 @@
  * knows it: RAVN's server runs this same check on what it hands out and alerts on a refusal, and
  * GuardOptions.allowContracts covers the gap meanwhile. Arc (5042) added 2026-10-21 from the same kind of
  * sweep: 33 builds across Relay, Across, Eco, 0x Swap/Gasless, KyberSwap, Fly and OKX, plus Garden's /assets.
+ * Route's RouteEntry (Robinhood) added 2026-10-25 from Route's own builds.
  */
 
 const ETHEREUM = 1;
@@ -64,6 +65,10 @@ export const WETH_FEE_MINTERS: Record<number, string> = {
 export const HINKAL = "0x7cb60446d7635C68EDf1c568cac74A1f98c1Cfa4";
 export const HINKAL_CHAINS: readonly number[] = [ETHEREUM, BASE, ARBITRUM, POLYGON, BNB, ROBINHOOD];
 
+/** Route's RouteEntry on Robinhood Chain (route.fun, 2026-10-25; verified on Sourcify): every Route
+ * swap calls it and its approval names it. The guard reads the token and amount its swap pulls. */
+export const ROUTE_ENTRY = "0x15dBb64b42EABe52A6ddc377e966F408756815BE";
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -94,6 +99,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [ALL, ["0xe226e4825cb215abafad98fdd400583eab6a594f"], "Layerswap depository"],
   [NOT_ZKSYNC, ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
+  [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).
