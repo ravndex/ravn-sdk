@@ -11,6 +11,7 @@ import type { ExecutionDTO } from "./types";
 // Real /v1/execute answers (2026-10-21), one per shape: every venue, execution type and chain kind
 // RAVN hands out, with long swap calldata cut after its first words (nothing reads past them). Route's
 // two (2026-10-25): Route's own builds in /v1/execute's shape, as Route isn't in RAVN's race yet.
+// Metric's three (2026-10-25): RAVN's own builds for it (full calldata, which the check reads deep).
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -193,6 +194,71 @@ describe("checkExecution: EVM transactions", () => {
       e.transaction.data = sel + e.transaction.data!.slice(10);
       e.calls![1].data = e.transaction.data;
       refuses(e, intent, /call to Route isn't a swap/);
+    }
+  });
+});
+
+describe("checkExecution: Metric's router", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const ROUTER = "0x02201e6f13c41506c7bb635d7543f98826229ab7";
+  const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+  // exactInput's words after the selector: 0 the tuple's offset (one word), so the tuple starts at
+  // word 1; its word 0 the tokens array's offset from there, word 4 amountIn.
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tokensAt = (data: string) => 1 + Number(BigInt(`0x${data.slice(10 + 64, 10 + 128)}`) / 32n);
+  const swapCall = (e: Tx) => e.calls!.find((c) => c.to.toLowerCase() === ROUTER)!;
+  const tampered = (name: string, edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(name);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    swapCall(e).data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = swapCall(e).value = value;
+    return { e, intent };
+  };
+
+  it("accepts Metric's router on Robinhood Chain only", () => {
+    expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(ROUTER))).toEqual(["4663"]);
+  });
+
+  it("holds a Metric swap to the token and amount being swapped (a standing allowance to the router would cover more)", () => {
+    const token = "4663 usdg->nvda metric (metric token fee)";
+    let t = tampered(token, (d) => setWord(d, 5, word(10_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered(token, (d) => setWord(d, tokensAt(d) + 1, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+    // An ETH sell names Robinhood's WETH, never another token, and pays it with the coin it sends.
+    const coin = "4663 eth->usdg metric (metric weth fee)";
+    t = tampered(coin, (d) => setWord(d, tokensAt(d) + 1, word(USDG)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+    t = tampered(coin, (d) => d, "1");
+    refuses(t.e, t.intent, /takes more than the coin it sends/);
+  });
+
+  it("reads the swap inside an ETH payout's multicall, and refuses anything else to the router", () => {
+    const unwrap = "4663 usdg->eth metric (metric unwrap, token fee)";
+    const { execution } = fixture(unwrap);
+    const data = (execution as Tx).transaction.data!;
+    // multicall(bytes[]): the array at word 1, its length, two offsets, then each call's length and bytes.
+    const inner = (k: number) => {
+      const item = 2 + Number(BigInt(`0x${data.slice(10 + 64 * (2 + k), 10 + 64 * (3 + k))}`) / 32n);
+      const length = Number(BigInt(`0x${data.slice(10 + 64 * item, 10 + 64 * (item + 1))}`));
+      return { start: 10 + 64 * (item + 1), length };
+    };
+    const swap = inner(0);
+    const exact = data.slice(swap.start, swap.start + 2 * swap.length);
+    // The inner exactInput's amountIn raised: refused as from a lone exactInput.
+    const raised = "0x" + exact.slice(0, 8 + 64 * 5) + word(10_000_001n) + exact.slice(8 + 64 * 6);
+    let t = tampered(unwrap, (d) => d.slice(0, swap.start) + raised.slice(2) + d.slice(swap.start + 2 * swap.length));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    // The unwrap swapped for a second exactInput: two pulls, refused.
+    const second = inner(1);
+    const twice = exact.slice(0, 2 * second.length).padEnd(2 * second.length, "0");
+    t = tampered(unwrap, (d) => d.slice(0, second.start) + twice + d.slice(second.start + 2 * second.length));
+    refuses(t.e, t.intent, /call to Metric isn't a swap/);
+    // Other router functions (sweepToken, refundETH, selfPermit, externalSwap) are refused.
+    for (const sel of ["0xdf2ab5bb", "0x12210e8a", "0xf3995c67", "0xdeadbeef"]) {
+      t = tampered(unwrap, (d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to Metric isn't a swap/);
     }
   });
 });

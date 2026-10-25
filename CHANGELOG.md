@@ -3,6 +3,21 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.7
+
+Metric (metric.xyz) on Robinhood Chain. 0.3.0–0.4.6 refuse every Metric swap: "The approval names a
+spender RAVN doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route
+through" on an ETH sell or a token your user already approved. This release knows Metric's router.
+
+### Added
+
+- Metric's MetricOmmSimpleRouter (`0x0220…9aB7`, Robinhood Chain only) in the check
+  (`checkExecution`): the contract a Metric swap calls and the spender its approval names.
+- A Metric swap must take the token being swapped (Robinhood's WETH for an ETH sell, paid with the
+  ETH sent), at most the swap's amount, in one swap call: the router pulls what its call says, so an
+  allowance your user already gave it is held to this swap. Only its swap, alone or beside an unwrap
+  to ETH, is let through.
+
 ## @ravnexchange/sdk 0.4.6
 
 ### Added
