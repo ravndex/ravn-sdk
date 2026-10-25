@@ -3,6 +3,16 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.5
+
+Route (route.fun) on Robinhood Chain. 0.3.0–0.4.4 refuse every Route swap with "The approval names a
+spender RAVN doesn't route through"; this release knows Route's contract.
+
+### Added
+
+- Route's RouteEntry (`0x15dB…15BE`, Robinhood Chain only) in the check (`checkExecution`): the
+  contract a Route swap calls and the spender its approval names. Verified on Sourcify.
+
 ## @ravnexchange/sdk 0.4.4
 
 ### Added

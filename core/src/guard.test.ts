@@ -9,7 +9,8 @@ import { UnsafeExecutionError } from "./types";
 import type { ExecutionDTO } from "./types";
 
 // Real /v1/execute answers (2026-10-21), one per shape: every venue, execution type and chain kind
-// RAVN hands out, with long swap calldata cut after its first words (nothing reads past them).
+// RAVN hands out, with long swap calldata cut after its first words (nothing reads past them). Route's
+// two (2026-10-25): Route's own builds in /v1/execute's shape, as Route isn't in RAVN's race yet.
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -163,6 +164,11 @@ describe("checkExecution: EVM transactions", () => {
     e.transaction.to = "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4";
     e.calls![e.calls!.length - 1].to = e.transaction.to;
     refuses(e, intent, /contract RAVN doesn't route through/);
+  });
+
+  it("accepts Route's RouteEntry on Robinhood Chain only", () => {
+    const entry = "0x15dbb64b42eabe52a6ddc377e966f408756815be";
+    expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(entry))).toEqual(["4663"]);
   });
 });
 
