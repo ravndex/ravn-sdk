@@ -231,7 +231,9 @@ describe("checkExecution: Metric's router", () => {
     t = tampered(coin, (d) => setWord(d, tokensAt(d) + 1, word(USDG)));
     refuses(t.e, t.intent, /token other than the one being swapped/);
     t = tampered(coin, (d) => d, "1");
-    refuses(t.e, t.intent, /takes more than the coin it sends/);
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+    t = tampered(coin, (d) => setWord(d, 5, word(1n)));
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
   });
 
   it("reads the swap inside an ETH payout's multicall, and refuses anything else to the router", () => {
