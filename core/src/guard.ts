@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -56,6 +56,8 @@ const SEL = {
   allowanceHolderExec: "0x2213bc0b",
   /** Hinkal.sol prooflessDeposit(address[] tokens, uint256[] amounts, (uint256,uint256,uint256,uint256,uint256)[], bytes[], bool, string). */
   prooflessDeposit: "0xbb3b5d78",
+  /** RouteEntry swap((tokenIn, tokenOut, amountIn, minOut, recipient, deadline, feeBps, partner, partnerFeeBps), steps[], bytes). */
+  routeSwap: "0x16c7ad17",
 };
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
@@ -260,6 +262,14 @@ function classifyEvmCall(
     if (token !== ctx.token && !(ctx.native && (token === NATIVE_EVM || token === ZERO_ADDRESS))) {
       fail("The swap takes a token other than the one being swapped", { token });
     }
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+  } else if (to === lower(ROUTE_ENTRY)) {
+    // Route's swap, its only call RAVN routes through: RouteEntry pulls the order's amountIn of tokenIn
+    // (the coin as the zero address) from the sender, so a standing allowance to it is held to the swap.
+    if (sel !== SEL.routeSwap) fail("The call to Route isn't a swap", { selector: sel });
+    const token = wordAddress(data, 0);
+    pulled = wordUint(data, 2);
+    if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
   }
   if (!ctx.native && value !== 0n) fail("A token swap sends the native coin too", { to, value: value.toString() });

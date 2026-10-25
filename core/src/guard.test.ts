@@ -170,6 +170,18 @@ describe("checkExecution: EVM transactions", () => {
     const entry = "0x15dbb64b42eabe52a6ddc377e966f408756815be";
     expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(entry))).toEqual(["4663"]);
   });
+
+  it("holds a Route swap to the token and amount being swapped (a standing allowance to RouteEntry would cover more)", () => {
+    // The order's words: 0 tokenIn, 2 amountIn.
+    for (const [i, value, message] of [[2, word(10_000_001n), /takes more than the swap's amount/], [0, word(ATTACKER), /token other than the one being swapped/]] as const) {
+      const { execution, intent } = fixture("4663 usdg->uhi routefun (route token fee)");
+      const e = execution as Tx;
+      const data = e.transaction.data!;
+      e.transaction.data = data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+      e.calls![1].data = e.transaction.data;
+      refuses(e, intent, message);
+    }
+  });
 });
 
 describe("checkExecution: RAVN's fee", () => {
