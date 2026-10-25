@@ -3,6 +3,14 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.6
+
+### Added
+
+- **`venue.logoUrl`** on a quote, each alternative, each streamed price and each entry in `hops`:
+  the venue's logo, the image RAVN's own app shows for it. Absent when RAVN has none. The new
+  `VenueDTO` type names the shape.
+
 ## @ravnexchange/sdk 0.4.5
 
 Route (route.fun) on Robinhood Chain. 0.3.0–0.4.4 refuse every Route swap: "The approval names a

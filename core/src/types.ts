@@ -16,11 +16,19 @@ export interface TokenDTO {
   logoUrl?: string;
 }
 
+/** A venue RAVN routes through. */
+export interface VenueDTO {
+  id: string;
+  name: string;
+  /** The venue's logo (an image URL), the one RAVN's own app shows. Absent when RAVN has none. */
+  logoUrl?: string;
+}
+
 export interface QuoteDTO {
   /** Opaque handle: pass back to execute() verbatim. Do not parse: usually a short id for the
    * quote RAVN keeps until 10 minutes past expiresAt, sometimes the whole signed quote. */
   quoteToken: string;
-  venue: { id: string; name: string };
+  venue: VenueDTO;
   routeType: string;
   input: { token: TokenDTO; amount: string };
   output: { token: TokenDTO; amount: string };
@@ -58,13 +66,13 @@ export interface QuoteDTO {
   /** Present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. Sign hop 1; hop 2 is
    * a unique deposit, not a second wallet tx. The stablecoin route also sweeps its leftover through
    * 0x (`0x_swap`), which isn't listed here. */
-  hops?: { id: string; name: string }[];
+  hops?: VenueDTO[];
   /** Every other venue that raced and produced a usable quote, best output first. */
   alternatives: AlternativeQuoteDTO[];
 }
 
 export interface AlternativeQuoteDTO {
-  venue: { id: string; name: string };
+  venue: VenueDTO;
   routeType: string;
   /** Pass to execute() to run THIS route instead of the primary quote. */
   quoteToken: string;
@@ -88,7 +96,7 @@ export interface AlternativeQuoteDTO {
   /** This route's own execute deadline, same meaning as QuoteDTO.expiresAt. Venues differ, so
    * check it before executing an alternative. */
   expiresAt: number;
-  hops?: { id: string; name: string }[];
+  hops?: VenueDTO[];
   /** Same as QuoteDTO.slippage: an alternative can be executed, so it needs the same warning. */
   slippage: SlippageDTO | null;
 }
