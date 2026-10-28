@@ -249,6 +249,11 @@ describe("x-ravn-sdk", () => {
       () => client.getTokens(1),
       () => client.getChains(),
     ];
+    // Every method a client has is one of these or a private helper: a new one fails here until it's listed.
+    expect(Object.getOwnPropertyNames(RavnClient.prototype).sort()).toEqual(
+      ["constructor", "remember", "send", "request", "unwrap", "getQuote", "getQuoteStream", "execute", "recover",
+        "submitSignature", "submitTransaction", "getStatus", "getTokens", "getChains"].sort()
+    );
     for (const call of calls) await call().catch(() => {});
     const sent = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls;
     expect(sent).toHaveLength(calls.length);
@@ -259,5 +264,18 @@ describe("x-ravn-sdk", () => {
     expect(sent[2][1].headers).toMatchObject({ "Idempotency-Key": "attempt-1" });
     // A version the API reads as one: <package>/<major>.<minor>.<patch>.
     expect(`@ravnexchange/sdk/${SDK_VERSION}`).toMatch(/^@ravnexchange\/[a-z][a-z-]{0,23}\/\d{1,4}\.\d{1,4}\.\d{1,4}$/);
+  });
+
+  it("can be dropped in the caller's own fetch, exactly as the changelog shows", async () => {
+    const underlying = fakeFetch(200, { data: [] });
+    const fetch = underlying;
+    const client = new RavnClient({
+      guard: false,
+      fetch: (url, init) => { delete (init?.headers as Record<string, string>)?.["x-ravn-sdk"]; return fetch(url, init); },
+    });
+    await client.getChains();
+    const [, init] = (underlying as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect("x-ravn-sdk" in init.headers).toBe(false);
+    expect(init.headers).toMatchObject({ "content-type": "application/json" });
   });
 });
