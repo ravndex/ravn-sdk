@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { RavnClient } from "./client";
+import { RavnClient, SDK_VERSION } from "./client";
 import { RavnApiError } from "./types";
 
 function fakeFetch(status: number, body: unknown): typeof fetch {
@@ -222,5 +223,41 @@ describe("getQuote timeoutMs", () => {
     });
     const [, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(JSON.parse(init.body as string).timeoutMs).toBe(3_000);
+  });
+});
+
+describe("x-ravn-sdk", () => {
+  it("is this package's own version, as published", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(pkg.name).toBe("@ravnexchange/sdk");
+    expect(SDK_VERSION).toBe(pkg.version);
+  });
+
+  it("goes with every call, beside the key and an execute's Idempotency-Key, never in a body", async () => {
+    const fetchImpl = fakeFetch(200, { data: {} });
+    const client = new RavnClient({ guard: false, apiKey: "rvn_live_x", fetch: fetchImpl });
+    const quote = { inputChainId: 1, outputChainId: 8453, inputToken: "0x0", outputToken: "0x0", inputAmount: "1000", userAddress: "0xabc" };
+    // Each answer here is empty: only what was sent matters.
+    const calls: Array<() => Promise<unknown>> = [
+      () => client.getQuote(quote),
+      () => client.getQuoteStream(quote),
+      () => client.execute({ quoteToken: "x", idempotencyKey: "attempt-1" }),
+      () => client.recover({ statusRef: "ref" }, { userAddress: "0xabc" }),
+      () => client.submitSignature({ quoteToken: "x", signature: "0x1" } as Parameters<RavnClient["submitSignature"]>[0]),
+      () => client.submitTransaction({ quoteToken: "x", signedTransaction: "AQ" } as Parameters<RavnClient["submitTransaction"]>[0]),
+      () => client.getStatus("x", "ref"),
+      () => client.getTokens(1),
+      () => client.getChains(),
+    ];
+    for (const call of calls) await call().catch(() => {});
+    const sent = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sent).toHaveLength(calls.length);
+    for (const [url, init] of sent) {
+      expect(init.headers, url).toMatchObject({ "x-ravn-sdk": `@ravnexchange/sdk/${SDK_VERSION}`, "x-api-key": "rvn_live_x" });
+      expect(String(init.body ?? ""), url).not.toContain("ravn-sdk");
+    }
+    expect(sent[2][1].headers).toMatchObject({ "Idempotency-Key": "attempt-1" });
+    // A version the API reads as one: <package>/<major>.<minor>.<patch>.
+    expect(`@ravnexchange/sdk/${SDK_VERSION}`).toMatch(/^@ravnexchange\/[a-z][a-z-]{0,23}\/\d{1,4}\.\d{1,4}\.\d{1,4}$/);
   });
 });

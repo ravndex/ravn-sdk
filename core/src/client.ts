@@ -66,6 +66,9 @@ function envelopeData<T>(body: Envelope<T>, ok: boolean, status?: number): T {
 // baseUrl entirely was 404ing on every single call until this fix.
 const DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1";
 
+/** This package's version, as in its package.json (client.test.ts fails when they differ). */
+export const SDK_VERSION = "0.4.8";
+
 export class RavnClient {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
@@ -128,6 +131,8 @@ export class RavnClient {
         ...init,
         headers: {
           "content-type": "application/json",
+          // Which SDK sent the call: RAVN's partner dashboard flags an out-of-date one.
+          "x-ravn-sdk": `@ravnexchange/sdk/${SDK_VERSION}`,
           ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
           ...init.headers,
         },
