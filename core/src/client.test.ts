@@ -238,25 +238,25 @@ describe("x-ravn-sdk", () => {
     const client = new RavnClient({ guard: false, apiKey: "rvn_live_x", fetch: fetchImpl });
     const quote = { inputChainId: 1, outputChainId: 8453, inputToken: "0x0", outputToken: "0x0", inputAmount: "1000", userAddress: "0xabc" };
     // Each answer here is empty: only what was sent matters.
-    const calls: Array<() => Promise<unknown>> = [
-      () => client.getQuote(quote),
-      () => client.getQuoteStream(quote),
-      () => client.execute({ quoteToken: "x", idempotencyKey: "attempt-1" }),
-      () => client.recover({ statusRef: "ref" }, { userAddress: "0xabc" }),
-      () => client.submitSignature({ quoteToken: "x", signature: "0x1" } as Parameters<RavnClient["submitSignature"]>[0]),
-      () => client.submitTransaction({ quoteToken: "x", signedTransaction: "AQ" } as Parameters<RavnClient["submitTransaction"]>[0]),
-      () => client.getStatus("x", "ref"),
-      () => client.getTokens(1),
-      () => client.getChains(),
-    ];
-    // Every method a client has is one of these or a private helper: a new one fails here until it's listed.
-    expect(Object.getOwnPropertyNames(RavnClient.prototype).sort()).toEqual(
-      ["constructor", "remember", "send", "request", "unwrap", "getQuote", "getQuoteStream", "execute", "recover",
-        "submitSignature", "submitTransaction", "getStatus", "getTokens", "getChains"].sort()
+    const calls: Record<string, () => Promise<unknown>> = {
+      getQuote: () => client.getQuote(quote),
+      getQuoteStream: () => client.getQuoteStream(quote),
+      execute: () => client.execute({ quoteToken: "x", idempotencyKey: "attempt-1" }),
+      recover: () => client.recover({ statusRef: "ref" }, { userAddress: "0xabc" }),
+      submitSignature: () => client.submitSignature({ quoteToken: "x", signature: "0x1" } as Parameters<RavnClient["submitSignature"]>[0]),
+      submitTransaction: () => client.submitTransaction({ quoteToken: "x", signedTransaction: "AQ" } as Parameters<RavnClient["submitTransaction"]>[0]),
+      getStatus: () => client.getStatus("x", "ref"),
+      getTokens: () => client.getTokens(1),
+      getChains: () => client.getChains(),
+    };
+    // Every method a client has is called here or is a private helper (a field holding a function
+    // counts too): a new one fails this until it's called above.
+    expect([...Object.getOwnPropertyNames(RavnClient.prototype), ...Object.keys(client).filter((k) => typeof (client as unknown as Record<string, unknown>)[k] === "function")].sort()).toEqual(
+      ["constructor", "remember", "send", "request", "unwrap", ...Object.keys(calls), "fetchImpl"].sort()
     );
-    for (const call of calls) await call().catch(() => {});
+    for (const call of Object.values(calls)) await call().catch(() => {});
     const sent = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls;
-    expect(sent).toHaveLength(calls.length);
+    expect(sent).toHaveLength(Object.keys(calls).length);
     for (const [url, init] of sent) {
       expect(init.headers, url).toMatchObject({ "x-ravn-sdk": `@ravnexchange/sdk/${SDK_VERSION}`, "x-api-key": "rvn_live_x" });
       expect(String(init.body ?? ""), url).not.toContain("ravn-sdk");

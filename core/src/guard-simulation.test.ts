@@ -356,7 +356,7 @@ describe("RavnClient.execute simulates with guard.solanaRpcUrl", () => {
     expect(fetchImpl.mock.calls.map((c) => c[0])).toContain(RPC);
     // RAVN's own header goes to RAVN only: a browser would ask the RPC to allow it, and it may not.
     const rpcCall = fetchImpl.mock.calls.find((c) => c[0] === RPC)!;
-    expect(JSON.stringify(rpcCall[1]?.headers ?? {})).not.toContain("x-ravn-sdk");
+    expect(new Headers(rpcCall[1]?.headers).has("x-ravn-sdk")).toBe(false);
   });
 
   it("refuses one whose simulation takes more", async () => {
