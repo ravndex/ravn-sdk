@@ -3,6 +3,33 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.8
+
+Every call now says which SDK sent it, so RAVN's partner dashboard will be able to tell you when your
+SDK is out of date (a new venue's swaps are refused by a version that doesn't know its contract).
+
+### Added
+
+- An `x-ravn-sdk` header on every request: `@ravnexchange/sdk/0.4.8`. RAVN's API has accepted it
+  from browsers since 28 Oct 2026. Nothing else changes.
+
+### Upgrading
+
+- If you call RAVN through your own proxy, pass `x-ravn-sdk` on to RAVN (and `Idempotency-Key`, as
+  before): without it your dashboard won't be able to see your SDK version.
+- If that proxy is on another origin than your app and lists the headers it allows
+  (`Access-Control-Allow-Headers`), add `x-ravn-sdk` there, or the browser refuses every call. Until
+  you can, drop the header in your own `fetch` (the SDK hands it a plain object):
+
+  ```ts
+  new RavnClient({
+    fetch: (url, init) => {
+      delete (init?.headers as Record<string, string>)?.["x-ravn-sdk"];
+      return fetch(url, init);
+    },
+  });
+  ```
+
 ## @ravnexchange/sdk 0.4.7
 
 Metric (metric.xyz) on Robinhood Chain. 0.3.0–0.4.6 refuse every Metric swap: "The approval names a
