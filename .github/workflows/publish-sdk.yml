@@ -23,6 +23,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Generated types match core/openapi.json
+        run: npm run check:types
+
       - name: Typecheck
         run: npm run typecheck
 

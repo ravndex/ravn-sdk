@@ -1,0 +1,28 @@
+name: API spec drift
+
+# core/openapi.json is the copy of RAVN's API spec that core's types are generated from. RAVN's API
+# adds fields before the SDK publishes them, so this goes red while the live API's version (its
+# info.version: the date of its latest change) is ahead of the copy's. Fix: `npm run sync:spec`,
+# then a release. Publishes nothing.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare the live API's version with core/openapi.json's
+        run: |
+          live=$(curl -fsS https://app.ravn.exchange/openapi.json | jq -r .info.version)
+          copy=$(jq -r .info.version core/openapi.json)
+          echo "Live API: $live. SDK types: $copy."
+          if [ "$live" != "$copy" ]; then
+            echo "::error::RAVN's API is at $live, the SDK's types at $copy: run npm run sync:spec, then release the SDK."
+            exit 1
+          fi

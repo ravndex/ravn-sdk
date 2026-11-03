@@ -3,6 +3,23 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.5.0
+
+The response types are now generated from RAVN's API spec
+([app.ravn.exchange/openapi.json](https://app.ravn.exchange/openapi.json)) instead of copied by
+hand, so a field RAVN adds reaches the SDK by regenerating it. Every type has exactly the shape it
+had in 0.4.8. API changes are listed at [docs.ravn.exchange/changelog](https://docs.ravn.exchange/changelog).
+
+### Changed
+
+- `QuoteDTO`, `ExecutionDTO`, `StatusDTO` and the other response types are type aliases of the
+  generated ones (they were interfaces). If you merged declarations into one
+  (`declare module "@ravnexchange/sdk" { interface QuoteDTO { … } }`), extend it instead:
+  `interface MyQuote extends QuoteDTO { … }`.
+- Your editor shows the API's own field descriptions: short, with a link to the guide for the rest.
+- Request params (`GetQuoteParams` and the rest) are unchanged: they take any chain or venue id, so
+  a new chain or venue needs no upgrade.
+
 ## @ravnexchange/sdk 0.4.8
 
 Every call now says which SDK sent it, so RAVN's partner dashboard will be able to tell you when your
