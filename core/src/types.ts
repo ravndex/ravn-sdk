@@ -1,262 +1,40 @@
 /**
- * Wire types for RAVN's public /api/v1 surface. Deliberately a standalone mirror of
- * src/lib/api/v1/dto.ts's public DTOs, not an import from it: this package ships to npm on
- * its own and can't depend on the app's internal source tree. The app type-checks this copy
- * against its own DTOs (dto-sdk-parity.ts), so a change on either side that isn't mirrored here
- * fails the app's build.
+ * Wire types for RAVN's public /api/v1 surface. The response types are generated from RAVN's API
+ * spec (core/openapi.json, a copy of https://app.ravn.exchange/openapi.json) into
+ * ./generated/openapi.ts: never edit that file. `npm run sync:spec` fetches the live spec and
+ * regenerates; CI fails if the generated file doesn't match the copy. The request params below stay
+ * hand-written on purpose: looser than the spec (any chain id or venue id), so a new chain or venue
+ * never needs an SDK upgrade.
  */
+import type { components } from "./generated/openapi";
 
-export interface TokenDTO {
-  symbol: string;
-  name: string;
-  address: string;
-  decimals: number;
-  chainId: number;
-  isNative: boolean;
-  logoUrl?: string;
-}
+type Schemas = components["schemas"];
+// Object types are interfaces over the generated ones, as they were when hand-written: hovers and an
+// integrator's emitted .d.ts name them (QuoteDTO, not its expanded shape), and `declare module`
+// augmentation still works. Error messages and nested fields still show the expanded shape: the
+// generator names nothing inside `components`. Unions stay type aliases. `Schema<K>` because an
+// interface can't extend an indexed access type directly.
+type Schema<K extends keyof Schemas> = Schemas[K];
+
+export interface TokenDTO extends Schema<"TokenDTO"> {}
 
 /** A venue RAVN routes through. */
-export interface VenueDTO {
-  id: string;
-  name: string;
-  /** The venue's logo (an image URL), the one RAVN's own app shows. Absent when RAVN has none. */
-  logoUrl?: string;
-}
+export interface VenueDTO extends Schema<"VenueDTO"> {}
 
-export interface QuoteDTO {
-  /** Opaque handle: pass back to execute() verbatim. Do not parse: usually a short id for the
-   * quote RAVN keeps until 10 minutes past expiresAt, sometimes the whole signed quote. */
-  quoteToken: string;
-  venue: VenueDTO;
-  routeType: string;
-  input: { token: TokenDTO; amount: string };
-  output: { token: TokenDTO; amount: string };
-  /** What RAVN counts on this route delivering, in the output token's base units: `output.amount`, less
-   * `slippage.expectedShortfallBps` when the venue holds no minimum (`slippage.noMinimum`, Rift); the
-   * same as `output.amount` for every quote that holds one. RAVN ranks on this (less gas), so sort routes on
-   * it, not `output.amount`, to compare them the way RAVN does. */
-  expectedOutputAmount: string;
-  /** `supported: false` means the venue has no fee mechanism at all (bps will be 0 either
-   * way); distinct from `supported: true, bps: 0`, a real, intentional zero fee. On NEAR Intents
-   * `bps`/`amount` include 1Click's own fee, taken from the input on every swap with or without
-   * yours (the output already reflects it): 20 bps with no fee set (1 bp when both tokens are
-   * USDC, USDT or DAI, or the same asset), with yours half of it plus the larger of that half and
-   * 20 (1) bps, and its 20 (1) bps on top of RAVN's own fee beside a private swap: NEAR never
-   * shows `bps: 0`. */
-  fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
-  /** False means this is a preview-only price; see RavnClient.getQuote's destinationAddress note. */
-  executable: boolean;
-  slippage: SlippageDTO | null;
-  gas: { native: string; nativeSymbol: string; usd: string | null; estimated: boolean } | null;
-  /** Same price source as `gas.usd`. Null when the token can't be priced. */
-  inputUsd: string | null;
-  outputUsd: string | null;
-  estimatedTimeSeconds: number;
-  estimatedTimeIsGuess: boolean;
-  /** Epoch ms, always a real time: execute() on `quoteToken` before this, re-quote after. Never
-   * refused for age before it. Up to 10 minutes past it, execute() prices the same route again and
-   * builds it only if it still meets the minimum this quote showed (else QUOTE_EXPIRED; a quote with
-   * slippage.noMinimum or no slippage is never re-priced). Already 5 s ahead of
-   * the venue's own deadline, so compare it to the clock as is. 2-hop routes
-   * (`venue.id === "compose"`) and venues with no deadline are never refused for age: it's 60 s
-   * from the response, when to re-quote. A 2-hop route re-prices at execute (BUILD_FAILED if the
-   * minimum shown can no longer be met). */
-  expiresAt: number;
-  /** Present on 2-hop (`venue.id === "compose"`) and Relay dest-call quotes. Sign hop 1; hop 2 is
-   * a unique deposit, not a second wallet tx. The stablecoin route also sweeps its leftover through
-   * 0x (`0x_swap`), which isn't listed here. */
-  hops?: VenueDTO[];
-  /** Every other venue that raced and produced a usable quote, best output first. */
-  alternatives: AlternativeQuoteDTO[];
-}
+export interface QuoteDTO extends Schema<"QuoteDTO"> {}
 
-export interface AlternativeQuoteDTO {
-  venue: VenueDTO;
-  routeType: string;
-  /** Pass to execute() to run THIS route instead of the primary quote. */
-  quoteToken: string;
-  /** Whether RAVN could have picked this route as its quote. False for a preview-only price
-   * (`executable: false`) while an executable route exists and for one with no minimum (`slippage.noMinimum`) quoting more than 1%
-   * above every route that holds one: nothing backs that figure. To pick a route yourself, choose
-   * among `pickable` ones on `expectedOutputAmount`. */
-  pickable: boolean;
-  outputAmount: string;
-  /** What RAVN counts on this route delivering, in the output token's base units: `outputAmount`, less
-   * `slippage.expectedShortfallBps` when the venue holds no minimum (`slippage.noMinimum`, Rift); the
-   * same as `outputAmount` for every quote that holds one. RAVN ranks on this (less gas), so sort routes on
-   * it, not `outputAmount`, to compare them the way RAVN does. */
-  expectedOutputAmount: string;
-  /** `amount` is in `token`'s base units: the output token everywhere except Fly Trade and
-   * Mayan, which deduct their fee from the input token. */
-  fee: { bps: number; amount: string; token: TokenDTO; supported: boolean };
-  executable: boolean;
-  estimatedTimeSeconds: number;
-  estimatedTimeIsGuess: boolean;
-  /** This route's own execute deadline, same meaning as QuoteDTO.expiresAt. Venues differ, so
-   * check it before executing an alternative. */
-  expiresAt: number;
-  hops?: VenueDTO[];
-  /** Same as QuoteDTO.slippage: an alternative can be executed, so it needs the same warning. */
-  slippage: SlippageDTO | null;
-}
+export interface AlternativeQuoteDTO extends Schema<"AlternativeQuoteDTO"> {}
 
-/**
- * The slippage protection on a quote. `isFirm`: a firm RFQ price, no slippage possible.
- * `guaranteedMin`: the minimum output in the output token's base units, when the venue exposes it.
- *
- * `noMinimum: true` means the venue enforces NO minimum output (Rift: it fills at its own best
- * rate once the deposit lands), so `bps` is not a protection and the user can receive more or
- * less than the quoted output. Show that to the user before they send funds.
- */
-export interface SlippageDTO {
-  bps: number;
-  isFirm: boolean;
-  guaranteedMin: string | null;
-  noMinimum: boolean;
-  /** How far under its output RAVN counts on a route with no minimum delivering, in bps, from what
-   * such routes have delivered: by swap size and whether both tokens are on RAVN's list (memes count
-   * as unlisted), from 5 (a $1k+ swap of listed tokens) to 100 (under $100). 0 when `noMinimum` is false. `expectedOutputAmount`
-   * already has it taken off. */
-  expectedShortfallBps: number;
-}
+/** The slippage protection on a quote. With `noMinimum: true` there is no guaranteed minimum: show
+ * that to the user before they send funds. */
+export interface SlippageDTO extends Schema<"SlippageDTO"> {}
 
-export interface ChainDTO {
-  chainId: number;
-  name: string;
-  shortName: string;
-  nativeCurrency: { name: string; symbol: string; decimals: number };
-  explorerUrl: string;
-  logoUrl?: string;
-}
+export interface ChainDTO extends Schema<"ChainDTO"> {}
 
-export interface ApprovalDTO {
-  to: string;
-  data: string;
-  value: string;
-  chainId?: number;
-  spender?: string;
-  amount: string;
-  unlimitedRecommended?: boolean;
-  /** Send this first and wait for it to be mined, then the approval: `approve(spender, 0)`. Only on
-   * a token whose approve reverts on a change from one non-zero allowance to another (Ethereum
-   * USDT) when the sender holds a partial one. executeAndTrack does this. */
-  reset?: { to: string; data: string; value: string };
-}
+export interface ApprovalDTO extends Schema<"ApprovalDTO"> {}
 
-export type ExecutionDTO =
-  | {
-      executionType: "TRANSACTION";
-      /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
-       * it. executeAndTrack broadcasts nothing for one. */
-      sandbox?: true;
-      /** This swap's id in RAVN's ledger: settlement webhooks name it (`swapId`). Absent on a sandbox quote. */
-      swapId?: string;
-      /** Pass this, not the quote's own token, to getStatus. Compose: the post-bind token. */
-      quoteToken: string;
-      /** The venue's own tracking key (compose hop-2 handle, Garden order id, Relay request id).
-       * Poll getStatus with this when present; otherwise use the origin tx hash. */
-      statusRef?: string;
-      approval?: ApprovalDTO;
-      transaction: {
-        to?: string;
-        data?: string;
-        value?: string;
-        chainId?: number;
-        /** EVM: the gas limit to send it with (decimal gas units): what RAVN measured running it from
-         * your user's wallet after `approval`, plus 50%. Send it as the limit (ethers takes `gasLimit`
-         * as is; viem/wagmi `gas: BigInt(gasLimit)`). Absent when RAVN couldn't measure it, or your
-         * user couldn't cover it: the wallet estimates then. */
-        gasLimit?: string;
-        serialized?: string;
-      };
-      /** Only on quotes made with `broadcastViaRavn: true`. Don't broadcast this one: sign
-       * `transaction.serialized` and pass it to submitTransaction, which checks the signed
-       * transaction still pays Layerswap the way it matches deposits, then sends it. */
-      submit?: { url: string };
-      /**
-       * Only when your key sets a fee and the route has no fee of its own (Eco, Layerswap, Mayan's
-       * routes paying no referrer, Fly Trade's coin sells where its own fee can't be proven:
-       * Robinhood Chain, Arbitrum and others) from an EVM chain: RAVN's fee, a transfer of the input
-       * token to RAVN, or on Robinhood Chain and Arbitrum a coin sell's fee as WETH minted to RAVN
-       * (the coin sent to WETH's `depositTo`; `fee.token` in the quote is WETH); `transaction`
-       * already leaves it out. From Solana there is none to send: the fee is a transfer inside
-       * `transaction.serialized`. Skip it and the swap still fills; no fee is owed to you. A wallet
-       * that batches (EIP-5792 `wallet_sendCalls`) or relays (smart account, 7702, 4337) may send
-       * `fee.transaction` with `transaction` in one confirmation (one fee-bearing swap per
-       * transaction: a second fee in it isn't proven), for an ERC-20 sell, or a coin sell whose fee
-       * is WETH minted to RAVN (`batch` true; a native-coin fee must otherwise be a plain transaction
-       * of its own, so a contract wallet that can't send one — a Safe, a 4337 account — can't pay
-       * it). Pass the on-chain hash of the transaction that carried the fee (not an EIP-5792 batch id
-       * or a 4337 userOpHash) as `txHash` to getStatus — not needed with no `statusRef` here, when
-       * the fee rode in the swap's own transaction. Sent on its own, send it once the swap has
-       * confirmed. A fee paid on a swap the venue refunds stays with RAVN.
-       */
-      fee?: DepositFeeDTO;
-      /** EVM: everything to send, in order (approval.reset, approval, the swap or the deposit
-       * transfer, RAVN's fee). Each once the one before has succeeded (stop if one reverts), or, when
-       * `batch` is true, all in one atomic wallet batch (EIP-5792 `wallet_sendCalls`,
-       * `atomicRequired: true`): simulate it first, and send them one by one if that fails or the
-       * swap's call needs more than ~400k gas. */
-      calls?: CallDTO[];
-      /** Whether `calls` (more than one) may go in one atomic wallet batch. */
-      batch?: boolean;
-    }
-  | {
-      executionType: "SIGNATURE";
-      /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
-       * it. executeAndTrack broadcasts nothing for one. */
-      sandbox?: true;
-      /** This swap's id in RAVN's ledger: settlement webhooks name it (`swapId`). Absent on a sandbox quote. */
-      swapId?: string;
-      /** Pass this, not the quote's own token, to submitSignature and getStatus. */
-      quoteToken: string;
-      statusRef?: string;
-      approval?: ApprovalDTO;
-      typedData?: Record<string, unknown>;
-      approvalData?: Record<string, unknown>;
-      submit: { url: string; payload?: Record<string, unknown> };
-    }
-  | {
-      executionType: "DEPOSIT";
-      /** True for a sandbox quote: nothing here is real (see GetQuoteParams.sandbox); never send
-       * it. executeAndTrack broadcasts nothing for one. */
-      sandbox?: true;
-      /** This swap's id in RAVN's ledger: settlement webhooks name it (`swapId`). Absent on a sandbox quote. */
-      swapId?: string;
-      /** Pass this, not the quote's own token, to getStatus. */
-      quoteToken: string;
-      /** `expiresAt` (ISO 8601), when set, is when the deposit must have ARRIVED (confirmed on
-       * the origin chain) by. A later deposit lands at an expired order. */
-      deposit: {
-        address: string;
-        amount: string;
-        chainId?: number;
-        expiresAt?: string;
-        /** Bitcoin, from a native SegWit (bc1q…) userAddress: the deposit (and RAVN's fee as a second
-         * output) as a ready-to-sign PSBT, base64, change back to it. Absent when it can't be built. */
-        psbt?: string;
-        /** Solana, when the deposit carries RAVN's fee: deposit and fee as one unsigned transaction,
-         * base64. Sign and send it within a minute (its blockhash expires; a retry with the same
-         * Idempotency-Key returns this same one). */
-        transaction?: string;
-      };
-      /** Poll getStatus with this, not `deposit.address`. */
-      statusRef: string;
-      /** Only when your key sets a fee and the venue has no fee of its own (Rift; private swaps from
-       * an EVM chain, Bitcoin or Solana). Skip it and the swap still fills on `deposit.amount`; no
-       * fee is owed to you. A fee paid on a swap the venue then refunds stays with RAVN and nothing
-       * is owed on it, so send an EVM fee payment once the deposit has confirmed. */
-      fee?: DepositFeeDTO;
-      /** EVM: everything to send, in order (approval.reset, approval, the swap or the deposit
-       * transfer, RAVN's fee). Each once the one before has succeeded (stop if one reverts), or, when
-       * `batch` is true, all in one atomic wallet batch (EIP-5792 `wallet_sendCalls`,
-       * `atomicRequired: true`): simulate it first, and send them one by one if that fails or the
-       * swap's call needs more than ~400k gas. */
-      calls?: CallDTO[];
-      /** Whether `calls` (more than one) may go in one atomic wallet batch. */
-      batch?: boolean;
-    };
+/** What execute() returns, tagged by `executionType`. */
+export type ExecutionDTO = Schemas["ExecutionDTO"];
 
 /**
  * execute()'s answer when the swap needs your user's signature before it can be built (Hinkal, a
@@ -266,95 +44,27 @@ export type ExecutionDTO =
  * `authorization` and the `signature`, before `expiresAt`. Repeat until a TRANSACTION comes back
  * (`step` of `steps`), and send that within 10 minutes of the typed-data step's arrival (RAVN
  * refuses an order signed with under 4 minutes of that left: execute again). execute() checks each
- * one first: the `personal_sign` opens a read-only Hinkal session, never one that can move funds; the
- * typed data places an order for the input token, at most the input amount, paying the one recipient
- * quoted. executeAndTrack does all of this. RAVN offers Hinkal only on a quote sent with
- * `authorizeSteps: true`.
+ * one first (unless `guard: false`): the `personal_sign` opens a read-only Hinkal session, never one
+ * that can move funds; the typed data places an order for the input token, at most the input amount,
+ * paying the one recipient quoted. executeAndTrack does all of this. RAVN offers Hinkal only on a
+ * quote sent with `authorizeSteps: true`.
  */
-export interface AuthorizeDTO {
-  executionType: "AUTHORIZE";
-  quoteToken: string;
-  /** Pass back with the signature. Single-use. */
-  authorization: string;
-  sign:
-    | { method: "personal_sign"; message: string }
-    | { method: "eth_signTypedData_v4"; typedData: Record<string, unknown> };
-  /** ISO 8601: sign and call /v1/execute again before this. */
-  expiresAt: string;
-  step: number;
-  steps: number;
-}
+export interface AuthorizeDTO extends Schema<"AuthorizeDTO"> {}
 
 /** One EVM transaction to send, as given. */
-export interface CallDTO {
-  to: string;
-  data: string;
-  value: string;
-  chainId: number;
-  /** The swap's call only, when `transaction.gasLimit` is set: the same gas limit. */
-  gasLimit?: string;
-}
+export interface CallDTO extends Schema<"CallDTO"> {}
 
 /** RAVN's integrator fee beside a deposit (or a transaction), in the input token, paid by your user
  * to RAVN; your share is paid out as usual. `deposit.amount` (the transaction) already leaves it out. */
-export interface DepositFeeDTO {
-  /** Base units of the input token (the same in WETH, 18 decimals, where a coin sell's fee is
-   * minted as WETH). */
-  amount: string;
-  /** RAVN's fee address on the input chain. */
-  address: string;
-  chainId: number;
-  /** EVM: send this transaction too, exactly as given (it carries a tag naming this swap): on its
-   * own, or in the same wallet batch or relay as the deposit or swap (EIP-5792, smart account, 7702,
-   * 4337) — an ERC-20 fee anywhere, and a coin sell's fee minted to RAVN as WETH (Robinhood Chain,
-   * Arbitrum: the coin sent to WETH's `depositTo`, booked and paid out in WETH, proven by WETH's
-   * Transfer log wherever it rides); a native-coin fee only beside a NEAR Intents deposit on
-   * Ethereum, Base or Polygon (proven from those chains' internal transfers). Any other native-coin
-   * fee must be a plain transaction of its own (a contract wallet that can't send one can't pay it).
-   * Then pass the on-chain hash of the transaction that carried it (not a batch id or a userOpHash)
-   * as `txHash` to getStatus once it has confirmed (simplest: on every poll). One fee-bearing swap
-   * per transaction: a batch carrying two fees, or a fee beside another fee-bearing swap, proves only
-   * one. Batch a token deposit, or a native-coin deposit to NEAR Intents (it credits coin a smart
-   * account moves); send any other native-coin deposit as a plain transfer, as an exchange may not
-   * credit coin a contract moved. Absent on Bitcoin:
-   * pay `amount` to `address` as an extra output of the SAME transaction that pays the deposit;
-   * RAVN finds it there once that transaction confirms. One deposit per Bitcoin transaction: a fee
-   * output proves one swap. Absent on Solana too: add the fee to the SAME transaction that pays the
-   * deposit exactly `deposit.amount` (SOL as lamports to the deposit wallet, not wrapped) — SOL: a
-   * System transfer of `amount` lamports to `address`; a token: `transferChecked` of `amount` to
-   * `address`'s associated token account for the input mint (under the mint's token program), after
-   * `createAssociatedTokenAccountIdempotent` in case RAVN has none for that token yet (its rent,
-   * ~0.0015 SOL once per token, is normally in the quote's network cost). RAVN finds it there once
-   * that transaction is finalized, among the deposit address's first and latest transactions; a fee
-   * sent in a transaction of its own isn't found. One deposit per Solana transaction: a fee proves
-   * one swap. It can't be sent after the deposit, so on a swap the venue refunds it stays with RAVN. */
-  transaction?: { to: string; data: string; value: string; chainId: number };
-}
+export interface DepositFeeDTO extends Schema<"DepositFeeDTO"> {}
 
-export type SettlementStatus =
-  | "pending"
-  | "processing"
-  | "expired"
-  | "success"
-  | "refunded"
-  | "failed"
-  | "not_found"
-  | "unknown";
+export type SettlementStatus = Schemas["NormalizedStatus"];
 
-export interface StatusDTO {
-  status: SettlementStatus;
-  venue: string;
-  venueStatus?: unknown;
-  tracking?: "unavailable";
-  /** Actual delivered output in the output token's base units, when the venue exposes it. */
-  deliveredAmount?: string | null;
-  /** The destination-chain tx that paid the user out, when the venue names one. */
-  txHash?: string | null;
-}
+export interface StatusDTO extends Schema<"StatusDTO"> {}
 
 /** A venue's price as it lands in getQuoteStream: an alternative without its quoteToken, to show,
  * not to execute (only the quote getQuoteStream resolves to carries tokens). */
-export type PriceDTO = Omit<AlternativeQuoteDTO, "quoteToken" | "pickable">;
+export interface PriceDTO extends Schema<"PriceDTO"> {}
 
 /** What getQuoteStream reports while the race runs. `venues`: the venues racing. `settled`: one
  * venue answered (`quotes` empty: nothing usable). The winner is picked once, at the end, net of
@@ -477,16 +187,7 @@ export interface RecoverParams {
  * alone looks again. "nothing": nothing stuck that may be taken (yet: a failed payout's refund shows
  * a few minutes after it), or no such swap. recoverStuckFunds runs all of it, each step checked first.
  */
-export type RecoverDTO =
-  | {
-      status: "sign";
-      authorization: string;
-      sign: { method: "personal_sign"; message: string } | { method: "eth_signTypedData_v4"; typedData: Record<string, unknown> };
-      expiresAt: string;
-      step: 1 | 2;
-    }
-  | { status: "done"; recovered: Array<{ chainId: number; tokenAddress: string; amount: string }>; authorization: string }
-  | { status: "nothing" };
+export type RecoverDTO = Schemas["RecoverDTO"];
 
 export interface SubmitTransactionParams {
   /** The quoteToken execute() returned with that transaction, not the quote's own. */
@@ -495,33 +196,12 @@ export interface SubmitTransactionParams {
   signedTransaction: string;
 }
 
-export interface ErrorMeta {
-  requestId: string;
-  version: string;
-}
+export interface ErrorMeta extends Schema<"Meta"> {}
 
 /** Every `code` the API sends (see the API's Errors page), plus NETWORK_ERROR: no response came
  * back at all (offline, DNS, CORS, a dropped connection). New codes can appear: compare against
  * these, don't switch on them exhaustively. */
-export type RavnErrorCode =
-  | "INVALID_REQUEST"
-  | "UNSUPPORTED_TOKEN"
-  | "UNSUPPORTED_CHAIN"
-  | "NO_LIQUIDITY"
-  | "QUOTE_EXPIRED"
-  | "QUOTE_INVALID"
-  | "QUOTE_NOT_EXECUTABLE"
-  | "RATE_LIMITED"
-  | "UNAUTHORIZED"
-  | "FORBIDDEN"
-  | "NOT_CONFIGURED"
-  | "NOT_FOUND"
-  | "BUILD_FAILED"
-  | "VENUE_RATE_LIMITED"
-  | "UNAVAILABLE"
-  | "ORDER_REJECTED"
-  | "INTERNAL"
-  | "NETWORK_ERROR";
+export type RavnErrorCode = Schemas["ErrorCode"] | "NETWORK_ERROR";
 
 /**
  * Thrown by RavnClient.execute (and so executeAndTrack) before anything reaches the wallet, when
