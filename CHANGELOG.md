@@ -8,13 +8,14 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 The response types are now generated from RAVN's API spec
 ([app.ravn.exchange/openapi.json](https://app.ravn.exchange/openapi.json)) instead of copied by
 hand, so a field RAVN adds reaches the SDK by regenerating it. Every type keeps exactly its 0.4.8
-shape and name. API changes are listed at [docs.ravn.exchange/changelog](https://docs.ravn.exchange/changelog).
+shape and export name. API changes are listed at [docs.ravn.exchange/changelog](https://docs.ravn.exchange/changelog).
 
 ### Changed
 
 - Your editor shows the API's own field descriptions: short, with a link to the guide for the rest.
-- Hovers and error messages show `ExecutionDTO`'s and `RecoverDTO`'s members, and nested fields
-  (`quote.venue`, `quote.input.token`), as their full shape rather than by name.
+- Hovers show `ExecutionDTO`'s and `RecoverDTO`'s members, and nested fields (`quote.venue`,
+  `quote.input.token`), as their full shape rather than by name, and so do error messages, for
+  `QuoteDTO` and the other object types too.
 - If you added fields to an SDK type with `declare module "@ravnexchange/sdk"`, they reach that type
   but no longer its uses inside another (`interface VenueDTO { tier?: number }` types `venue.tier`
   on a `VenueDTO`, not `quote.venue.tier`). Extend the type instead.
