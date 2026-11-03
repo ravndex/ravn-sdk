@@ -13,6 +13,11 @@ shape and name. API changes are listed at [docs.ravn.exchange/changelog](https:/
 ### Changed
 
 - Your editor shows the API's own field descriptions: short, with a link to the guide for the rest.
+- Hovers and error messages show `ExecutionDTO`'s and `RecoverDTO`'s members, and nested fields
+  (`quote.venue`, `quote.input.token`), as their full shape rather than by name.
+- If you added fields to an SDK type with `declare module "@ravnexchange/sdk"`, they reach that type
+  but no longer its uses inside another (`interface VenueDTO { tier?: number }` types `venue.tier`
+  on a `VenueDTO`, not `quote.venue.tier`). Extend the type instead.
 - Request params (`GetQuoteParams` and the rest) are unchanged: they take any chain or venue id, so
   a new chain or venue needs no upgrade.
 

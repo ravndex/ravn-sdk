@@ -1,9 +1,10 @@
 name: API spec drift
 
 # core/openapi.json is the copy of RAVN's API spec that core's types are generated from. RAVN's API
-# adds fields before the SDK publishes them, so this goes red while the live API's version (its
-# info.version: the date of its latest change) is ahead of the copy's. Fix: `npm run sync:spec`,
-# then a release. Publishes nothing.
+# adds fields before the SDK publishes them, so this goes red while the live spec is ahead of the
+# copy: a later version (info.version, the date of its latest change), or the same date with other
+# content (same-day changes share a date; reworded descriptions keep it). Fix: `npm run sync:spec`,
+# then a release if the generated types changed. Publishes nothing.
 on:
   schedule:
     - cron: "17 6 * * 1"
@@ -20,13 +21,14 @@ jobs:
       # `shell: bash` runs with pipefail, so a failed fetch fails the step instead of reading as "".
       # Versions are dates (YYYY-MM-DD), so a string comparison orders them; a copy ahead of the live
       # API (an app PR not deployed yet) is fine.
-      - name: Compare the live API's version with core/openapi.json's
+      - name: Compare the live API spec with core/openapi.json
         shell: bash
         run: |
-          live=$(curl -fsS https://app.ravn.exchange/openapi.json | jq -er .info.version)
+          curl -fsS https://app.ravn.exchange/openapi.json -o "$RUNNER_TEMP/live.json"
+          live=$(jq -er .info.version "$RUNNER_TEMP/live.json")
           copy=$(jq -er .info.version core/openapi.json)
           echo "Live API: $live. SDK types: $copy."
-          if [[ "$live" > "$copy" ]]; then
-            echo "::error::RAVN's API is at $live, the SDK's types at $copy: run npm run sync:spec, then release the SDK."
+          if [[ "$live" > "$copy" ]] || { [[ "$live" == "$copy" ]] && ! cmp -s "$RUNNER_TEMP/live.json" core/openapi.json; }; then
+            echo "::error::RAVN's live API spec ($live) is ahead of the SDK's copy ($copy): run npm run sync:spec, then release the SDK if its types changed."
             exit 1
           fi
