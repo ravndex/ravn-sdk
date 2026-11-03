@@ -322,7 +322,7 @@ export interface components {
             };
             /** @description What RAVN expects this route to deliver, in the output token's base units: the same as `output.amount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself. */
             expectedOutputAmount: string;
-            /** @description Your integrator fee on this quote: `bps`, and `amount` in `token`'s base units (usually the output token; some routes take it from the input). `supported: false` means this route can't carry a fee. See https://docs.ravn.exchange/pricing#the-fee-on-each-quote. */
+            /** @description Your integrator fee on this quote: `bps`, and `amount` in `token`'s base units (`token` is usually the output token). `supported: false` means this route can't carry a fee. See https://docs.ravn.exchange/pricing#the-fee-on-each-quote. */
             fee: {
                 bps: number;
                 amount: string;
@@ -345,7 +345,7 @@ export interface components {
             estimatedTimeSeconds: number;
             /** @description True when the time is RAVN's estimate, not the venue's own figure. */
             estimatedTimeIsGuess: boolean;
-            /** @description Epoch ms. Execute before it. Up to 10 minutes later, /v1/execute prices the route again and builds it only if it still meets the minimum this quote showed, else 410 QUOTE_EXPIRED. */
+            /** @description Epoch ms. Execute before it. Up to 10 minutes later, /v1/execute prices the route again and builds it only if it still meets the minimum this quote showed (it may then deliver less than quoted, never under that minimum), else 410 QUOTE_EXPIRED. */
             expiresAt: number;
             /** @description On RAVN's multi-step routes, every venue the route runs through, in order. The user signs or sends only the first step. */
             hops?: components["schemas"]["VenueDTO"][];
@@ -464,15 +464,16 @@ export interface components {
             submit?: {
                 url: string;
             };
-            /** @description Your fee, when this route collects it beside the swap: send `fee.transaction` too, then pass the hash of the transaction that carried it as `txHash` to /v1/status. Skip it and the swap still fills, but no fee is owed to you. See https://docs.ravn.exchange/collecting-your-fee. */
+            /** @description Your fee, when this route collects it beside the swap: send `fee.transaction` too, then pass the on-chain hash of the transaction that carried it as `txHash` to /v1/status. Skip it and the swap still fills, but no fee is owed to you. See https://docs.ravn.exchange/collecting-your-fee. */
             fee?: components["schemas"]["DepositFeeDTO"];
-            /** @description EVM: every transaction to send, in order (approvals, the swap or deposit, your fee). Send each once the one before has succeeded, or all in one atomic wallet batch when `batch` is true. */
+            /** @description EVM: every transaction to send, in order (approvals, the swap or deposit, your fee). Send each once the one before has succeeded, or, when `batch` is true, all in one atomic wallet batch: simulate it first, and send them one by one if that fails. */
             calls?: components["schemas"]["CallDTO"][];
             /** @description Whether `calls` (more than one) may go in one atomic wallet batch (see `calls`). */
             batch?: boolean;
         } | {
             /** @constant */
             executionType: "SIGNATURE";
+            /** @description Use this one, not the quote's, for /v1/submit-signature and every later call. */
             quoteToken: string;
             /**
              * @description True when the quote was requested with `sandbox: true`: a test, never send it.
@@ -488,7 +489,7 @@ export interface components {
             typedData?: {
                 [key: string]: unknown;
             };
-            /** @description A second message to sign, when present: the token approval, by signature. */
+            /** @description When present, a second payload to sign: the token approval. Send its signature as `approvalSignature`. */
             approvalData?: {
                 [key: string]: unknown;
             };
@@ -502,6 +503,7 @@ export interface components {
         } | {
             /** @constant */
             executionType: "DEPOSIT";
+            /** @description Use this one, not the quote's, for every later call. */
             quoteToken: string;
             /**
              * @description True when the quote was requested with `sandbox: true`: a test, never send it.
@@ -516,7 +518,7 @@ export interface components {
                 amount: string;
                 chainId?: number;
                 expiresAt?: string;
-                /** @description Bitcoin, from a native SegWit (bc1q…) `userAddress`: the deposit (and your fee, when there is one) as a ready-to-sign PSBT, base64. Absent when it can't be built: pay `amount` to `address` yourself. */
+                /** @description Bitcoin, from a native SegWit (bc1q…) `userAddress`: the deposit (and your fee, when there is one) as a ready-to-sign PSBT, base64. Absent when it can't be built: pay `amount` to `address`, and `fee` as a second output of the same transaction, yourself. */
                 psbt?: string;
                 /** @description Solana, when the deposit carries your fee: the deposit and the fee as one unsigned transaction, base64. Sign and send it within a minute. Past that, call /v1/execute again with a new Idempotency-Key and send only to the new deposit. */
                 transaction?: string;
@@ -525,7 +527,7 @@ export interface components {
             statusRef: string;
             /** @description Your fee, when this route collects it beside the deposit. Skip it and the swap still fills on `deposit.amount`, but no fee is owed to you. See https://docs.ravn.exchange/collecting-your-fee. */
             fee?: components["schemas"]["DepositFeeDTO"];
-            /** @description EVM: every transaction to send, in order (approvals, the swap or deposit, your fee). Send each once the one before has succeeded, or all in one atomic wallet batch when `batch` is true. */
+            /** @description EVM: every transaction to send, in order (approvals, the swap or deposit, your fee). Send each once the one before has succeeded, or, when `batch` is true, all in one atomic wallet batch: simulate it first, and send them one by one if that fails. */
             calls?: components["schemas"]["CallDTO"][];
             /** @description Whether `calls` (more than one) may go in one atomic wallet batch (see `calls`). */
             batch?: boolean;
@@ -569,6 +571,7 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+            /** @description ISO 8601: sign and call again before this. */
             expiresAt: string;
             /**
              * @description 1: the session message (personal_sign); 2: a recovery (eth_signTypedData_v4).
@@ -578,11 +581,13 @@ export interface components {
         } | {
             /** @constant */
             status: "done";
+            /** @description Sent back to the paying wallet, in amounts before Hinkal's recovery fee, which it deducts. */
             recovered: {
                 chainId: number;
                 tokenAddress: string;
                 amount: string;
             }[];
+            /** @description Send back alone, with no signature, to look for more under the wallet already proven. */
             authorization: string;
         } | {
             /** @constant */
@@ -613,7 +618,7 @@ export interface components {
             /** @description RAVN's fee address on the input chain. */
             address: string;
             chainId: number;
-            /** @description EVM: send this transaction too, exactly as given: on its own once the swap has confirmed, or in the same wallet batch. Then pass the hash of the transaction that carried it as `txHash` to /v1/status. Absent on Bitcoin and Solana, where the fee goes in the deposit's own transaction. See https://docs.ravn.exchange/collecting-your-fee. */
+            /** @description EVM: send this transaction too, exactly as given: on its own once the swap has confirmed, or in the same wallet batch when the execution's `batch` is true. Then pass the on-chain hash of the transaction that carried it (not a batch id or a userOpHash) as `txHash` to /v1/status. Absent on Bitcoin and Solana, where the fee goes in the deposit's own transaction. See https://docs.ravn.exchange/collecting-your-fee. */
             transaction?: {
                 to: string;
                 data: string;

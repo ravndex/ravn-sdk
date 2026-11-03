@@ -9,49 +9,62 @@
 import type { components } from "./generated/openapi";
 
 type Schemas = components["schemas"];
+// Object types are interfaces over the generated ones, as they were when hand-written: hovers and an
+// integrator's emitted .d.ts name them (QuoteDTO, not its expanded shape), and `declare module`
+// augmentation still works. Error messages and nested fields still show the expanded shape: the
+// generator names nothing inside `components`. Unions stay type aliases. `Schema<K>` because an
+// interface can't extend an indexed access type directly.
+type Schema<K extends keyof Schemas> = Schemas[K];
 
-export type TokenDTO = Schemas["TokenDTO"];
+export interface TokenDTO extends Schema<"TokenDTO"> {}
 
 /** A venue RAVN routes through. */
-export type VenueDTO = Schemas["VenueDTO"];
+export interface VenueDTO extends Schema<"VenueDTO"> {}
 
-export type QuoteDTO = Schemas["QuoteDTO"];
+export interface QuoteDTO extends Schema<"QuoteDTO"> {}
 
-export type AlternativeQuoteDTO = Schemas["AlternativeQuoteDTO"];
+export interface AlternativeQuoteDTO extends Schema<"AlternativeQuoteDTO"> {}
 
 /** The slippage protection on a quote. With `noMinimum: true` there is no guaranteed minimum: show
  * that to the user before they send funds. */
-export type SlippageDTO = Schemas["SlippageDTO"];
+export interface SlippageDTO extends Schema<"SlippageDTO"> {}
 
-export type ChainDTO = Schemas["ChainDTO"];
+export interface ChainDTO extends Schema<"ChainDTO"> {}
 
-export type ApprovalDTO = Schemas["ApprovalDTO"];
+export interface ApprovalDTO extends Schema<"ApprovalDTO"> {}
 
 /** What execute() returns, tagged by `executionType`. */
 export type ExecutionDTO = Schemas["ExecutionDTO"];
 
 /**
  * execute()'s answer when the swap needs your user's signature before it can be built (Hinkal, a
- * private swap): no funds move by signing it. RAVN offers Hinkal only on a quote sent with
- * `authorizeSteps: true`. execute() checks each step before handing it back, and executeAndTrack
- * signs and answers them, given signMessage and signTypedData.
+ * private swap): no funds move by signing it. Have the paying wallet (the quote's `userAddress`)
+ * sign `sign` (`personal_sign` the `message`, or `eth_signTypedData_v4` the `typedData` with the
+ * wallet on the input chain), then call execute() again with the same `quoteToken`, this
+ * `authorization` and the `signature`, before `expiresAt`. Repeat until a TRANSACTION comes back
+ * (`step` of `steps`), and send that within 10 minutes of the typed-data step's arrival (RAVN
+ * refuses an order signed with under 4 minutes of that left: execute again). execute() checks each
+ * one first (unless `guard: false`): the `personal_sign` opens a read-only Hinkal session, never one
+ * that can move funds; the typed data places an order for the input token, at most the input amount,
+ * paying the one recipient quoted. executeAndTrack does all of this. RAVN offers Hinkal only on a
+ * quote sent with `authorizeSteps: true`.
  */
-export type AuthorizeDTO = Schemas["AuthorizeDTO"];
+export interface AuthorizeDTO extends Schema<"AuthorizeDTO"> {}
 
 /** One EVM transaction to send, as given. */
-export type CallDTO = Schemas["CallDTO"];
+export interface CallDTO extends Schema<"CallDTO"> {}
 
 /** RAVN's integrator fee beside a deposit (or a transaction), in the input token, paid by your user
  * to RAVN; your share is paid out as usual. `deposit.amount` (the transaction) already leaves it out. */
-export type DepositFeeDTO = Schemas["DepositFeeDTO"];
+export interface DepositFeeDTO extends Schema<"DepositFeeDTO"> {}
 
 export type SettlementStatus = Schemas["NormalizedStatus"];
 
-export type StatusDTO = Schemas["StatusDTO"];
+export interface StatusDTO extends Schema<"StatusDTO"> {}
 
 /** A venue's price as it lands in getQuoteStream: an alternative without its quoteToken, to show,
  * not to execute (only the quote getQuoteStream resolves to carries tokens). */
-export type PriceDTO = Schemas["PriceDTO"];
+export interface PriceDTO extends Schema<"PriceDTO"> {}
 
 /** What getQuoteStream reports while the race runs. `venues`: the venues racing. `settled`: one
  * venue answered (`quotes` empty: nothing usable). The winner is picked once, at the end, net of
@@ -183,7 +196,7 @@ export interface SubmitTransactionParams {
   signedTransaction: string;
 }
 
-export type ErrorMeta = Schemas["Meta"];
+export interface ErrorMeta extends Schema<"Meta"> {}
 
 /** Every `code` the API sends (see the API's Errors page), plus NETWORK_ERROR: no response came
  * back at all (offline, DNS, CORS, a dropped connection). New codes can appear: compare against
