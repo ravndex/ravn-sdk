@@ -8,7 +8,8 @@
  * GuardOptions.allowContracts covers the gap meanwhile. Arc (5042) added 2026-10-21 from the same kind of
  * sweep: 33 builds across Relay, Across, Eco, 0x Swap/Gasless, KyberSwap, Fly and OKX, plus Garden's /assets.
  * Route's RouteEntry (Robinhood) added 2026-10-25 from Route's own builds; Metric's SimpleRouter
- * (Robinhood) added 2026-10-25 from RAVN's own builds for it.
+ * (Robinhood) added 2026-10-25 from RAVN's own builds for it; Fynd's routers added 2026-11-06 from Fynd's
+ * Router Registry, each matching its GET /v1/{chain}/info, and RAVN's own builds for them.
  */
 
 const ETHEREUM = 1;
@@ -76,6 +77,20 @@ export const ROUTE_ENTRY = "0x15dBb64b42EABe52A6ddc377e966F408756815BE";
 export const METRIC_ROUTER = "0x02201E6f13c41506c7Bb635d7543F98826229aB7";
 export const METRIC_WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
 
+/** Fynd's router (TychoRouter) per chain, from its Router Registry (Propeller Heads' deployment_registry.json,
+ * 2026-11-06): every Fynd swap calls it and its approval names it. The guard reads the token and amount its
+ * swap pulls. A successor comes with 30 days' public notice in the registry. */
+export const FYND_ROUTERS: Record<number, string> = {
+  [ETHEREUM]: "0x1644D2477f809cc2C71bCCFd6Dc9497E3F83210d",
+  [BASE]: "0xAbA5B53b03eAfaD1C5fc8BD5Fc765fC85Bb3de67",
+  [ARBITRUM]: "0x924F147c50eA59f5180a26031a8b65b2aA1e81Cd",
+  [BNB]: "0x7f3D12BBaFb8955E51B3ab9588b34c8ad95BDA4e",
+  [POLYGON]: "0xbd4e6011F03355C2A377Fd9Af939322A7d0A1bC1",
+  [UNICHAIN]: "0xCba5574597Ad00EA250Fd106DAB4Fc7461949635",
+  [ROBINHOOD]: "0x09215a470bD585E59EB3F4B612fBD2678131fF9e",
+  [ARC]: "0x72C452506a551C7fe069f1F66Beb671AC58909E9",
+};
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -108,6 +123,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
   [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
   [[ROBINHOOD], [METRIC_ROUTER], "Metric SimpleRouter"],
+  ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).
