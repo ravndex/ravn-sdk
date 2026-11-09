@@ -614,7 +614,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route or Metric: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric or Fynd: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");

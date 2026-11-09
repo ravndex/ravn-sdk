@@ -18,6 +18,10 @@ Fynd's routes only to this version or later, or to a caller that names `fynd` in
   sent): the router pulls what its call says, so an allowance your user already gave it is held to this
   swap. Only its three plain swap calls are let through, not those drawing on a balance in the router.
 
+### Upgrading
+
+- Nothing to change. Update to get Fynd's routes: RAVN's API leaves them out for older versions.
+
 ## @ravnexchange/sdk 0.4.14
 
 Elysium (Kinetiq's chain on HyperEVM, id 99901). 0.3.0–0.4.13 refuse Elysium executions with "This SDK
