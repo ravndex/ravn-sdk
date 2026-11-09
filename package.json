@@ -6,12 +6,16 @@
   "scripts": {
     "build": "npm run build -w core && npm run build -w react && npm run build -w widget-connector",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "generate:types": "openapi-typescript core/openapi.json -o core/src/generated/openapi.ts",
+    "check:types": "openapi-typescript core/openapi.json -o core/src/generated/openapi.ts --check",
+    "sync:spec": "curl -fsS https://app.ravn.exchange/openapi.json -o core/openapi.json && npm run generate:types",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^18.3.0",
+    "openapi-typescript": "^7.13.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.10"
   }

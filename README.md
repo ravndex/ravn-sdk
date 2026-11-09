@@ -11,6 +11,8 @@ Four packages, each solving a different integrator's actual problem. None of the
 
 Real npm workspaces (root `package.json`'s `workspaces` field) plus a per-package `tsc` build (`npm run build`, emitting `dist/`). `.github/workflows/publish-sdk.yml` publishes each of `core`/`react`/`widget-connector` to npm under the `ravnexchange` org on a push to `main` that bumps its `version`, skipping any version already on the registry, using trusted publishing (OIDC) with no stored npm token. Nothing publishes unless typecheck, the full test suite and every package's build pass on that commit first.
 
+`core`'s response types (`QuoteDTO`, `ExecutionDTO`, …) are generated from RAVN's API spec: `core/openapi.json` is a copy of [app.ravn.exchange/openapi.json](https://app.ravn.exchange/openapi.json), and `npm run sync:spec` fetches the live one and regenerates `core/src/generated/openapi.ts` (never edit it; CI's `npm run check:types` fails if it doesn't match the copy). RAVN's API adds fields before the SDK publishes them; `.github/workflows/api-spec-drift.yml` goes red each Monday while the live API's version is ahead of the copy's. Request params stay hand-written in `core/src/types.ts`.
+
 `python/` publishes separately to PyPI via `.github/workflows/publish-python-sdk.yml` on a push that bumps `python/pyproject.toml`'s version, using the same OIDC trusted-publishing model with a different toolchain (`hatchling` + `pypa/gh-action-pypi-publish`), after `python/tests` pass.
 
 The widget iframe page itself, and the rest of RAVN's routing/execution engine, live in RAVN's main application, which is closed source. This repo only carries the client-side pieces an integrator embeds in their own project.
@@ -85,4 +87,4 @@ Runnable, verified-working code for each package in [`examples/`](./examples): a
 
 ## API reference
 
-The full OpenAPI spec for `/api/v1` is published at [docs.ravn.exchange](https://docs.ravn.exchange).
+The full OpenAPI spec for `/api/v1` is at [app.ravn.exchange/openapi.json](https://app.ravn.exchange/openapi.json), documented at [docs.ravn.exchange](https://docs.ravn.exchange); what changed and when is at [docs.ravn.exchange/changelog](https://docs.ravn.exchange/changelog).
