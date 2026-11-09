@@ -11,7 +11,9 @@
  * (Robinhood) added 2026-10-25 from RAVN's own builds for it. Relay's v3.2 proxy and router added
  * 2026-11-09 from Relay's own builds and /chains. Elysium (99901) added 2026-11-09, each with code there:
  * 0x's AllowanceHolder (0x's own Elysium config), KyberSwap's router (its live quote) and Relay's
- * (checked against its other chains' before Relay listed Elysium).
+ * (checked against its other chains' before Relay listed Elysium). OKX's there added 2026-11-09 from
+ * its /supported/chain and /swap: the approval contract's code and owner match OKX's on Arc and Base,
+ * the router is OKX's HyperEVM one but for its own addresses, and 4/4 builds ran on Elysium.
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
  * and RAVN's own builds for them.
  */
@@ -223,6 +225,7 @@ const OKX: Record<number, [string, string]> = {
   [ARBITRUM]: ["0x09f94b5fc68e227c323a6fbae3bd98c97fd8c849", "0x70cBb871E8f30Fc8Ce23609E9E0Ea87B6b222F58"],
   [AVALANCHE]: ["0xab96dcfa7a7d669d9bf5918fab8641479973dd0a", "0x40aA958dd87FC8305b97f2BA922CDdCa374bcD7f"],
   [LINEA]: ["0xdfcb0cecc10e78f3f3749f3f3d3ee4047b2c9829", "0x57df6092665eb6058DE53939612413ff4B09114E"],
+  [ELYSIUM]: ["0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA"],
 };
 
 // THORChain's router, per chain (inbound_addresses). The vault it pays is in the calldata.

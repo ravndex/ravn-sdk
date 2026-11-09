@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import { checkExecution } from "./guard";
-import { KNOWN_CONTRACTS } from "./guard-contracts";
+import { KNOWN_CONTRACTS, separateSpender } from "./guard-contracts";
 import type { SwapIntent } from "./guard";
 import { associatedTokenAddress, sha256 } from "./guard-solana";
 import { UnsafeExecutionError } from "./types";
@@ -152,7 +152,8 @@ describe("checkExecution: EVM transactions", () => {
   });
 
   // Each with code on Elysium (2026-11-09): 0x's own Elysium config names its AllowanceHolder, KyberSwap's
-  // live quote its router; Relay's match its other chains'. No whole-family entry reaches it by default.
+  // live quote its router, OKX's /swap its pair; Relay's match its other chains'. No whole-family entry
+  // reaches it by default.
   it("accepts exactly the venue contracts RAVN routes through on Elysium", () => {
     expect([...KNOWN_CONTRACTS[99901]].sort()).toEqual(
       [
@@ -163,8 +164,11 @@ describe("checkExecution: EVM transactions", () => {
         "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router (v3), a target only
         "0x5567954cd026cebfe486062cb75848e0f1c12e58", // Relay approval proxy (v3.2)
         "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay router (v3.2), a target only
+        "0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", // OKX router
+        "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA", // OKX approvals
       ].map((a) => a.toLowerCase()).sort()
     );
+    expect(separateSpender(99901, "0x91ab9c4b07f479d48b60aefe8f7e31b3760c88c1")).toBe("0xa32f4ec37de04accbb6303bc6f8c7056ed1cfefa");
   });
 
   it("passes a KyberSwap swap on Elysium and refuses another chain's venue contract there", () => {
