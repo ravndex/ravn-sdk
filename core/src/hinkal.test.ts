@@ -537,7 +537,7 @@ describe("executeAndTrack: AUTHORIZE (Hinkal)", () => {
     });
     const client = new RavnClient({ fetch: api([placing(order()), tokenSell()]) as unknown as typeof fetch });
     const failure = await executeAndTrack(client, { quoteToken: "qt-1" }, handlers, { intent }).catch((e) => e);
-    expect(failure.message).toMatch(/more than 10 minutes passed since the order was priced/);
+    expect(failure.message).toMatch(/under 2 minutes are left of the 10 minutes since the order was priced/);
     expect(handlers.sendTransaction).toHaveBeenCalledOnce();
   });
 
@@ -551,9 +551,31 @@ describe("executeAndTrack: AUTHORIZE (Hinkal)", () => {
     });
     const failure = await executeAndTrack(new RavnClient({ fetch: fetchImpl as unknown as typeof fetch }), { quoteToken: "qt-1" }, handlers, { intent }).catch((e) => e);
     expect(failure).toBeInstanceOf(ExecuteAndTrackError);
-    expect(failure.message).toMatch(/more than 10 minutes/);
+    expect(failure.message).toMatch(/of the 10 minutes since the order was priced/);
     expect(failure.partial.approvalTxHash).toBe(APPROVAL_HASH);
     expect(handlers.sendTransaction).toHaveBeenCalledOnce();
+  });
+
+  // A wallet prompt can't be withdrawn once open: with under 2 minutes left the deposit can land
+  // after the window, and waits at Hinkal for its recovery (RAVN's app holds the same margin).
+  it.each([
+    [8.5, "refuses"],
+    [7.5, "sends"],
+  ])("with the deposit's prompt %s minutes after the order was priced, %s it", async (minutes, what) => {
+    const start = Date.now();
+    const handlers = wallet([]);
+    handlers.waitForReceipt.mockImplementation(async (hash: string) => {
+      vi.spyOn(Date, "now").mockReturnValue(start + minutes * 60_000);
+      return receipt(hash);
+    });
+    const client = new RavnClient({ fetch: api([placing(order()), tokenSell()]) as unknown as typeof fetch });
+    const run = executeAndTrack(client, { quoteToken: "qt-1" }, handlers, { intent, pollIntervalMs: 0 });
+    if (what === "refuses") {
+      await expect(run).rejects.toThrow(/under 2 minutes are left of the 10 minutes since the order was priced/);
+      expect(handlers.sendTransaction).toHaveBeenCalledOnce();
+    } else {
+      expect((await run).txHash).toBe(DEPOSIT_HASH);
+    }
   });
 
   it("spends no approval gas on a deposit already too late to send", async () => {
@@ -564,7 +586,7 @@ describe("executeAndTrack: AUTHORIZE (Hinkal)", () => {
     };
     const handlers = wallet([]);
     const client = new RavnClient({ fetch: api([placing(order()), late]) as unknown as typeof fetch });
-    await expect(executeAndTrack(client, { quoteToken: "qt-1" }, handlers, { intent })).rejects.toThrow(/more than 10 minutes/);
+    await expect(executeAndTrack(client, { quoteToken: "qt-1" }, handlers, { intent })).rejects.toThrow(/of the 10 minutes since the order was priced/);
     expect(handlers.sendTransaction).not.toHaveBeenCalled();
   });
 
@@ -577,7 +599,7 @@ describe("executeAndTrack: AUTHORIZE (Hinkal)", () => {
       return false;
     });
     const client = new RavnClient({ fetch: api([placing(order()), tokenSell()]) as unknown as typeof fetch });
-    await expect(executeAndTrack(client, { quoteToken: "qt-1" }, { ...handlers, hasAllowance: slowRead }, { intent })).rejects.toThrow(/more than 10 minutes/);
+    await expect(executeAndTrack(client, { quoteToken: "qt-1" }, { ...handlers, hasAllowance: slowRead }, { intent })).rejects.toThrow(/of the 10 minutes since the order was priced/);
     expect(handlers.sendCalls).not.toHaveBeenCalled();
   });
 
