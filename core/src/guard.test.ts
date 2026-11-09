@@ -145,6 +145,8 @@ describe("checkExecution: EVM transactions", () => {
         "0x4cd00e387622c35bddb9b4c962c136462338bc31", // Relay depository
         "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", // Relay approval proxy
         "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router
+        "0x5567954cd026cebfe486062cb75848e0f1c12e58", // Relay v3.2 approval proxy
+        "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay v3.2 router
         "0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c", // Across periphery (Arc)
         "0x9b4A302A548c7e313c2b74C461db7b84d3074A84", // Across SpokePool
         "0xEC000769a73b70e16f361a442292500b3BCf4A85", // Eco portal
@@ -165,6 +167,20 @@ describe("checkExecution: EVM transactions", () => {
     e.transaction.to = "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4";
     e.calls![e.calls!.length - 1].to = e.transaction.to;
     refuses(e, intent, /contract RAVN doesn't route through/);
+  });
+
+  // Relay builds token sells through its v3.2 proxy and coin sells through its v3.2 router since
+  // 2026-10-25/26; 0.3.0–0.4.8 refused them (the fixtures above are its builds). Linea has its own pair.
+  it("knows Relay's v3.2 proxy and router on every chain, and Linea's own pair on Linea only", () => {
+    const v32 = [
+      "0x5567954cd026cebfe486062cb75848e0f1c12e58", // proxy
+      "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // router
+      "0xe4dfbd5e6784db1058124e2c87554c0591f0fb7b", // Linea's proxy
+      "0x6328ea02d28131e58b28e55c6258258a30d90e05", // Linea's router
+    ];
+    for (const [chain, list] of Object.entries(KNOWN_CONTRACTS)) {
+      expect(v32.map((a) => list.includes(a)), chain).toEqual(chain === "59144" ? [false, false, true, true] : [true, true, false, false]);
+    }
   });
 
   it("accepts Route's RouteEntry on Robinhood Chain only", () => {
