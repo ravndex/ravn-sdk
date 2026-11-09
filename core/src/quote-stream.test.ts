@@ -70,6 +70,20 @@ describe("RavnClient.getQuoteStream", () => {
     await expect(new RavnClient({ fetch: old }).getQuoteStream(params)).resolves.toEqual(quote);
   });
 
+  it("reports a venue's early price, which its settle replaces", async () => {
+    const early = { ...price, venue: { id: "compose", name: "RAVN" }, outputAmount: "99" };
+    const fetchImpl = ndjsonFetch([
+      { type: "venues", venueIds: ["compose"] },
+      { type: "preview", venueId: "compose", quotes: [early] },
+      { type: "settled", venueId: "compose", quotes: [price] },
+      { type: "done", status: 200, data: quote, meta: { requestId: "r1", version: "v1" } },
+    ]);
+    const events: QuoteStreamEvent[] = [];
+    await new RavnClient({ fetch: fetchImpl }).getQuoteStream(params, { onEvent: (e) => events.push(e) });
+    expect(events.map((e) => e.type)).toEqual(["venues", "preview", "settled"]);
+    expect(events[1]).toEqual({ type: "preview", venueId: "compose", quotes: [early] });
+  });
+
   it("an onEvent that throws doesn't lose the quote", async () => {
     const fetchImpl = ndjsonFetch([
       { type: "settled", venueId: "kyberswap", quotes: [price] },
