@@ -150,6 +150,50 @@ describe("checkExecution: EVM transactions", () => {
     refuses(execution, { ...intent, inputChainId: 7777 }, /doesn't know chain 7777/);
   });
 
+  // Each with code on Elysium (2026-11-09): 0x's own Elysium config names its AllowanceHolder, KyberSwap's
+  // live quote its router; Relay's match its other chains'. No whole-family entry reaches it by default.
+  it("accepts exactly the venue contracts RAVN routes through on Elysium", () => {
+    expect([...KNOWN_CONTRACTS[99901]].sort()).toEqual(
+      [
+        "0x0000000000001fF3684f28c67538d4D072C22734", // 0x AllowanceHolder
+        "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5", // KyberSwap
+        "0x4cd00e387622c35bddb9b4c962c136462338bc31", // Relay depository
+        "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", // Relay approval proxy (v3)
+        "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router (v3), a target only
+        "0x5567954cd026cebfe486062cb75848e0f1c12e58", // Relay approval proxy (v3.2)
+        "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay router (v3.2), a target only
+      ].map((a) => a.toLowerCase()).sort()
+    );
+  });
+
+  it("passes a KyberSwap swap on Elysium and refuses another chain's venue contract there", () => {
+    // A real Arc build moved to Elysium: same router, and neither chain treats the token specially here.
+    const onElysium = () =>
+      JSON.parse(JSON.stringify(fixture("5042 token->token kyberswap")).replaceAll('hainId":5042', 'hainId":99901')) as ReturnType<typeof fixture>;
+    const { execution, intent } = onElysium();
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const acrossPeriphery = "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4"; // every other chain's, no code on Elysium
+    const moved = onElysium();
+    (moved.execution as Tx).transaction.to = acrossPeriphery;
+    expect(() => checkExecution(moved.execution, moved.intent)).toThrow(UnsafeExecutionError);
+  });
+
+  it("accepts RAVN's coin fee on Elysium only as WHYPE minted to its wallet", () => {
+    // A real coin sell with its WETH-minted fee (Arbitrum), moved to Elysium: KyberSwap's router, WHYPE.
+    const onElysium = (minter: string) =>
+      JSON.parse(
+        JSON.stringify(fixture("42161 native->token flytrade (fly weth fee)"))
+          .replaceAll('hainId":42161', 'hainId":99901')
+          .replace(/0x20f6ee51340adeed01a59b0e65cb3703f3dc860c/gi, "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5")
+          .replace(/0x82aF49447D8a07e3bd95BD0d56f35241523fBab1/gi, minter)
+      ) as ReturnType<typeof fixture>;
+    const ok = onElysium("0xbA876237B0F021A6c6D852d6c26E107997cC5E81");
+    expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
+    // Arbitrum's WETH has no code on Elysium: a mint there is no payment to RAVN.
+    const elsewhere = onElysium("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1");
+    refuses(elsewhere.execution, elsewhere.intent, /isn't a payment to RAVN's fee wallet/);
+  });
+
   // Every address the check accepts on Arc, each with code there and named by the venue's own API or a
   // real Arc build (2026-10-21). A new chain inherits whole-family entries, so this pins Arc's exactly.
   it("accepts exactly Arc's verified venue contracts there", () => {
