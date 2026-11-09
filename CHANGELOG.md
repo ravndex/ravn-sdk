@@ -3,6 +3,24 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.14
+
+Elysium (Kinetiq's chain on HyperEVM, id 99901). 0.3.0–0.4.13 refuse Elysium executions with "This SDK
+version doesn't know chain 99901"; this release knows the venue contracts RAVN routes through there.
+
+### Added
+
+- Elysium in the check (`checkExecution`): 0x AllowanceHolder, KyberSwap's router, and Relay's
+  depository, approval proxies and routers (the routers as transaction targets only, as everywhere),
+  each with code on Elysium. Nothing else is accepted there, including contracts other venues use on
+  every other chain.
+- RAVN's fee on a HYPE sell on Elysium is accepted as WHYPE minted to RAVN's fee wallet (`depositTo`),
+  as on Robinhood Chain and Arbitrum.
+
+### Upgrading
+
+- Nothing to change. Update before you offer Elysium to your users.
+
 ## @ravnexchange/sdk 0.4.13
 
 Relay's routers run any calls for anyone, so an allowance to one could be taken by anyone. The check
