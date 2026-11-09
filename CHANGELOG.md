@@ -3,6 +3,25 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.15
+
+Fynd (docs.fynd.xyz) on eight chains. 0.3.0–0.4.14 refuse every Fynd swap: "The approval names a spender
+RAVN doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route through" on
+an ETH sell or a token your user already approved. This release knows Fynd's routers, and RAVN's API offers
+Fynd's routes only to this version or later, or to a caller that names `fynd` in `onlyVenues`.
+
+### Added
+
+- Fynd's router on Ethereum, Base, Arbitrum, BNB, Polygon, Unichain, Robinhood Chain and Arc in the check
+  (`checkExecution`): the contract a Fynd swap calls and the spender its approval names.
+- A Fynd swap must take the token being swapped, at most the swap's amount (an ETH sell: exactly the ETH
+  sent): the router pulls what its call says, so an allowance your user already gave it is held to this
+  swap. Only its three plain swap calls are let through, not those drawing on a balance in the router.
+
+### Upgrading
+
+- Nothing to change. Update to get Fynd's routes: RAVN's API leaves them out for older versions.
+
 ## @ravnexchange/sdk 0.4.14
 
 Elysium (Kinetiq's chain on HyperEVM, id 99901). 0.3.0–0.4.13 refuse Elysium executions with "This SDK

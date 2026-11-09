@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -64,6 +64,8 @@ const SEL = {
   metricMulticall: "0xac9650d8",
   /** Metric SimpleRouter unwrapWETH9(amountMinimum, recipient): pays out WETH the router holds, as ETH. */
   metricUnwrap: "0x49404b7c",
+  /** Fynd's router, all with (amountIn, tokenIn, ...) first: splitSwap, sequentialSwap, singleSwap. */
+  fyndSwaps: ["0xfe745a0f", "0x3c226834", "0x0c1a0ee7"],
 };
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
@@ -204,7 +206,7 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route or Metric, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric or Fynd, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -320,6 +322,16 @@ function classifyEvmCall(
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
     // An ETH sell's amountIn is exactly the coin sent: short of it, the router wraps what it was sent and
     // pulls the rest as WETH from the user; past it, the extra waits in the router for anyone's refundETH.
+    if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
+  } else if (to === lower(FYND_ROUTERS[ctx.chainId])) {
+    // Fynd's swaps, its only calls RAVN routes through (not those drawing on a vault balance, or a Permit2
+    // allowance): the router pulls the call's amountIn of tokenIn from the sender (the coin as 0xEeee…,
+    // which it requires to be exactly what's sent), so a standing allowance to it is held to the swap.
+    if (!SEL.fyndSwaps.includes(sel)) fail("The call to Fynd isn't a swap", { selector: sel });
+    pulled = wordUint(data, 0);
+    const token = wordAddress(data, 1);
+    if (token !== (ctx.native ? NATIVE_EVM : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
     if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
@@ -602,7 +614,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route or Metric: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric or Fynd: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");
