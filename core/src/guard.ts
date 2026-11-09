@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -26,7 +26,7 @@ export interface GuardOptions {
   /**
    * Extra contracts to accept as transaction targets and spenders, per chain id: for a venue that
    * moved to a new contract before your SDK version knew it. Only add addresses you have checked
-   * belong to that venue.
+   * belong to that venue. Relay's routers stay transaction targets only: never handed the user's tokens.
    */
   allowContracts?: Record<number, string[]>;
   /**
@@ -64,6 +64,8 @@ const SEL = {
   metricMulticall: "0xac9650d8",
   /** Metric SimpleRouter unwrapWETH9(amountMinimum, recipient): pays out WETH the router holds, as ETH. */
   metricUnwrap: "0x49404b7c",
+  /** Fynd's router, all with (amountIn, tokenIn, ...) first: splitSwap, sequentialSwap, singleSwap. */
+  fyndSwaps: ["0xfe745a0f", "0x3c226834", "0x0c1a0ee7"],
 };
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
@@ -146,6 +148,11 @@ function fail(message: string, details: Record<string, unknown> = {}): never {
   throw new UnsafeExecutionError(message, details);
 }
 
+/** Refuses handing the user's tokens to a router anyone can call (TARGET_ONLY), whatever lists it. */
+function notToRouter(address: string, what: string) {
+  if (TARGET_ONLY.has(address)) fail(`${what} hands the user's tokens to a router anyone can call, so anyone could take them`, { address });
+}
+
 // What a token must look like for the check to hold it: never a symbol, which RAVN resolves itself.
 const TOKEN_FORMAT: Record<string, RegExp> = {
   evm: /^0x[0-9a-fA-F]{40}$/,
@@ -199,7 +206,7 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route or Metric, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric or Fynd, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -228,6 +235,7 @@ function classifyEvmCall(
     if (value !== 0n) fail("The approval sends value", { to });
     const spender = wordAddress(data, 0);
     const approved = wordUint(data, 1);
+    notToRouter(spender, "The approval");
     if (!ctx.known.has(spender) && !ctx.gated.has(spender)) fail("The approval names a spender RAVN doesn't route through", { spender });
     if (approved > ctx.amount && !ctx.gated.has(spender)) {
       fail("The approval is for more than the swap's amount", { spender, amount: approved.toString() });
@@ -314,6 +322,16 @@ function classifyEvmCall(
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
     // An ETH sell's amountIn is exactly the coin sent: short of it, the router wraps what it was sent and
     // pulls the rest as WETH from the user; past it, the extra waits in the router for anyone's refundETH.
+    if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
+  } else if (to === lower(FYND_ROUTERS[ctx.chainId])) {
+    // Fynd's swaps, its only calls RAVN routes through (not those drawing on a vault balance, or a Permit2
+    // allowance): the router pulls the call's amountIn of tokenIn from the sender (the coin as 0xEeee…,
+    // which it requires to be exactly what's sent), so a standing allowance to it is held to the swap.
+    if (!SEL.fyndSwaps.includes(sel)) fail("The call to Fynd isn't a swap", { selector: sel });
+    pulled = wordUint(data, 0);
+    const token = wordAddress(data, 1);
+    if (token !== (ctx.native ? NATIVE_EVM : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
     if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
@@ -437,6 +455,8 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
     const permitted = isRecord(message.permitted) ? message.permitted : fail("The Permit2 transfer has no single token");
     if (lower(permitted.token) !== ctx.token) fail("The Permit2 transfer is for another token", { token: permitted.token });
     if (big(permitted.amount, "The Permit2 amount") > ctx.amount) fail("The Permit2 transfer is for more than the swap's amount", { amount: permitted.amount });
+    // Unless it's a router, whose caller would say where the transfer goes.
+    notToRouter(lower(message.spender), "The Permit2 transfer");
     return;
   }
 
@@ -445,6 +465,7 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
     signsExactly(typed, ["owner:address", "spender:address", "value:uint256", "nonce:uint256", "deadline:uint256"]);
     if (lower(message.owner) !== ctx.user) fail("The permit is for another wallet", { owner: message.owner });
     const spender = lower(message.spender);
+    notToRouter(spender, "The permit");
     if (!ctx.known.has(spender) && !ctx.gated.has(spender)) fail("The permit names a spender RAVN doesn't route through", { spender });
     if (big(message.value, "The permit amount") > ctx.amount && !ctx.gated.has(spender)) {
       fail("The permit is for more than the swap's amount", { spender, value: message.value });
@@ -457,6 +478,8 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
     signsExactly(typed, ["from:address", "to:address", "value:uint256", "validAfter:uint256", "validBefore:uint256", "nonce:bytes32"]);
     if (lower(message.from) !== ctx.user) fail("The authorization moves another wallet's funds", { from: message.from });
     if (big(message.value, "The authorization amount") > ctx.amount) fail("The authorization is for more than the swap's amount", { value: message.value });
+    // A router collects a ReceiveWithAuthorization for whoever calls it.
+    notToRouter(lower(message.to), "The authorization");
     if (primaryType === "TransferWithAuthorization" && !ctx.known.has(lower(message.to))) {
       fail("The authorization pays an address RAVN doesn't route through", { to: message.to });
     }
@@ -591,7 +614,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route or Metric: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric or Fynd: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");
@@ -634,6 +657,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (deposit.psbt || deposit.transaction) fail("A Bitcoin or Solana deposit was returned for an EVM swap");
     const depositTo = lower(deposit.address);
     if (!/^0x[0-9a-f]{40}$/.test(depositTo)) fail("The deposit address isn't an EVM address", { address: deposit.address });
+    notToRouter(depositTo, "The deposit");
     if (depositTo === ctx.token || ctx.known.has(depositTo) || depositTo === lower(RAVN_FEE_WALLETS.evm)) {
       fail("The deposit address is a token, venue contract or RAVN's own wallet", { address: deposit.address });
     }

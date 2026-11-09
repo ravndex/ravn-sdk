@@ -12,6 +12,8 @@ import type { ExecutionDTO } from "./types";
 // RAVN hands out, with long swap calldata cut after its first words (nothing reads past them). Route's
 // two (2026-10-25): Route's own builds in /v1/execute's shape, as Route isn't in RAVN's race yet.
 // Metric's three (2026-10-25): RAVN's own builds for it (full calldata, which the check reads deep).
+// Relay's three "v3.2" (2026-11-09): Relay's own builds through its v3.2 contracts, in /v1/execute's shape.
+// Fynd's six (2026-11-06): RAVN's own builds, from a local server with Fynd switched on.
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -24,6 +26,7 @@ const fixture = (name: string) => {
 };
 
 const ATTACKER = "0x000000000000000000000000000000000000dead";
+const RELAY_ROUTER = "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"; // v3's, on Base
 const FEE_WALLET = "0x12d2425fd88c693edb4de004e0c747879b7d6933";
 const word = (v: string | bigint) => (typeof v === "bigint" ? v.toString(16) : v.replace(/^0x/, "").toLowerCase()).padStart(64, "0");
 const approve = (spender: string, amount: bigint) => `0x095ea7b3${word(spender)}${word(amount)}`;
@@ -85,6 +88,19 @@ describe("checkExecution: EVM transactions", () => {
     }
   });
 
+  // Relay's routers run anyone's calls: a coin sell calls one, but an allowance to one is anyone's.
+  it("takes Relay's routers as a swap's target only, never as the approval's spender (allowContracts included)", () => {
+    const coinSell = fixture("8453 native->token relay");
+    expect((coinSell.execution as Tx).transaction.to).toBe(RELAY_ROUTER);
+    expect(() => checkExecution(coinSell.execution, coinSell.intent)).not.toThrow();
+    const { execution, intent } = swap();
+    const e = execution as Tx;
+    e.approval!.data = e.calls![0].data = approve(RELAY_ROUTER, BigInt(intent.inputAmount));
+    e.approval!.spender = e.transaction.to = e.calls![1].to = RELAY_ROUTER;
+    refuses(e, intent, /router anyone can call/);
+    expect(() => checkExecution(e, intent, { allowContracts: { 8453: [RELAY_ROUTER] } })).toThrow(/router anyone can call/);
+  });
+
   it("refuses the native coin on a token sell, and more than the amount on a coin sell", () => {
     const token = swap();
     (token.execution as Tx).transaction.value = "1";
@@ -135,6 +151,50 @@ describe("checkExecution: EVM transactions", () => {
     refuses(execution, { ...intent, inputChainId: 7777 }, /doesn't know chain 7777/);
   });
 
+  // Each with code on Elysium (2026-11-09): 0x's own Elysium config names its AllowanceHolder, KyberSwap's
+  // live quote its router; Relay's match its other chains'. No whole-family entry reaches it by default.
+  it("accepts exactly the venue contracts RAVN routes through on Elysium", () => {
+    expect([...KNOWN_CONTRACTS[99901]].sort()).toEqual(
+      [
+        "0x0000000000001fF3684f28c67538d4D072C22734", // 0x AllowanceHolder
+        "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5", // KyberSwap
+        "0x4cd00e387622c35bddb9b4c962c136462338bc31", // Relay depository
+        "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", // Relay approval proxy (v3)
+        "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router (v3), a target only
+        "0x5567954cd026cebfe486062cb75848e0f1c12e58", // Relay approval proxy (v3.2)
+        "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay router (v3.2), a target only
+      ].map((a) => a.toLowerCase()).sort()
+    );
+  });
+
+  it("passes a KyberSwap swap on Elysium and refuses another chain's venue contract there", () => {
+    // A real Arc build moved to Elysium: same router, and neither chain treats the token specially here.
+    const onElysium = () =>
+      JSON.parse(JSON.stringify(fixture("5042 token->token kyberswap")).replaceAll('hainId":5042', 'hainId":99901')) as ReturnType<typeof fixture>;
+    const { execution, intent } = onElysium();
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const acrossPeriphery = "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4"; // every other chain's, no code on Elysium
+    const moved = onElysium();
+    (moved.execution as Tx).transaction.to = acrossPeriphery;
+    expect(() => checkExecution(moved.execution, moved.intent)).toThrow(UnsafeExecutionError);
+  });
+
+  it("accepts RAVN's coin fee on Elysium only as WHYPE minted to its wallet", () => {
+    // A real coin sell with its WETH-minted fee (Arbitrum), moved to Elysium: KyberSwap's router, WHYPE.
+    const onElysium = (minter: string) =>
+      JSON.parse(
+        JSON.stringify(fixture("42161 native->token flytrade (fly weth fee)"))
+          .replaceAll('hainId":42161', 'hainId":99901')
+          .replace(/0x20f6ee51340adeed01a59b0e65cb3703f3dc860c/gi, "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5")
+          .replace(/0x82aF49447D8a07e3bd95BD0d56f35241523fBab1/gi, minter)
+      ) as ReturnType<typeof fixture>;
+    const ok = onElysium("0xbA876237B0F021A6c6D852d6c26E107997cC5E81");
+    expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
+    // Arbitrum's WETH has no code on Elysium: a mint there is no payment to RAVN.
+    const elsewhere = onElysium("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1");
+    refuses(elsewhere.execution, elsewhere.intent, /isn't a payment to RAVN's fee wallet/);
+  });
+
   // Every address the check accepts on Arc, each with code there and named by the venue's own API or a
   // real Arc build (2026-10-21). A new chain inherits whole-family entries, so this pins Arc's exactly.
   it("accepts exactly Arc's verified venue contracts there", () => {
@@ -145,6 +205,8 @@ describe("checkExecution: EVM transactions", () => {
         "0x4cd00e387622c35bddb9b4c962c136462338bc31", // Relay depository
         "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", // Relay approval proxy
         "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router
+        "0x5567954cd026cebfe486062cb75848e0f1c12e58", // Relay v3.2 approval proxy
+        "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay v3.2 router
         "0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c", // Across periphery (Arc)
         "0x9b4A302A548c7e313c2b74C461db7b84d3074A84", // Across SpokePool
         "0xEC000769a73b70e16f361a442292500b3BCf4A85", // Eco portal
@@ -154,6 +216,7 @@ describe("checkExecution: EVM transactions", () => {
         "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af", // OKX approvals
         "0x5fA58e4E89c85B8d678Ade970bD6afD4311aF17E", // Garden USDC
         "0x89b6612A2121BFBd1c2Dc593504AbE4e5d5E9296", // Garden cirBTC
+        "0x72C452506a551C7fe069f1F66Beb671AC58909E9", // Fynd router
       ].map((a) => a.toLowerCase()).sort()
     );
   });
@@ -165,6 +228,20 @@ describe("checkExecution: EVM transactions", () => {
     e.transaction.to = "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4";
     e.calls![e.calls!.length - 1].to = e.transaction.to;
     refuses(e, intent, /contract RAVN doesn't route through/);
+  });
+
+  // Relay builds token sells through its v3.2 proxy and coin sells through its v3.2 router since
+  // 2026-10-25/26; 0.3.0–0.4.8 refused them (the "relay v3.2" fixtures are its builds). Linea has its own pair.
+  it("knows Relay's v3.2 proxy and router on every chain, and Linea's own pair on Linea only", () => {
+    const v32 = [
+      "0x5567954cd026cebfe486062cb75848e0f1c12e58", // proxy
+      "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // router
+      "0xe4dfbd5e6784db1058124e2c87554c0591f0fb7b", // Linea's proxy
+      "0x6328ea02d28131e58b28e55c6258258a30d90e05", // Linea's router
+    ];
+    for (const [chain, list] of Object.entries(KNOWN_CONTRACTS)) {
+      expect(v32.map((a) => list.includes(a)), chain).toEqual(chain === "59144" ? [false, false, true, true] : [true, true, false, false]);
+    }
   });
 
   it("accepts Route's RouteEntry on Robinhood Chain only", () => {
@@ -265,6 +342,64 @@ describe("checkExecution: Metric's router", () => {
   });
 });
 
+describe("checkExecution: Fynd's router", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const BASE_ROUTER = "0xaba5b53b03eafad1c5fc8bd5fc765fc85bb3de67";
+  const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tampered = (name: string, edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(name);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    const call = e.calls!.find((c) => c.to.toLowerCase() === BASE_ROUTER)!;
+    call.data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = call.value = value;
+    return { e, intent };
+  };
+  const TOKEN = "8453 usdc->weth fynd (client fee in the output)";
+  const COIN = "8453 eth->usdc fynd (coin sell)";
+
+  it("knows one router per chain, on Fynd's eight chains only", () => {
+    const routers: Record<number, string> = {
+      1: "0x1644d2477f809cc2c71bccfd6dc9497e3f83210d",
+      8453: BASE_ROUTER,
+      42161: "0x924f147c50ea59f5180a26031a8b65b2aa1e81cd",
+      56: "0x7f3d12bbafb8955e51b3ab9588b34c8ad95bda4e",
+      137: "0xbd4e6011f03355c2a377fd9af939322a7d0a1bc1",
+      130: "0xcba5574597ad00ea250fd106dab4fc7461949635",
+      4663: "0x09215a470bd585e59eb3f4b612fbd2678131ff9e",
+      5042: "0x72c452506a551c7fe069f1f66beb671ac58909e9",
+    };
+    for (const [chain, router] of Object.entries(routers)) {
+      expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(router)), chain).toEqual([chain]);
+    }
+  });
+
+  it("holds a Fynd swap to the token and amount being swapped (a standing allowance to the router would cover more)", () => {
+    let t = tampered(TOKEN, (d) => setWord(d, 0, word(500_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered(TOKEN, (d) => setWord(d, 1, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+  });
+
+  it("an ETH sell names the coin and its amount is exactly the coin sent", () => {
+    let t = tampered(COIN, (d) => setWord(d, 1, word(USDC)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+    t = tampered(COIN, (d) => d, "1");
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+    t = tampered(COIN, (d) => setWord(d, 0, word(1n)));
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+  });
+
+  it("refuses anything else to the router: the vault entrypoints, Permit2's, a withdrawal", () => {
+    // splitSwapUsingVault, sequentialSwapUsingVault, splitSwapPermit2, withdraw(address,uint256)
+    for (const sel of ["0xdeadbeef", "0xf3fef3a3", "0x00000000"]) {
+      const t = tampered(TOKEN, (d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to Fynd isn't a swap/);
+    }
+  });
+});
+
 describe("checkExecution: RAVN's fee", () => {
   type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
   const withFee = () => fixture("8453 xchain token eco");
@@ -317,6 +452,9 @@ describe("checkExecution: EVM deposits", () => {
     const e = execution as Dep;
     e.deposit.address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
     refuses(e, intent, /token, venue contract or RAVN's own wallet/);
+    // Relay's v3.2 router, listed here (Base) or not (Linea): anyone can sweep what lands there.
+    e.deposit.address = "0x0729e2a4716d9f7dd17858d5d504426d228697f7";
+    refuses(e, intent, /deposit hands the user's tokens to a router/);
   });
 });
 
@@ -363,6 +501,18 @@ describe("checkExecution: signatures", () => {
     const b = fixture("8453 xchain token relay");
     message(b.execution).from = ATTACKER;
     refuses(b.execution, b.intent, /another wallet's funds/);
+  });
+
+  it("refuses a permit, Permit2 transfer or EIP-3009 authorization a Relay router could collect", () => {
+    const permit = fixture("8453 token->native 0x_gasless");
+    ((permit.execution as Sig).approvalData!.message as Record<string, unknown>).spender = RELAY_ROUTER;
+    refuses(permit.execution, permit.intent, /permit hands the user's tokens to a router/);
+    const permit2 = fixture("8453 token->native 0x_gasless");
+    message(permit2.execution).spender = RELAY_ROUTER;
+    refuses(permit2.execution, permit2.intent, /Permit2 transfer hands the user's tokens to a router/);
+    const auth = fixture("8453 xchain token relay");
+    message(auth.execution).to = RELAY_ROUTER;
+    refuses(auth.execution, auth.intent, /authorization hands the user's tokens to a router/);
   });
 
   it("refuses a kind of signature it doesn't know, and one for another chain", () => {
