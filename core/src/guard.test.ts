@@ -183,6 +183,21 @@ describe("checkExecution: EVM transactions", () => {
     expect(() => checkExecution(moved.execution, moved.intent)).toThrow(UnsafeExecutionError);
   });
 
+  it("passes an OKX swap on Elysium through its own pair, and refuses Arc's pair there", () => {
+    // A real Arc OKX build moved to Elysium, its router and approval contract swapped for Elysium's.
+    const onElysium = (router: string, approvals: string) =>
+      JSON.parse(
+        JSON.stringify(fixture("5042 token->token okx"))
+          .replaceAll('hainId":5042', 'hainId":99901')
+          .replace(/(0x)?4e3bcce28caf98a143fd8bd9e4875ccab3e7bbe0/gi, (_m, p) => (p ? router : router.slice(2).toLowerCase()))
+          .replace(/(0x)?2b9899bc46bf0ee094225995f4bd496d42f261af/gi, (_m, p) => (p ? approvals : approvals.slice(2).toLowerCase()))
+      ) as ReturnType<typeof fixture>;
+    const ok = onElysium("0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA");
+    expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
+    const arcPair = onElysium("0x4E3bcCE28cAf98A143Fd8BD9e4875ccAb3E7bBE0", "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af");
+    expect(() => checkExecution(arcPair.execution, arcPair.intent)).toThrow(UnsafeExecutionError);
+  });
+
   it("accepts RAVN's coin fee on Elysium only as WHYPE minted to its wallet", () => {
     // A real coin sell with its WETH-minted fee (Arbitrum), moved to Elysium: KyberSwap's router, WHYPE.
     const onElysium = (minter: string) =>
