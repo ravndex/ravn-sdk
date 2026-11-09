@@ -15,7 +15,8 @@
  * its /supported/chain and /swap: the approval contract's code and owner match OKX's on Arc and Base,
  * the router is OKX's HyperEVM one but for its own addresses, and 4/4 builds ran on Elysium.
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
- * and RAVN's own builds for them.
+ * and RAVN's own builds for them. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
+ * GET /v1/health and RAVN's own builds for it.
  */
 
 const ETHEREUM = 1;
@@ -101,6 +102,11 @@ export const FYND_ROUTERS: Record<number, string> = {
   [ARC]: "0x72C452506a551C7fe069f1F66Beb671AC58909E9",
 };
 
+/** FlowRouter's router (flowrouter.xyz), Robinhood Chain only: every FlowRouter swap calls it and its
+ * approval names it (the executor it hands the route to is never called or approved by the user). Not
+ * upgradeable. The guard reads the token and amount its swap pulls. */
+export const FLOWROUTER = "0x8Ad60fAE44DD6aaFD8A98B7f25EaD026013efdF2";
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -169,6 +175,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
   [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
   [[ROBINHOOD], [METRIC_ROUTER], "Metric SimpleRouter"],
+  [[ROBINHOOD], [FLOWROUTER], "FlowRouter router"],
   ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
 ];
 

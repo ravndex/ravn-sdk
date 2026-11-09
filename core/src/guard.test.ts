@@ -14,6 +14,7 @@ import type { ExecutionDTO } from "./types";
 // Metric's three (2026-10-25): RAVN's own builds for it (full calldata, which the check reads deep).
 // Relay's three "v3.2" (2026-11-09): Relay's own builds through its v3.2 contracts, in /v1/execute's shape.
 // Fynd's six (2026-11-06): RAVN's own builds, from a local server with Fynd switched on.
+// FlowRouter's three (2026-11-09): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign.
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -415,6 +416,56 @@ describe("checkExecution: Fynd's router", () => {
     for (const sel of ["0xdeadbeef", "0xf3fef3a3", "0x00000000"]) {
       const t = tampered(TOKEN, (d) => sel + d.slice(10));
       refuses(t.e, t.intent, /call to Fynd isn't a swap/);
+    }
+  });
+});
+
+describe("checkExecution: FlowRouter's router", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const ROUTER = "0x8ad60fae44dd6aafd8a98b7f25ead026013efdf2";
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tampered = (name: string, edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(name);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    const call = e.calls!.find((c) => c.to.toLowerCase() === ROUTER)!;
+    call.data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = call.value = value;
+    return { e, intent };
+  };
+  const TOKEN = "4663 usdg->nvda flowrouter (fee in the token)";
+  const COIN = "4663 eth->usdg flowrouter (coin sell, WETH fee)";
+
+  it("knows the router on Robinhood Chain only", () => {
+    expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(ROUTER))).toEqual(["4663"]);
+  });
+
+  it("holds a FlowRouter swap to the token and amount being swapped (a standing allowance to the router would cover more)", () => {
+    let t = tampered(TOKEN, (d) => setWord(d, 1, word(100_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered(TOKEN, (d) => setWord(d, 0, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+  });
+
+  it("refuses an amount of 0, which the router reads as the sender's whole balance", () => {
+    const t = tampered(TOKEN, (d) => setWord(d, 1, word(0n)));
+    refuses(t.e, t.intent, /take the whole balance/);
+  });
+
+  it("an ETH sell names the coin as the zero address and its amount is exactly the coin sent", () => {
+    let t = tampered(COIN, (d) => setWord(d, 0, word("0x5fc5360d0400a0fd4f2af552add042d716f1d168")));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+    t = tampered(COIN, (d) => d, "1");
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+    t = tampered(COIN, (d) => setWord(d, 1, word(1n)));
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+  });
+
+  it("refuses anything else to the router: its Permit2 swap, a withdrawal", () => {
+    // swapPermit2, transferRouterFunds(address[],uint256[],address)
+    for (const sel of ["0x83bd37f9", "0xdeadbeef", "0x00000000"]) {
+      const t = tampered(TOKEN, (d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to FlowRouter isn't a swap/);
     }
   });
 });

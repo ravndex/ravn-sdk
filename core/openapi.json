@@ -3,7 +3,7 @@
   "info": {
     "title": "RAVN Swap API",
     "version": "2026-11-09",
-    "description": "Cross-chain swap quoting and execution across 18 chains and every live venue (GET /api/v1/health lists them), including native (non-wrapped) Bitcoin as either source or destination. Free, self-serve, 0% protocol fee. Two ways to call it: the REST API below (works with no signup, an optional x-api-key raises your rate limit) or the pay-per-call x402 variant (see the /api/v1/x402/* paths) for agents that skip API-key signup entirely.",
+    "description": "Cross-chain swap quoting and execution across 19 chains and every live venue (GET /api/v1/health lists them), including native (non-wrapped) Bitcoin as either source or destination. Free, self-serve, 0% protocol fee. Two ways to call it: the REST API below (works with no signup, an optional x-api-key raises your rate limit) or the pay-per-call x402 variant (see the /api/v1/x402/* paths) for agents that skip API-key signup entirely.",
     "x-guidance": "Standard flow: POST /api/v1/quote to get a quoteToken and expected output for a swap between any two supported chains/tokens (including native Bitcoin as source or destination). Then POST /api/v1/execute with that quoteToken to receive one of three shapes tagged by executionType: TRANSACTION (sign & broadcast yourself), SIGNATURE (sign and POST to /api/v1/submit-signature, RAVN submits), or DEPOSIT (send the origin asset to the returned address); a Hinkal private quote first answers AUTHORIZE (have the paying wallet sign it and call /api/v1/execute again with authorization and signature, until the TRANSACTION comes back). Poll POST /api/v1/status with execute's quoteToken + statusRef (GET still works for small tokens). RAVN's multi-step routes (venue.id compose) list every venue they run through in hops[] (two or three) and return a packed statusRef — the user signs or sends only the first step. RAVN never custodies funds — execute only returns what the caller's own wallet needs to sign and broadcast.",
     "contact": {
       "email": "hello@ravn.exchange"
@@ -76,7 +76,8 @@
           "hinkal",
           "routefun",
           "metric",
-          "fynd"
+          "fynd",
+          "flowrouter"
         ]
       },
       "ErrorCode": {
@@ -1319,6 +1320,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -1342,6 +1344,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -1420,7 +1423,8 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter"
                       ]
                     }
                   },
@@ -1456,7 +1460,8 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter"
                       ]
                     }
                   },
@@ -2801,6 +2806,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -2824,6 +2830,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -2902,7 +2909,8 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter"
                       ]
                     }
                   },
@@ -2938,7 +2946,8 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter"
                       ]
                     }
                   },
