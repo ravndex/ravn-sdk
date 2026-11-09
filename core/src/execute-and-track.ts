@@ -23,7 +23,8 @@ export interface ExecuteAndTrackHandlers {
   /**
    * Wait for a transaction hash to confirm and resolve to its receipt. Called on the approval
    * before the main tx is ever sent: sending both back-to-back races the allowance and is the most
-   * common integration bug this helper exists to prevent. Also called on the swap before RAVN's fee
+   * common integration bug this helper exists to prevent. An approval whose receipt says it failed
+   * stops the swap there (ExecuteAndTrackError, "FAILED"). Also called on the swap before RAVN's fee
    * is sent on its own (`fee.transaction`): the fee is only sent when the receipt says success AND
    * is this hash's own (a cancelled or replaced swap resolves with another transaction's). A
    * handler resolving to nothing doesn't compile: it would never get the fee sent. `null` (ethers
@@ -36,7 +37,8 @@ export interface ExecuteAndTrackHandlers {
    * they have landed, to the on-chain hash of the transaction that carried each call, in order
    * (the same hash repeated, or just one, for one transaction). Not a batch id or a 4337
    * userOpHash: RAVN proves its fee from that transaction. When given, a token-paid RAVN fee rides
-   * in the swap's own confirmation, and so does the swap's approval when it needs one; a
+   * in the swap's own confirmation, and so does the swap's approval when it needs one (with no fee,
+   * the approval and the swap go together where the execution's `batch` says they may); a
    * TRANSACTION's native-coin fee only when its `batch` says so (a coin sell's fee minted to RAVN as
    * WETH, Robinhood Chain and Arbitrum), else a plain transaction of its own (with sendDeposit, a
    * DEPOSIT's calls go together only when its `batch` says so). The batch's gas limit is your
@@ -123,6 +125,8 @@ export interface ExecuteAndTrackOptions {
    * `depositNotSent` saying why: send that one and `feePayment` yourself. Default false: a deposit
    * is never sent from here. Turning it on, send a deposit yourself only when `depositNotSent` is
    * set, or the user pays twice (a sandbox one has neither it nor `txHash`: it's never sent).
+   * A deposit due by `deposit.expiresAt` with under 2 minutes of it left isn't sent (and isn't
+   * `depositNotSent` either): it rejects before anything is sent, asking for a fresh quote.
    */
   sendDeposit?: boolean;
   /** Called with every hash the moment it exists (approval, swap with its statusRef, fee) and with
@@ -238,6 +242,9 @@ const MAX_ATTEMPTS = 8;
 const EXECUTE_ATTEMPTS = 4;
 // How long after the order's AUTHORIZE arrives (Hinkal priced its route) the deposit may still be sent.
 const DEPOSIT_WINDOW_MS = 10 * 60_000;
+// How much of a deposit's window must be left to open the wallet: a prompt can't be withdrawn once
+// open, and a confirmation, the block and the venue seeing the transfer all fit in it (RAVN's app).
+const DEPOSIT_MARGIN_MS = 2 * 60_000;
 
 /** The fee payment a DEPOSIT execution asks for beside its deposit; undefined when it has none. */
 export function depositFeePayment(execution: ExecutionDTO): DepositFeePayment | undefined {
@@ -256,6 +263,13 @@ const receiptSucceeded = (receipt: unknown, hash: string): boolean => {
   const r = receipt as { status?: unknown; transactionHash?: unknown; hash?: unknown } | null | undefined;
   const own = r?.transactionHash ?? r?.hash;
   return (r?.status === "success" || r?.status == 1) && (typeof own !== "string" || own.toLowerCase() === hash.toLowerCase());
+};
+
+// Only a receipt that says the transaction failed (viem "reverted", ethers 0, web3.js 0n/false, a raw
+// RPC receipt's "0x0"). No receipt, or no status, says nothing: the swap goes on as it always has.
+const receiptFailed = (receipt: unknown): boolean => {
+  const s = (receipt as { status?: unknown } | null | undefined)?.status;
+  return s === "reverted" || s === 0 || s === 0n || s === false || s === "0x0";
 };
 
 // The same call can succeed later: no response at all, a 429, or a 5xx.
@@ -419,8 +433,8 @@ export async function executeAndTrack(
     }
     const execution = answer;
     const depositWindow = () => {
-      if (sendBy !== undefined && Date.now() > sendBy) {
-        throw new Error("executeAndTrack: more than 10 minutes passed since the order was priced, so its deposit wasn't sent: request a fresh quote");
+      if (sendBy !== undefined && Date.now() > sendBy - DEPOSIT_MARGIN_MS) {
+        throw new Error("executeAndTrack: under 2 minutes are left of the 10 minutes since the order was priced, so its deposit wasn't sent: request a fresh quote");
       }
     };
     const { quoteToken } = execution;
@@ -460,9 +474,9 @@ export async function executeAndTrack(
     const neededApproval = async (approval: ApprovalDTO | undefined): Promise<ApprovalDTO | undefined> =>
       approval && !(handlers.hasAllowance && (await orAbort(handlers.hasAllowance(approval), stop.signal))) ? approval : undefined;
 
-    // Sends and confirms it, after its reset (approve to 0) when the token needs one first.
-    const maybeSendApproval = async (approval: ApprovalDTO | undefined): Promise<string | undefined> => {
-      const needed = await neededApproval(approval);
+    // Sends and confirms it, after its reset (approve to 0) when the token needs one first. One that
+    // failed on-chain stops here: what follows would spend an allowance that isn't there.
+    const sendApproval = async (needed: ApprovalDTO | undefined): Promise<string | undefined> => {
       if (!needed) return undefined;
       let hash = "";
       for (const tx of needed.reset ? [{ ...needed.reset, chainId: needed.chainId }, needed] : [needed]) {
@@ -471,10 +485,17 @@ export async function executeAndTrack(
         sent = true;
         if (tx === needed) report("approval_sent", { approvalTxHash: hash });
         else report("reset_sent", { resetTxHash: hash });
-        await orAbort(handlers.waitForReceipt(hash, needed.chainId), stop.signal);
+        if (receiptFailed(await orAbort(handlers.waitForReceipt(hash, needed.chainId), stop.signal))) {
+          throw new Error(
+            tx === needed
+              ? "executeAndTrack: the approval failed on-chain, so the swap wasn't sent: request a fresh quote"
+              : "executeAndTrack: the approval's reset (approve to 0) failed on-chain, so neither the approval nor the swap was sent: request a fresh quote"
+          );
+        }
       }
       return hash;
     };
+    const maybeSendApproval = async (approval: ApprovalDTO | undefined) => sendApproval(await neededApproval(approval));
 
     // RAVN's fee on its own, only once `hash` (the swap, or the deposit) has confirmed: a reverted,
     // dropped or replaced one pays no fee. Declined or failed (or stopped first), the swap still
@@ -556,27 +577,29 @@ export async function executeAndTrack(
       const batchFee = execution.batch ?? BigInt(feeTx?.value ?? "1") === 0n;
       // Before the approval too: no gas spent on a deposit that can't go out.
       depositWindow();
-      if (feeTx && batchFee && handlers.sendCalls) {
+      const needed = await neededApproval(approval);
+      depositWindow();
+      // One confirmation for the swap and its fee, or, with no fee, its approval: only where RAVN says
+      // the calls may share one (`batch`; a token fee from an API without it).
+      if (handlers.sendCalls && (feeTx ? batchFee : execution.batch === true && needed)) {
         // Atomic, so neither the fee nor the swap's approval outlives a swap that reverted.
-        const batchApproval = await neededApproval(approval);
-        const reset = batchApproval?.reset && { ...batchApproval.reset, chainId: batchApproval.chainId };
-        const approvals = batchApproval ? [...(reset ? [reset] : []), batchApproval] : [];
+        const reset = needed?.reset && { ...needed.reset, chainId: needed.chainId };
+        const approvals = needed ? [...(reset ? [reset] : []), needed] : [];
         checkpoint();
-        depositWindow();
-        const hashes = await handlers.sendCalls([...approvals, transaction, feeTx]);
+        const hashes = await handlers.sendCalls([...approvals, transaction, ...(feeTx ? [feeTx] : [])]);
         // The wallet resolved, so something may be out: from here an error carries what's known.
         sent = true;
         // Fewer hashes back than calls: the last one carried the rest.
         const carrier = (i: number) => hashes[Math.min(i, hashes.length - 1)];
         if (!carrier(0)) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
         txHash = carrier(approvals.length);
-        feeTxHash = carrier(approvals.length + 1);
+        if (feeTx) feeTxHash = carrier(approvals.length + 1);
         if (reset) report("reset_sent", { resetTxHash: carrier(0) });
-        if (batchApproval) report("approval_sent", { approvalTxHash: carrier(approvals.length - 1) });
+        if (needed) report("approval_sent", { approvalTxHash: carrier(approvals.length - 1) });
         report("swap_sent", { txHash, statusRef: execution.statusRef ?? txHash, statusTxHash: proof(txHash) });
-        report("fee_sent", { feeTxHash, statusTxHash: proof(txHash, feeTxHash) });
+        if (feeTxHash) report("fee_sent", { feeTxHash, statusTxHash: proof(txHash, feeTxHash) });
       } else {
-        await maybeSendApproval(approval);
+        await sendApproval(needed);
         checkpoint();
         depositWindow();
         txHash = await handlers.sendTransaction(transaction);
@@ -645,6 +668,11 @@ export async function executeAndTrack(
     // Typed away, but a newer API can answer with a type this version doesn't know: never sent.
     const type = (execution as { executionType: string }).executionType;
     if (type !== "DEPOSIT") return unsent(`executionType ${type} isn't one this SDK version can send`);
+    // A deposit that must arrive by `expiresAt` (a Houdini order): none sent with under 2 minutes
+    // left, or it lands at an expired order. One it can't read is refused, not guessed.
+    if (deposit.expiresAt !== undefined && !(Date.parse(deposit.expiresAt) - Date.now() >= DEPOSIT_MARGIN_MS)) {
+      throw new Error("executeAndTrack: the venue's deposit window closes in under 2 minutes, so the deposit wasn't sent: request a fresh quote");
+    }
 
     // sendDeposit: from the payload RAVN built, RAVN's fee inside it.
     if (calls?.length) {
