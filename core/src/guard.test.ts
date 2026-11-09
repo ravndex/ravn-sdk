@@ -24,6 +24,7 @@ const fixture = (name: string) => {
 };
 
 const ATTACKER = "0x000000000000000000000000000000000000dead";
+const RELAY_ROUTER = "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"; // v3's, on Base
 const FEE_WALLET = "0x12d2425fd88c693edb4de004e0c747879b7d6933";
 const word = (v: string | bigint) => (typeof v === "bigint" ? v.toString(16) : v.replace(/^0x/, "").toLowerCase()).padStart(64, "0");
 const approve = (spender: string, amount: bigint) => `0x095ea7b3${word(spender)}${word(amount)}`;
@@ -83,6 +84,19 @@ describe("checkExecution: EVM transactions", () => {
       e.transaction.to = to;
       refuses(e, intent, /contract RAVN doesn't route through/);
     }
+  });
+
+  // Relay's routers run anyone's calls: a coin sell calls one, but an allowance to one is anyone's.
+  it("takes Relay's routers as a swap's target only, never as the approval's spender (allowContracts included)", () => {
+    const coinSell = fixture("8453 native->token relay");
+    expect((coinSell.execution as Tx).transaction.to).toBe(RELAY_ROUTER);
+    expect(() => checkExecution(coinSell.execution, coinSell.intent)).not.toThrow();
+    const { execution, intent } = swap();
+    const e = execution as Tx;
+    e.approval!.data = e.calls![0].data = approve(RELAY_ROUTER, BigInt(intent.inputAmount));
+    e.approval!.spender = e.transaction.to = e.calls![1].to = RELAY_ROUTER;
+    refuses(e, intent, /router anyone can call/);
+    expect(() => checkExecution(e, intent, { allowContracts: { 8453: [RELAY_ROUTER] } })).toThrow(/router anyone can call/);
   });
 
   it("refuses the native coin on a token sell, and more than the amount on a coin sell", () => {
@@ -363,6 +377,18 @@ describe("checkExecution: signatures", () => {
     const b = fixture("8453 xchain token relay");
     message(b.execution).from = ATTACKER;
     refuses(b.execution, b.intent, /another wallet's funds/);
+  });
+
+  it("refuses a permit, Permit2 transfer or EIP-3009 authorization a Relay router could collect", () => {
+    const permit = fixture("8453 token->native 0x_gasless");
+    ((permit.execution as Sig).approvalData!.message as Record<string, unknown>).spender = RELAY_ROUTER;
+    refuses(permit.execution, permit.intent, /permit hands the user's tokens to a router/);
+    const permit2 = fixture("8453 token->native 0x_gasless");
+    message(permit2.execution).spender = RELAY_ROUTER;
+    refuses(permit2.execution, permit2.intent, /Permit2 transfer hands the user's tokens to a router/);
+    const auth = fixture("8453 xchain token relay");
+    message(auth.execution).to = RELAY_ROUTER;
+    refuses(auth.execution, auth.intent, /authorization hands the user's tokens to a router/);
   });
 
   it("refuses a kind of signature it doesn't know, and one for another chain", () => {

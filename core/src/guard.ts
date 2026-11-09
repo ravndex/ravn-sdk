@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -26,7 +26,7 @@ export interface GuardOptions {
   /**
    * Extra contracts to accept as transaction targets and spenders, per chain id: for a venue that
    * moved to a new contract before your SDK version knew it. Only add addresses you have checked
-   * belong to that venue.
+   * belong to that venue. Relay's routers stay transaction targets only (TARGET_ONLY).
    */
   allowContracts?: Record<number, string[]>;
   /**
@@ -146,6 +146,11 @@ function fail(message: string, details: Record<string, unknown> = {}): never {
   throw new UnsafeExecutionError(message, details);
 }
 
+/** Refuses handing the user's tokens to a router anyone can call (TARGET_ONLY), whatever lists it. */
+function notToRouter(address: string, what: string) {
+  if (TARGET_ONLY.has(address)) fail(`${what} hands the user's tokens to a router anyone can call, so anyone could take them`, { address });
+}
+
 // What a token must look like for the check to hold it: never a symbol, which RAVN resolves itself.
 const TOKEN_FORMAT: Record<string, RegExp> = {
   evm: /^0x[0-9a-fA-F]{40}$/,
@@ -228,6 +233,7 @@ function classifyEvmCall(
     if (value !== 0n) fail("The approval sends value", { to });
     const spender = wordAddress(data, 0);
     const approved = wordUint(data, 1);
+    notToRouter(spender, "The approval");
     if (!ctx.known.has(spender) && !ctx.gated.has(spender)) fail("The approval names a spender RAVN doesn't route through", { spender });
     if (approved > ctx.amount && !ctx.gated.has(spender)) {
       fail("The approval is for more than the swap's amount", { spender, amount: approved.toString() });
@@ -437,6 +443,8 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
     const permitted = isRecord(message.permitted) ? message.permitted : fail("The Permit2 transfer has no single token");
     if (lower(permitted.token) !== ctx.token) fail("The Permit2 transfer is for another token", { token: permitted.token });
     if (big(permitted.amount, "The Permit2 amount") > ctx.amount) fail("The Permit2 transfer is for more than the swap's amount", { amount: permitted.amount });
+    // Unless it's a router, whose caller would say where the transfer goes.
+    notToRouter(lower(message.spender), "The Permit2 transfer");
     return;
   }
 
@@ -445,6 +453,7 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
     signsExactly(typed, ["owner:address", "spender:address", "value:uint256", "nonce:uint256", "deadline:uint256"]);
     if (lower(message.owner) !== ctx.user) fail("The permit is for another wallet", { owner: message.owner });
     const spender = lower(message.spender);
+    notToRouter(spender, "The permit");
     if (!ctx.known.has(spender) && !ctx.gated.has(spender)) fail("The permit names a spender RAVN doesn't route through", { spender });
     if (big(message.value, "The permit amount") > ctx.amount && !ctx.gated.has(spender)) {
       fail("The permit is for more than the swap's amount", { spender, value: message.value });
@@ -457,6 +466,8 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
     signsExactly(typed, ["from:address", "to:address", "value:uint256", "validAfter:uint256", "validBefore:uint256", "nonce:bytes32"]);
     if (lower(message.from) !== ctx.user) fail("The authorization moves another wallet's funds", { from: message.from });
     if (big(message.value, "The authorization amount") > ctx.amount) fail("The authorization is for more than the swap's amount", { value: message.value });
+    // A router collects a ReceiveWithAuthorization for whoever calls it.
+    notToRouter(lower(message.to), "The authorization");
     if (primaryType === "TransferWithAuthorization" && !ctx.known.has(lower(message.to))) {
       fail("The authorization pays an address RAVN doesn't route through", { to: message.to });
     }
