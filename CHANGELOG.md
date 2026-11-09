@@ -13,8 +13,27 @@ authorized to its approval proxy or depository. No real swap changes.
 ### Changed
 
 - An approval, a token permit, a Permit2 transfer, a USDC-style authorization (EIP-3009) or a deposit
-  that names one of Relay's routers is refused ("… hands the user's tokens to a router anyone can call"), even if
-  you list the router in `guard.allowContracts`.
+  that names one of Relay's routers is refused ("… hands the user's tokens to a router anyone can
+  call"), even if you list the router in `guard.allowContracts`.
+
+## @ravnexchange/sdk 0.4.12
+
+Relay's v3.2 contracts. Relay has built its swaps with them since 25–26 Oct 2026, and every earlier
+version with the check (0.3.0 on) refuses those swaps: "The approval names a spender RAVN doesn't route through" when your user sells a
+token through Relay, "The swap goes to a contract RAVN doesn't route through" when they sell a coin
+(POL, ETH, …) that Relay swaps on the way. Relay bridging the same token still passes.
+
+### Fixed
+
+- Relay's v3.2 approval proxy (`0x5567954cd026cebfe486062cb75848e0f1c12e58`) and router
+  (`0x0729e2a4716d9f7dd17858d5d504426d228697f7`) in the check on every chain it knows, and Linea's
+  own pair (`0xe4dfbd5e6784db1058124e2c87554c0591f0fb7b`, `0x6328ea02d28131e58b28e55c6258258a30d90e05`)
+  on Linea.
+
+### Upgrading
+
+- Nothing else changes. Until you can upgrade, pass the proxy and router for each chain you serve
+  (Linea's own pair on Linea) in `new RavnClient({ guard: { allowContracts: { [chainId]: ["0x…", "0x…"] } } })`.
 
 ## @ravnexchange/sdk 0.4.8
 
