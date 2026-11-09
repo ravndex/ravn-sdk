@@ -12,6 +12,7 @@ import type { ExecutionDTO } from "./types";
 // RAVN hands out, with long swap calldata cut after its first words (nothing reads past them). Route's
 // two (2026-10-25): Route's own builds in /v1/execute's shape, as Route isn't in RAVN's race yet.
 // Metric's three (2026-10-25): RAVN's own builds for it (full calldata, which the check reads deep).
+// Relay's three "v3.2" (2026-11-09): Relay's own builds through its v3.2 contracts, in /v1/execute's shape.
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -170,7 +171,7 @@ describe("checkExecution: EVM transactions", () => {
   });
 
   // Relay builds token sells through its v3.2 proxy and coin sells through its v3.2 router since
-  // 2026-10-25/26; 0.3.0–0.4.8 refused them (the fixtures above are its builds). Linea has its own pair.
+  // 2026-10-25/26; 0.3.0–0.4.8 refused them (the "relay v3.2" fixtures are its builds). Linea has its own pair.
   it("knows Relay's v3.2 proxy and router on every chain, and Linea's own pair on Linea only", () => {
     const v32 = [
       "0x5567954cd026cebfe486062cb75848e0f1c12e58", // proxy

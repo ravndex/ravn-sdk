@@ -5,8 +5,8 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 
 ## @ravnexchange/sdk 0.4.12
 
-Relay's v3.2 contracts. Relay has built its swaps with them since 25–26 Oct 2026, and 0.3.0–0.4.8
-refuse those swaps: "The approval names a spender RAVN doesn't route through" when your user sells a
+Relay's v3.2 contracts. Relay has built its swaps with them since 25–26 Oct 2026, and every earlier
+version with the check (0.3.0 on) refuses those swaps: "The approval names a spender RAVN doesn't route through" when your user sells a
 token through Relay, "The swap goes to a contract RAVN doesn't route through" when they sell a coin
 (POL, ETH, …) that Relay swaps on the way. Relay bridging the same token still passes.
 
@@ -19,8 +19,8 @@ token through Relay, "The swap goes to a contract RAVN doesn't route through" wh
 
 ### Upgrading
 
-- Nothing else changes. Until you can upgrade, pass those addresses for the chains you serve in
-  `new RavnClient({ guard: { allowContracts: { [chainId]: ["0x…"] } } })`.
+- Nothing else changes. Until you can upgrade, pass the proxy and router for each chain you serve
+  (Linea's own pair on Linea) in `new RavnClient({ guard: { allowContracts: { [chainId]: ["0x…", "0x…"] } } })`.
 
 ## @ravnexchange/sdk 0.4.8
 
