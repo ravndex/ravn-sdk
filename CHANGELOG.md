@@ -21,6 +21,7 @@ shape and export name. API changes are listed at [docs.ravn.exchange/changelog](
   on a `VenueDTO`, not `quote.venue.tier`). Extend the type instead.
 - Request params (`GetQuoteParams` and the rest) are unchanged: they take any chain or venue id, so
   a new chain or venue needs no upgrade.
+
 ## @ravnexchange/sdk 0.4.15
 
 Fynd (docs.fynd.xyz) on eight chains. 0.3.0–0.4.14 refuse every Fynd swap: "The approval names a spender
