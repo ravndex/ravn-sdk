@@ -3,6 +3,20 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.18
+
+OKX on Elysium (99901). 0.4.14–0.4.17 refuse OKX's swaps there: "The approval names a spender RAVN
+doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route through" on a
+HYPE sell.
+
+### Added
+
+- OKX's router and approval contract on Elysium in the check (`checkExecution`), each with code there.
+
+### Upgrading
+
+- Nothing to change. Update before you offer Elysium to your users.
+
 ## @ravnexchange/sdk 0.4.17
 
 The response types are now generated from RAVN's API spec
