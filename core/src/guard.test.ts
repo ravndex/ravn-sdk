@@ -331,6 +331,9 @@ describe("checkExecution: EVM deposits", () => {
     const e = execution as Dep;
     e.deposit.address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
     refuses(e, intent, /token, venue contract or RAVN's own wallet/);
+    // Relay's v3.2 router, wherever the check doesn't list it (Linea): anyone can sweep what lands there.
+    e.deposit.address = "0x0729e2a4716d9f7dd17858d5d504426d228697f7";
+    refuses(e, intent, /deposit hands the user's tokens to a router/);
   });
 });
 

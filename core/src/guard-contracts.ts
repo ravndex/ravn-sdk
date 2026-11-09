@@ -86,8 +86,9 @@ export const RAVN_FEE_WALLETS = {
 /**
  * Relay's routers (v3 and v3.2, and Linea's own of each): they run any list of calls for anyone, so
  * an allowance to one, or a signed transfer it can collect, is anyone's to take. Relay never asks for
- * either (a token sold is approved or authorized to its approval proxy; a coin sold is sent along), so
- * these are transaction targets only: never a spender, a permit's spender, or a token authorization's payee.
+ * either (a token sold is approved or authorized to its approval proxy or depository; a coin sold is
+ * sent along), so these are transaction targets only: never a spender, a permit's spender, a token
+ * authorization's payee, or a deposit address.
  */
 export const TARGET_ONLY: ReadonlySet<string> = new Set([
   "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f",

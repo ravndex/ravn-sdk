@@ -26,7 +26,7 @@ export interface GuardOptions {
   /**
    * Extra contracts to accept as transaction targets and spenders, per chain id: for a venue that
    * moved to a new contract before your SDK version knew it. Only add addresses you have checked
-   * belong to that venue. Relay's routers stay transaction targets only (TARGET_ONLY).
+   * belong to that venue. Relay's routers stay transaction targets only: never handed the user's tokens.
    */
   allowContracts?: Record<number, string[]>;
   /**
@@ -645,6 +645,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (deposit.psbt || deposit.transaction) fail("A Bitcoin or Solana deposit was returned for an EVM swap");
     const depositTo = lower(deposit.address);
     if (!/^0x[0-9a-f]{40}$/.test(depositTo)) fail("The deposit address isn't an EVM address", { address: deposit.address });
+    notToRouter(depositTo, "The deposit");
     if (depositTo === ctx.token || ctx.known.has(depositTo) || depositTo === lower(RAVN_FEE_WALLETS.evm)) {
       fail("The deposit address is a token, venue contract or RAVN's own wallet", { address: deposit.address });
     }
