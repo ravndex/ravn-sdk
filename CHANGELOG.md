@@ -3,6 +3,20 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.16
+
+`getQuoteStream` reports a new event, `preview`: a price RAVN's own two-step route has already found while
+it finishes its other routes, about a second before its `settled`.
+
+### Added
+
+- `QuoteStreamEvent` `{ type: "preview", venueId, quotes }`. Show it like `settled`; the venue's next
+  `preview` or its `settled` replaces it. Like every streamed price, it's a price to show, not to execute.
+
+### Upgrading
+
+- Nothing to change. Older versions ignore the line and miss nothing.
+
 ## @ravnexchange/sdk 0.4.15
 
 Fynd (docs.fynd.xyz) on eight chains. 0.3.0–0.4.14 refuse every Fynd swap: "The approval names a spender
