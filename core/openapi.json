@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "RAVN Swap API",
-    "version": "2026-11-03",
+    "version": "2026-11-09",
     "description": "Cross-chain swap quoting and execution across 18 chains and every live venue (GET /api/v1/health lists them), including native (non-wrapped) Bitcoin as either source or destination. Free, self-serve, 0% protocol fee. Two ways to call it: the REST API below (works with no signup, an optional x-api-key raises your rate limit) or the pay-per-call x402 variant (see the /api/v1/x402/* paths) for agents that skip API-key signup entirely.",
     "x-guidance": "Standard flow: POST /api/v1/quote to get a quoteToken and expected output for a swap between any two supported chains/tokens (including native Bitcoin as source or destination). Then POST /api/v1/execute with that quoteToken to receive one of three shapes tagged by executionType: TRANSACTION (sign & broadcast yourself), SIGNATURE (sign and POST to /api/v1/submit-signature, RAVN submits), or DEPOSIT (send the origin asset to the returned address); a Hinkal private quote first answers AUTHORIZE (have the paying wallet sign it and call /api/v1/execute again with authorization and signature, until the TRANSACTION comes back). Poll POST /api/v1/status with execute's quoteToken + statusRef (GET still works for small tokens). RAVN's multi-step routes (venue.id compose) list every venue they run through in hops[] (two or three) and return a packed statusRef — the user signs or sends only the first step. RAVN never custodies funds — execute only returns what the caller's own wallet needs to sign and broadcast.",
     "contact": {
@@ -563,7 +563,7 @@
           "slippage"
         ],
         "additionalProperties": false,
-        "description": "A venue's price as it lands in a streamed /v1/quote (`settled` lines): an alternative without its quoteToken, something to show rather than execute. Only the `done` line carries tokens."
+        "description": "A venue's price as it lands in a streamed /v1/quote (`settled` and `preview` lines): an alternative without its quoteToken, something to show rather than execute. Only the `done` line carries tokens."
       },
       "StatusDTO": {
         "type": "object",
@@ -1488,7 +1488,7 @@
                     "type": "boolean"
                   },
                   "stream": {
-                    "description": "Answer as newline-delimited JSON (Content-Type application/x-ndjson) while the race runs, instead of one JSON body at its end. One object per line: `{\"type\":\"venues\",\"venueIds\":[...]}` (the venues racing), then `{\"type\":\"settled\",\"venueId\":...,\"quotes\":[...]}` as each venue answers (`[]`: nothing usable; each quote is an alternative without its quoteToken or gas: a price to show, not to execute), then `{\"type\":\"done\",\"status\":200,\"data\":{...},\"meta\":{...}}` with the same body the plain response carries, quoteTokens included, or `{\"type\":\"done\",\"status\":404,\"error\":{...},\"meta\":{...}}` if the race failed (the HTTP status is already 200 by then). The winner is picked once, in `done`, net of gas: a venue that led mid-stream may not be it. A request RAVN refuses before the race (malformed body or fields, unknown token, key or rate limit) gets the usual JSON error instead; an address the race refuses comes in `done` (status 400). A stream that ends without `done` is a failed quote: request it again.",
+                    "description": "Answer as newline-delimited JSON (Content-Type application/x-ndjson) while the race runs, instead of one JSON body at its end. One object per line: `{\"type\":\"venues\",\"venueIds\":[...]}` (the venues racing), then `{\"type\":\"settled\",\"venueId\":...,\"quotes\":[...]}` as each venue answers (`[]`: nothing usable; each quote is an alternative without its quoteToken or gas: a price to show, not to execute). RAVN's own multi-step route can first send `{\"type\":\"preview\",\"venueId\":\"compose\",\"quotes\":[...]}`, a route it has already priced while it prices its others: each preview replaces the last, its `settled` replaces them, and a client that ignores `preview` misses nothing. Then `{\"type\":\"done\",\"status\":200,\"data\":{...},\"meta\":{...}}` with the same body the plain response carries, quoteTokens included, or `{\"type\":\"done\",\"status\":404,\"error\":{...},\"meta\":{...}}` if the race failed (the HTTP status is already 200 by then). The winner is picked once, in `done`, net of gas: a venue that led mid-stream may not be it. A request RAVN refuses before the race (malformed body or fields, unknown token, key or rate limit) gets the usual JSON error instead; an address the race refuses comes in `done` (status 400). A stream that ends without `done` is a failed quote: request it again.",
                     "type": "boolean"
                   }
                 },

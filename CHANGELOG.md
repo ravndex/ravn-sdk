@@ -3,11 +3,11 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.4.16
+## @ravnexchange/sdk 0.4.17
 
 The response types are now generated from RAVN's API spec
 ([app.ravn.exchange/openapi.json](https://app.ravn.exchange/openapi.json)) instead of copied by
-hand, so a field RAVN adds reaches the SDK by regenerating it. Every type keeps exactly its 0.4.15
+hand, so a field RAVN adds reaches the SDK by regenerating it. Every type keeps exactly its 0.4.16
 shape and export name. API changes are listed at [docs.ravn.exchange/changelog](https://docs.ravn.exchange/changelog).
 
 ### Changed
@@ -21,6 +21,21 @@ shape and export name. API changes are listed at [docs.ravn.exchange/changelog](
   on a `VenueDTO`, not `quote.venue.tier`). Extend the type instead.
 - Request params (`GetQuoteParams` and the rest) are unchanged: they take any chain or venue id, so
   a new chain or venue needs no upgrade.
+
+## @ravnexchange/sdk 0.4.16
+
+`getQuoteStream` reports a new event, `preview`: an early price from RAVN's own multi-step route, about a
+second before its `settled`.
+
+### Added
+
+- `QuoteStreamEvent` `{ type: "preview", venueId, quotes }`. Show it like `settled`; that venue's next
+  `preview` or its `settled` replaces it. Like every streamed price, it's a price to show, not to execute.
+
+### Upgrading
+
+- Nothing to change at runtime: older versions ignore the line and miss nothing. If your code switches over
+  `QuoteStreamEvent` and checks that every case is handled, add a `preview` case.
 
 ## @ravnexchange/sdk 0.4.15
 

@@ -67,7 +67,7 @@ function envelopeData<T>(body: Envelope<T>, ok: boolean, status?: number): T {
 const DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1";
 
 /** This package's version, as in its package.json (client.test.ts fails when they differ). */
-export const SDK_VERSION = "0.4.16";
+export const SDK_VERSION = "0.4.17";
 
 export class RavnClient {
   private readonly apiKey?: string;
@@ -193,7 +193,7 @@ export class RavnClient {
         return;
       }
       if (event.type === "done") done = event;
-      else if (event.type === "venues" || event.type === "settled") {
+      else if (event.type === "venues" || event.type === "settled" || event.type === "preview") {
         try {
           options.onEvent?.(event as never);
         } catch {
