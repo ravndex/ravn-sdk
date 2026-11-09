@@ -5,8 +5,7 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 
 ## @ravnexchange/sdk 0.4.18
 
-`executeAndTrack` now stops a swap where RAVN's own app does, before money is lost, and asks for one
-wallet confirmation where two were needed.
+`executeAndTrack` now stops a swap where RAVN's own app does, before money is lost.
 
 ### Changed
 
@@ -14,16 +13,14 @@ wallet confirmation where two were needed.
   (`FAILED`, the approval's hash in `partial`) instead of sending a swap that would fail and cost gas.
   The same for a failed `approval.reset`, and on a signed order (nothing is signed). A receipt that
   doesn't say (`null`, no status) goes on as before.
-- With `sendCalls`, a token sell's approval and its swap go in one confirmation where the execution's
-  `batch` says they may, with or without RAVN's fee. Before, only a swap carrying a fee was batched.
-- With `sendDeposit`, a deposit due by `deposit.expiresAt` (a Houdini order) isn't sent with under 2
-  minutes of it left, or with an `expiresAt` it can't read: it rejects before anything is sent. A
-  Hinkal deposit holds the same 2 minutes inside its 10-minute window: none is sent after 8 minutes.
+- With `sendDeposit`, a deposit due by `deposit.expiresAt` isn't sent with under 2 minutes of it
+  left, or with an `expiresAt` it can't read: it rejects before anything is sent. A Hinkal deposit
+  holds the same 2 minutes inside its 10-minute window: none is sent after 8 minutes.
+- An `ExecuteAndTrackError`'s message starts with "executeAndTrack:" once, not twice.
 
 ### Upgrading
 
-- Nothing to change. Your handlers are called as before; `sendCalls`, when you pass it, is also
-  called for an approval and a swap without a fee (it already gets that pair with a fee).
+- Nothing to change: your handlers are called as before.
 
 ## @ravnexchange/sdk 0.4.17
 

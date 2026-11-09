@@ -1616,6 +1616,7 @@ describe("executeAndTrack: a failed approval stops the swap", () => {
     expect(failure).toBeInstanceOf(ExecuteAndTrackError);
     expect(failure.code).toBe("FAILED");
     expect(failure.message).toMatch(/approval failed on-chain, so the swap wasn't sent/);
+    expect(failure.message).toBe("executeAndTrack: the approval failed on-chain, so the swap wasn't sent: request a fresh quote");
     expect(failure.partial.approvalTxHash).toBe(APPROVAL);
     expect(handlers.sendTransaction).toHaveBeenCalledOnce();
     expect(getStatus).not.toHaveBeenCalled();
@@ -1649,69 +1650,24 @@ describe("executeAndTrack: a failed approval stops the swap", () => {
   });
 });
 
-describe("executeAndTrack: approve and swap in one confirmation", () => {
-  const [APPROVAL, SWAP, BATCH] = ["e", "a", "b"].map((c) => `0x${c.repeat(64)}`);
+// Not in 0.4.18: a hand-written sendCalls that rejects on a wallet without atomic batches (Rabby,
+// Phantom, HyperEVM) would fail every such token sell, with no way to say "can't batch, use steps".
+describe("executeAndTrack: approve and swap without a fee stay two steps", () => {
+  const [APPROVAL, SWAP] = ["e", "a"].map((c) => `0x${c.repeat(64)}`);
   const approval = { to: "0xUSDC", data: "0xapprove", value: "0", chainId: 8453 };
   const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453 };
-  // As /v1/execute answers a token sell with no fee: its calls, and whether they may go together.
-  const execution = (over: Record<string, unknown> = {}) => ({
-    executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, calls: [approval, transaction], batch: true, ...over,
-  });
-  const handlersWith = (over: Partial<ExecuteAndTrackHandlers> = {}) => ({
-    sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? APPROVAL : SWAP)),
-    waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
-    sendCalls: vi.fn(async () => [BATCH]),
-    ...over,
-  });
-  const run = (e: unknown, handlers: ExecuteAndTrackHandlers) => {
-    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [e], status: [{ status: "success", venue: "kyberswap" }] }) });
-    const getStatus = vi.spyOn(client, "getStatus");
-    const stages: string[] = [];
-    return { getStatus, stages, result: executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, onProgress: ({ stage }) => stages.push(stage) }) };
-  };
 
-  it("sends the approval and the swap together when RAVN says they may share one confirmation, with no fee", async () => {
-    const handlers = handlersWith();
-    const { result, getStatus, stages } = run(execution(), handlers);
-    const r = await result;
-    expect(handlers.sendCalls).toHaveBeenCalledWith([approval, transaction]);
-    expect(handlers.sendTransaction).not.toHaveBeenCalled();
-    expect(handlers.waitForReceipt).not.toHaveBeenCalled();
-    expect(r).toMatchObject({ approvalTxHash: BATCH, txHash: BATCH, statusRef: BATCH });
-    // No fee went: nothing claims one, and the swap's own hash is its ref.
-    expect(r.feeTxHash).toBeUndefined();
-    expect(r.statusTxHash).toBeUndefined();
-    expect(stages).not.toContain("fee_sent");
-    expect(getStatus).toHaveBeenCalledWith("qt-exec", BATCH, undefined, expect.anything());
-  });
-
-  it("reads the approval's and the swap's own hashes when the wallet sent them apart", async () => {
-    const r = await run(execution(), handlersWith({ sendCalls: vi.fn(async () => [APPROVAL, SWAP]) })).result;
-    expect(r).toMatchObject({ approvalTxHash: APPROVAL, txHash: SWAP });
-    expect(r.feeTxHash).toBeUndefined();
-  });
-
-  it("puts approval.reset first", async () => {
-    const reset = { to: "0xUSDC", data: "0xreset", value: "0" };
-    const handlers = handlersWith();
-    await run(execution({ approval: { ...approval, reset } }), handlers).result;
-    expect(handlers.sendCalls).toHaveBeenCalledWith([{ ...reset, chainId: 8453 }, { ...approval, reset }, transaction]);
-  });
-
-  it("sends the swap alone when the caller's allowance read says no approval is needed", async () => {
-    const handlers = handlersWith({ hasAllowance: vi.fn(async () => true) });
-    const r = await run(execution(), handlers).result;
-    expect(handlers.sendCalls).not.toHaveBeenCalled();
-    expect(handlers.sendTransaction).toHaveBeenCalledOnce();
-    expect(r.txHash).toBe(SWAP);
-  });
-
-  it.each([
-    ["RAVN says they may not (batch: false)", { batch: false }],
-    ["an API answering without batch", { batch: undefined }],
-  ])("keeps the approval its own confirmed step when %s", async (_, over) => {
-    const handlers = handlersWith();
-    const r = await run(execution(over), handlers).result;
+  it("never calls sendCalls for an approval and a swap with no fee, even where batch is true", async () => {
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? APPROVAL : SWAP)),
+      waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+      sendCalls: vi.fn(async () => {
+        throw new Error("this wallet can't send atomic batches");
+      }),
+    };
+    const execution = { executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, calls: [approval, transaction], batch: true };
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success", venue: "kyberswap" }] }) });
+    const r = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
     expect(handlers.sendCalls).not.toHaveBeenCalled();
     expect(handlers.waitForReceipt).toHaveBeenCalledWith(APPROVAL, 8453);
     expect(r).toMatchObject({ approvalTxHash: APPROVAL, txHash: SWAP });
