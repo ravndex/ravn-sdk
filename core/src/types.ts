@@ -357,8 +357,8 @@ export interface StatusDTO {
 export type PriceDTO = Omit<AlternativeQuoteDTO, "quoteToken" | "pickable">;
 
 /** What getQuoteStream reports while the race runs. `venues`: the venues racing. `settled`: one
- * venue answered (`quotes` empty: nothing usable). `preview`: a price a venue (RAVN's own two-step
- * route) has found while it finishes; its next `preview` or its `settled` replaces it. The winner is
+ * venue answered (`quotes` empty: nothing usable). `preview`: an early price from a venue (RAVN's own
+ * multi-step route) before its `settled`; that venue's next `preview` or its `settled` replaces it. The winner is
  * picked once, at the end, net of gas: a venue that led here may not be it. */
 export type QuoteStreamEvent =
   | { type: "venues"; venueIds: string[] }
