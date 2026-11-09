@@ -3,6 +3,19 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.13
+
+Relay's routers run any calls for anyone, so an allowance to one could be taken by anyone. The check
+now accepts a Relay router only as the contract a swap calls (a coin sold through Relay), never as the
+contract your user's tokens are handed to. Relay never asks for that: a token sold is approved or
+authorized to its approval proxy or depository. No real swap changes.
+
+### Changed
+
+- An approval, a token permit, a Permit2 transfer, a USDC-style authorization (EIP-3009) or a deposit
+  that names one of Relay's routers is refused ("… hands the user's tokens to a router anyone can
+  call"), even if you list the router in `guard.allowContracts`.
+
 ## @ravnexchange/sdk 0.4.12
 
 Relay's v3.2 contracts. Relay has built its swaps with them since 25–26 Oct 2026, and every earlier

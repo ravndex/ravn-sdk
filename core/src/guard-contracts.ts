@@ -84,9 +84,23 @@ export const RAVN_FEE_WALLETS = {
   bitcoin: "bc1qe8px5j4l6sexjzgs7a4khwt9tmhrzfgf3nuzsa",
 };
 
+/**
+ * Relay's routers (v3 and v3.2, and Linea's own of each): they run any list of calls for anyone, so
+ * an allowance to one, or a signed transfer it can collect, is anyone's to take. Relay never asks for
+ * either (a token sold is approved or authorized to its approval proxy or depository; a coin sold is
+ * sent along), so these are transaction targets only: never a spender, a permit's spender, a token
+ * authorization's payee, or a deposit address.
+ */
+export const TARGET_ONLY: ReadonlySet<string> = new Set([
+  "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f",
+  "0x0729e2a4716d9f7dd17858d5d504426d228697f7",
+  "0x9ef6d3c2f60d7b9008d74cab1fc0f899c957c819",
+  "0x6328ea02d28131e58b28e55c6258258a30d90e05",
+]);
+
 // [chains, addresses, venue]: each address is accepted as a transaction target and a spender on those
-// chains. Permit2 and CoW's vault relayer are spenders only (signatureGatedSpenders): a transaction to
-// Permit2 could grant an allowance to anyone.
+// chains, but TARGET_ONLY's as targets only. Permit2 and CoW's vault relayer are spenders only
+// (signatureGatedSpenders): a transaction to Permit2 could grant an allowance to anyone.
 const ENTRIES: [readonly number[], readonly string[], string][] = [
   [NOT_ZKSYNC, ["0x0000000000001fF3684f28c67538d4D072C22734"], "0x AllowanceHolder"],
   [[ROBINHOOD, ETHEREUM, ARBITRUM, BASE, OPTIMISM, POLYGON, BNB, AVALANCHE, LINEA, UNICHAIN, HYPEREVM, MONAD, ARC], ["0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"], "KyberSwap"],
