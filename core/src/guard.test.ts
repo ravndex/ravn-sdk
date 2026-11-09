@@ -462,8 +462,8 @@ describe("checkExecution: FlowRouter's router", () => {
   });
 
   it("refuses anything else to the router: its Permit2 swap, a withdrawal", () => {
-    // swapPermit2, transferRouterFunds(address[],uint256[],address)
-    for (const sel of ["0x83bd37f9", "0xdeadbeef", "0x00000000"]) {
+    // swapPermit2(...), transferRouterFunds(address[],uint256[],address)
+    for (const sel of ["0x56fda29b", "0x174da621", "0xdeadbeef", "0x00000000"]) {
       const t = tampered(TOKEN, (d) => sel + d.slice(10));
       refuses(t.e, t.intent, /call to FlowRouter isn't a swap/);
     }
