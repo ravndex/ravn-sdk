@@ -1622,6 +1622,20 @@ describe("executeAndTrack: a failed approval stops the swap", () => {
     expect(getStatus).not.toHaveBeenCalled();
   });
 
+  it("keeps every hash when the wallet rejects with an Error that has no message", async () => {
+    const handlers = {
+      ...handlersWith(receipt(APPROVAL)),
+      sendTransaction: vi.fn(async (tx: { data?: string }) => {
+        if (tx.data === "0xapprove") return APPROVAL;
+        throw Object.assign(new Error(), { message: undefined });
+      }),
+    };
+    const failure = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction }, handlers).result.catch((e) => e);
+    expect(failure).toBeInstanceOf(ExecuteAndTrackError);
+    expect(failure.code).toBe("FAILED");
+    expect(failure.partial.approvalTxHash).toBe(APPROVAL);
+  });
+
   it("never sends the approval after its reset (approve to 0) failed", async () => {
     const handlers = handlersWith({ status: "reverted", transactionHash: RESET });
     const failure = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval: { ...approval, reset }, transaction }, handlers).result.catch((e) => e);

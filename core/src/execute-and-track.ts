@@ -755,7 +755,8 @@ export async function executeAndTrack(
       throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, stopCode, { ...partial }, stop.signal.reason);
     }
     if (!sent) throw err;
-    const why = (err instanceof Error ? err.message : String(err)).replace(/^executeAndTrack: /, "");
+    // String(): a wallet's Error can carry a message that isn't one, and this catch must never throw.
+    const why = String(err instanceof Error ? err.message : err).replace(/^executeAndTrack: /, "");
     throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, "FAILED", { ...partial }, err);
   } finally {
     clearTimeout(deadline);
