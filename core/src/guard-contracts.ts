@@ -8,7 +8,8 @@
  * GuardOptions.allowContracts covers the gap meanwhile. Arc (5042) added 2026-10-21 from the same kind of
  * sweep: 33 builds across Relay, Across, Eco, 0x Swap/Gasless, KyberSwap, Fly and OKX, plus Garden's /assets.
  * Route's RouteEntry (Robinhood) added 2026-10-25 from Route's own builds; Metric's SimpleRouter
- * (Robinhood) added 2026-10-25 from RAVN's own builds for it.
+ * (Robinhood) added 2026-10-25 from RAVN's own builds for it. Relay's v3.2 proxy and router added
+ * 2026-11-09 from Relay's own builds and /chains.
  */
 
 const ETHEREUM = 1;
@@ -90,12 +91,32 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [NOT_ZKSYNC, ["0x0000000000001fF3684f28c67538d4D072C22734"], "0x AllowanceHolder"],
   [[ROBINHOOD, ETHEREUM, ARBITRUM, BASE, OPTIMISM, POLYGON, BNB, AVALANCHE, LINEA, UNICHAIN, HYPEREVM, MONAD, ARC], ["0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"], "KyberSwap"],
   [[ETHEREUM, POLYGON, ARBITRUM, BASE, BNB, OPTIMISM, ROBINHOOD], ["0xBeb0009ACa35087ce7cCF11637E24dd1Aad3bf2A", "0xbbbbbBB520d69a9775E85b458C58c648259FAD5F"], "Bebop"],
+  // Relay: depository, then v3's approval proxy and router, then v3.2's (Relay's /chains, the ones
+  // it builds with since 2026-10-25/26: a token sold is approved to and sent through the proxy, a coin
+  // sold goes to the router). v3.2 checked 2026-11-09 on each chain here: the same router code, the
+  // same proxy code but for its chain id, and the same owner as v3's proxy.
   [
     ALL.filter((c) => c !== LINEA),
-    ["0x4cd00e387622c35bddb9b4c962c136462338bc31", "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f"],
+    [
+      "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+      "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be",
+      "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f",
+      "0x5567954cd026cebfe486062cb75848e0f1c12e58",
+      "0x0729e2a4716d9f7dd17858d5d504426d228697f7",
+    ],
     "Relay",
   ],
-  [[LINEA], ["0x59916da825d2d2ec1bf878d71c88826f6633ecca", "0x8754bc615047de01228a7527b712806a71a8dc9a", "0x9ef6d3c2f60d7b9008d74cab1fc0f899c957c819"], "Relay (Linea)"],
+  [
+    [LINEA],
+    [
+      "0x59916da825d2d2ec1bf878d71c88826f6633ecca",
+      "0x8754bc615047de01228a7527b712806a71a8dc9a",
+      "0x9ef6d3c2f60d7b9008d74cab1fc0f899c957c819",
+      "0xe4dfbd5e6784db1058124e2c87554c0591f0fb7b",
+      "0x6328ea02d28131e58b28e55c6258258a30d90e05",
+    ],
+    "Relay (Linea)",
+  ],
   [NOT_ZKSYNC.filter((c) => c !== ARC), ["0x97CCDBea4632140639aD5eA9b944aa034eb15fD4"], "Across periphery"],
   // Arc's is its own deployment: no code at 0x97CC… there; Across's Arc swap routes go through this one.
   [[ARC], ["0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c"], "Across periphery (Arc)"],
