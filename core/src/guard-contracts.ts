@@ -14,6 +14,8 @@
  * (checked against its other chains' before Relay listed Elysium). OKX's there added 2026-11-09 from
  * its /supported/chain and /swap: the approval contract's code and owner match OKX's on Arc and Base,
  * the router is OKX's HyperEVM one but for its own addresses, and 4/4 builds ran on Elysium.
+ * Nordstern's there added 2026-11-10 from its /chains: the same functions and constants as its guard on
+ * Base, rebuilt (a revert message's typo fixed), and its swaps there pay the wallet they name.
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
  * and RAVN's own builds for them. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
  * GET /v1/health and RAVN's own builds for it.
@@ -214,6 +216,7 @@ const NORDSTERN: Record<number, string> = {
   [WORLD_CHAIN]: "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d",
   [HYPEREVM]: "0x2fF506ed9729580EF8Bf04429614beB1baE5F76D",
   [MONAD]: "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d",
+  [ELYSIUM]: "0x6af335771d1DdF7dD1501eCC89e978455Fe5c6Dd",
 };
 
 // OKX's DEX router (tx.to) and token-approval contract, per chain (OKX's /swap, 2026-10-21).
