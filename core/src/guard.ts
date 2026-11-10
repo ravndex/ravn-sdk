@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -66,6 +66,8 @@ const SEL = {
   metricUnwrap: "0x49404b7c",
   /** Fynd's router, all with (amountIn, tokenIn, ...) first: splitSwap, sequentialSwap, singleSwap. */
   fyndSwaps: ["0xfe745a0f", "0x3c226834", "0x0c1a0ee7"],
+  /** FlowRouter swap((inputToken, inputAmount, outputToken, outputQuote, outputMin, outputReceiver), bytes, executor, referralCode). */
+  flowSwap: "0xd46cadbc",
 };
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
@@ -206,7 +208,7 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric or Fynd, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd or FlowRouter, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -331,6 +333,17 @@ function classifyEvmCall(
     pulled = wordUint(data, 0);
     const token = wordAddress(data, 1);
     if (token !== (ctx.native ? NATIVE_EVM : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+    if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
+  } else if (to === lower(FLOWROUTER)) {
+    // FlowRouter's swap, its only call RAVN routes through (not its Permit2 one): the token info leads the
+    // call inline, the coin as the zero address. The router pulls inputAmount of inputToken from the sender,
+    // or the sender's whole balance when it's 0, so 0 is refused and a standing allowance is held to the swap.
+    if (sel !== SEL.flowSwap) fail("The call to FlowRouter isn't a swap", { selector: sel });
+    const token = wordAddress(data, 0);
+    pulled = wordUint(data, 1);
+    if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
+    if (pulled === 0n) fail("The swap would take the whole balance", { amount: "0" });
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
     if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
   } else if (sel === SEL.allowanceHolderExec) {
@@ -585,7 +598,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's and Metric's amounts are read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's and FlowRouter's amounts are read; others aren't);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.
@@ -614,7 +627,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route, Metric or Fynd: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd or FlowRouter: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");

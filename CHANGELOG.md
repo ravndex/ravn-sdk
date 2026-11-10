@@ -3,6 +3,27 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.19
+
+FlowRouter (flowrouter.xyz) on Robinhood Chain. 0.3.0–0.4.18 refuse every FlowRouter swap: "The approval
+names a spender RAVN doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't
+route through" on an ETH sell or a token your user already approved. This release knows FlowRouter's
+router.
+
+### Added
+
+- FlowRouter's router (`0x8Ad6…fdF2`, Robinhood Chain only) in the check (`checkExecution`): the
+  contract a FlowRouter swap calls and the spender its approval names.
+- A FlowRouter swap must take the token being swapped (the zero address for an ETH sell, with exactly
+  the ETH sent), more than 0 and at most the swap's amount, in its one swap call: the router pulls what
+  its call says, and reads 0 as the sender's whole balance. Anything else to the router is refused.
+- The API's types list `"flowrouter"` in `onlyVenues`/`excludeVenues` and Elysium (99901) in the
+  quote's chains.
+
+### Upgrading
+
+- Nothing to change. Update to get FlowRouter's Robinhood prices once RAVN switches it on.
+
 ## @ravnexchange/sdk 0.4.18
 
 OKX on Elysium (99901). 0.4.14–0.4.17 refuse OKX's swaps there: "The approval names a spender RAVN
