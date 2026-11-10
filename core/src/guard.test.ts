@@ -153,7 +153,7 @@ describe("checkExecution: EVM transactions", () => {
   });
 
   // Each with code on Elysium (2026-11-09): 0x's own Elysium config names its AllowanceHolder, KyberSwap's
-  // live quote its router, OKX's /swap its pair; Relay's match its other chains'. No whole-family entry
+  // live quote its router, OKX's /swap its pair, Nordstern's /chains its guard; Relay's match its other chains'. No whole-family entry
   // reaches it by default.
   it("accepts exactly the venue contracts RAVN routes through on Elysium", () => {
     expect([...KNOWN_CONTRACTS[99901]].sort()).toEqual(
@@ -167,6 +167,7 @@ describe("checkExecution: EVM transactions", () => {
         "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay router (v3.2), a target only
         "0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", // OKX router
         "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA", // OKX approvals
+        "0x6af335771d1DdF7dD1501eCC89e978455Fe5c6Dd", // Nordstern's guard
       ].map((a) => a.toLowerCase()).sort()
     );
     expect(separateSpender(99901, "0x91ab9c4b07f479d48b60aefe8f7e31b3760c88c1")).toBe("0xa32f4ec37de04accbb6303bc6f8c7056ed1cfefa");
@@ -197,6 +198,20 @@ describe("checkExecution: EVM transactions", () => {
     expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
     const arcPair = onElysium("0x4E3bcCE28cAf98A143Fd8BD9e4875ccAb3E7bBE0", "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af");
     expect(() => checkExecution(arcPair.execution, arcPair.intent)).toThrow(UnsafeExecutionError);
+  });
+
+  it("passes a Nordstern swap on Elysium through its own guard, and refuses HyperEVM's guard there", () => {
+    // A real HyperEVM Nordstern build moved to Elysium, its guard swapped for Elysium's.
+    const onElysium = (guard: string) =>
+      JSON.parse(
+        JSON.stringify(fixture("999 token->native nordstern"))
+          .replaceAll('hainId":999', 'hainId":99901')
+          .replace(/(0x)?2ff506ed9729580ef8bf04429614beb1bae5f76d/gi, (_m, p) => (p ? guard : guard.slice(2).toLowerCase()))
+      ) as ReturnType<typeof fixture>;
+    const ok = onElysium("0x6af335771d1DdF7dD1501eCC89e978455Fe5c6Dd");
+    expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
+    const hyperEvmGuard = onElysium("0x2fF506ed9729580EF8Bf04429614beB1baE5F76D");
+    expect(() => checkExecution(hyperEvmGuard.execution, hyperEvmGuard.intent)).toThrow(UnsafeExecutionError);
   });
 
   it("accepts RAVN's coin fee on Elysium only as WHYPE minted to its wallet", () => {
