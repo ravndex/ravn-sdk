@@ -145,6 +145,26 @@ export interface GetQuoteParams {
    * transaction first: a TRANSACTION execution carrying `submit` must go through
    * submitTransaction. executeAndTrack does this when given signSolanaTransaction. */
   broadcastViaRavn?: boolean;
+  /** End the swap with a call into a contract on the output chain (a vault, perps or privacy-pool
+   * deposit) instead of paying outputToken to destinationAddress. Only a contract and function RAVN
+   * has registered on your key; Relay and Across only. See ContractCall and the API's `call`. */
+  call?: ContractCall;
+}
+
+/** GetQuoteParams.call. The venue's contract makes the call, not your user: `data` must name your user
+ * as the owner of whatever it creates. */
+export interface ContractCall {
+  /** The contract to call, on the output chain. */
+  target: string;
+  /** Calldata, selector included. */
+  data: string;
+  /** Byte offset in `data` (selector included) where the amount goes as a uint256: 4 for
+   * deposit(uint256 assets, address receiver). Needed unless exactAmount is set. */
+  amountAt?: number;
+  /** Spend exactly this much of outputToken (base units): no quote unless the venue guarantees it. */
+  exactAmount?: string;
+  /** Where what the call doesn't spend goes. Default destinationAddress, else userAddress. */
+  leftoverTo?: string;
 }
 
 export interface ExecuteParams {
