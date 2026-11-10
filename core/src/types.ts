@@ -161,7 +161,8 @@ export interface ContractCall {
   /** Byte offset in `data` (selector included) where the amount goes as a uint256: 4 for
    * deposit(uint256 assets, address receiver). Needed unless exactAmount is set. */
   amountAt?: number;
-  /** Spend exactly this much of outputToken (base units): no quote unless the venue guarantees it. */
+  /** Spend exactly this much of outputToken (base units): no quote unless the venue guarantees it.
+   * Without amountAt, `data` must already hold this amount. */
   exactAmount?: string;
   /** Where what the call doesn't spend goes. Default destinationAddress, else userAddress. */
   leftoverTo?: string;
