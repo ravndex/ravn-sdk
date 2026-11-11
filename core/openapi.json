@@ -248,7 +248,7 @@
           },
           "expectedOutputAmount": {
             "type": "string",
-            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `output.amount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself."
+            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `output.amount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself (on a call with `exactAmount`, on `inputAmount`)."
           },
           "fee": {
             "type": "object",
@@ -398,7 +398,7 @@
           },
           "pickable": {
             "type": "boolean",
-            "description": "Whether RAVN could have picked this route: `false` for a preview-only price, or for a route with no minimum quoting more than 1% above every route that holds one. To pick a route yourself, choose among `pickable` ones on `expectedOutputAmount`."
+            "description": "Whether RAVN could have picked this route: `false` for a preview-only price, or for a route with no minimum quoting more than 1% above every route that holds one. To pick a route yourself, choose among `pickable` ones on `expectedOutputAmount` (on a call with `exactAmount`, on `inputAmount`)."
           },
           "inputAmount": {
             "type": "string",
@@ -409,7 +409,7 @@
           },
           "expectedOutputAmount": {
             "type": "string",
-            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself."
+            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself (on a call with `exactAmount`, on `inputAmount`)."
           },
           "fee": {
             "type": "object",
@@ -502,7 +502,7 @@
           },
           "expectedOutputAmount": {
             "type": "string",
-            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself."
+            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself (on a call with `exactAmount`, on `inputAmount`)."
           },
           "fee": {
             "type": "object",
@@ -1503,7 +1503,7 @@
                     "type": "boolean"
                   },
                   "call": {
-                    "description": "End the swap with a call into a contract on the output chain — a vault deposit, a perps or privacy-pool deposit — instead of paying outputToken to destinationAddress. outputToken (an ERC-20 on an EVM chain) is what the call receives, and outputAmount is how much: with exactAmount, exactly that, and your user sends only what the venue needs for it (input.amount, at most inputAmount; from another chain nothing comes back, on the same chain a swap's small surplus goes to leftoverTo); without it, what the venue guarantees to deliver from inputAmount after its own costs. The venue runs, in order: approve target for the amount, call target with data (the amount written as a uint256 at byte amountAt, the 4-byte selector included — 4 for deposit(uint256 assets, address receiver)), set the approval back to 0, and send anything unspent to leftoverTo (default destinationAddress, else userAddress). The call is made by the venue's contract (Relay's router, Across's handler), not your user, so data must name your user as the owner of whatever it creates: anything credited to the caller can be taken by the next one. Every call fails or succeeds with the fill: if it reverts, the venue refunds the input on the input chain, or (Relay) may pay outputToken to destinationAddress, else userAddress, on the output chain instead. leftoverTo may not be the target or a venue's shared contract. Only contracts RAVN has registered on your key may be called (target and function selector, per chain); ask RAVN to register one. Before quoting, RAVN checks the venue's order or message runs exactly these calls, runs the fill against the chain, and returns no quote unless it succeeds and leaves the venue's contracts holding none of the token, none of the target's shares and no approval. Races Relay and Across only (EVM or Solana input, Across from EVM chains; from Solana, set destinationAddress to your user's EVM address); not from Bitcoin yet. With exactAmount, the route that needs the least input wins, gas included; each alternative shows its own inputAmount. A call quote can't be re-priced at /v1/execute after it expires: quote again.",
+                    "description": "End the swap with a call into a contract on the output chain — a vault deposit, a perps or privacy-pool deposit — instead of paying outputToken to destinationAddress. outputToken (an ERC-20 on an EVM chain) is what the call receives, and outputAmount is how much: with exactAmount, exactly that, and your user sends only what the venue needs for it (input.amount, at most inputAmount; from another chain nothing or about 1 bp comes back to leftoverTo, on the same chain a swap's small surplus); without it, what the venue guarantees to deliver from inputAmount after its own costs. The venue runs, in order: approve target for the amount, call target with data (the amount written as a uint256 at byte amountAt, the 4-byte selector included — 4 for deposit(uint256 assets, address receiver)), set the approval back to 0, and send anything unspent to leftoverTo (default destinationAddress, else userAddress). The call is made by the venue's contract (Relay's router, Across's handler), not your user, so data must name your user as the owner of whatever it creates: anything credited to the caller can be taken by the next one. Every call fails or succeeds with the fill: if it reverts, the venue refunds the input on the input chain, or (Relay) may pay outputToken to destinationAddress, else userAddress, on the output chain instead. leftoverTo may not be the target or a venue's shared contract. Only contracts RAVN has registered on your key may be called (target and function selector, per chain); ask RAVN to register one. Before quoting, RAVN checks the venue's order or message runs exactly these calls, runs the fill against the chain, and returns no quote unless it succeeds and leaves the venue's contracts holding none of the token, none of the target's shares and no approval. Races Relay and Across only (EVM or Solana input, Across from EVM chains; from Solana, set destinationAddress to your user's EVM address); not from Bitcoin yet. With exactAmount, the route that needs the least input wins, gas included; each alternative shows its own inputAmount. A call quote can't be re-priced at /v1/execute after it expires: quote again.",
                     "type": "object",
                     "properties": {
                       "target": {
@@ -2887,7 +2887,7 @@
                   },
                   "inputAmount": {
                     "type": "string",
-                    "description": "Positive integer string, in the input token's smallest unit. With call.exactAmount, the most your user sends: the quote's input.amount is what they send"
+                    "description": "Positive integer string, in the input token's smallest unit"
                   },
                   "userAddress": {
                     "type": "string",
