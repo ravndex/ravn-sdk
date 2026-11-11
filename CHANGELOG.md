@@ -3,6 +3,22 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.21
+
+Calls after the swap: `getQuote({ ..., call })` ends the swap with a call into a contract on the
+output chain, such as a vault deposit for your user, instead of paying the output token to an address.
+Only a contract and function RAVN has registered on your key; Relay and Across race it.
+
+### Added
+
+- `GetQuoteParams.call` and the `ContractCall` type: `target`, `data`, `amountAt`, `exactAmount`,
+  `leftoverTo`.
+- The generated types follow RAVN's API of 2026-11-10.
+
+### Upgrading
+
+- Nothing to change.
+
 ## @ravnexchange/sdk 0.4.20
 
 Nordstern on Elysium (99901). 0.4.14–0.4.19 refuse Nordstern's swaps there: "The approval names a
