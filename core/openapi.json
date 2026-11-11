@@ -402,7 +402,7 @@
           },
           "inputAmount": {
             "type": "string",
-            "description": "What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs."
+            "description": "What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs (every route delivers the same there: compare routes on this)."
           },
           "outputAmount": {
             "type": "string"
@@ -495,7 +495,7 @@
           },
           "inputAmount": {
             "type": "string",
-            "description": "What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs."
+            "description": "What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs (every route delivers the same there: compare routes on this)."
           },
           "outputAmount": {
             "type": "string"

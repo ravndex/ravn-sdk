@@ -359,7 +359,7 @@ export interface components {
             quoteToken: string;
             /** @description Whether RAVN could have picked this route: `false` for a preview-only price, or for a route with no minimum quoting more than 1% above every route that holds one. To pick a route yourself, choose among `pickable` ones on `expectedOutputAmount`. */
             pickable: boolean;
-            /** @description What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs. */
+            /** @description What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs (every route delivers the same there: compare routes on this). */
             inputAmount: string;
             outputAmount: string;
             /** @description What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself. */
@@ -384,7 +384,7 @@ export interface components {
         PriceDTO: {
             venue: components["schemas"]["VenueDTO"];
             routeType: string;
-            /** @description What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs. */
+            /** @description What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs (every route delivers the same there: compare routes on this). */
             inputAmount: string;
             outputAmount: string;
             /** @description What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself. */
