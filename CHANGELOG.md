@@ -3,6 +3,20 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.22
+
+With `call.exactAmount`, your user sends only what the amount takes: `inputAmount` is the most they
+send, and the quote's `input.amount` what they send.
+
+### Added
+
+- `inputAmount` on each alternative and streamed price.
+- The generated types follow RAVN's API of 2026-11-11.
+
+### Upgrading
+
+- Nothing to change. Show your user `input.amount`, not `inputAmount`, on a call with `exactAmount`.
+
 ## @ravnexchange/sdk 0.4.21
 
 Calls after the swap: `getQuote({ ..., call })` ends the swap with a call into a contract on the
