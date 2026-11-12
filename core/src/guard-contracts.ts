@@ -16,6 +16,8 @@
  * the router is OKX's HyperEVM one but for its own addresses, and 4/4 builds ran on Elysium.
  * Nordstern's there added 2026-11-10 from its /chains: the same functions and constants as its guard on
  * Base, rebuilt (a revert message's typo fixed), and its swaps there pay the wallet they name.
+ * Fly's there added 2026-11-12 once Fly listed Elysium: its builds there call the same address, whose
+ * code is byte-for-byte its contract's on Base and HyperEVM, and they ran on Elysium paying what they quoted.
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
  * and RAVN's own builds for them. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
  * GET /v1/health and RAVN's own builds for it.
@@ -173,7 +175,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [NOT_ZKSYNC.filter((c) => c !== ARC), ["0x337685fdaB40D39bd02028545a4FfA7D287cC3E2"], "Mayan forwarder"],
   [NOT_ZKSYNC, ["0xEC000769a73b70e16f361a442292500b3BCf4A85"], "Eco portal"],
   [ALL, ["0xe226e4825cb215abafad98fdd400583eab6a594f"], "Layerswap depository"],
-  [NOT_ZKSYNC, ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
+  [[...NOT_ZKSYNC, ELYSIUM], ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
   [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
   [[ROBINHOOD], [METRIC_ROUTER], "Metric SimpleRouter"],

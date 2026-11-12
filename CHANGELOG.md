@@ -3,6 +3,20 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.23
+
+Fly Trade on Elysium (99901). 0.4.14–0.4.22 refuse Fly's swaps there: "The approval names a spender
+RAVN doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route through"
+on a HYPE sell.
+
+### Added
+
+- Fly Trade's contract on Elysium in the check (`checkExecution`).
+
+### Upgrading
+
+- Nothing to change.
+
 ## @ravnexchange/sdk 0.4.22
 
 With `call.exactAmount`, your user sends only what the amount takes: `inputAmount` is the most they
