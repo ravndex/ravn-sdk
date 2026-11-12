@@ -67,7 +67,7 @@ function envelopeData<T>(body: Envelope<T>, ok: boolean, status?: number): T {
 const DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1";
 
 /** This package's version, as in its package.json (client.test.ts fails when they differ). */
-export const SDK_VERSION = "0.4.22";
+export const SDK_VERSION = "0.4.23";
 
 export class RavnClient {
   private readonly apiKey?: string;
