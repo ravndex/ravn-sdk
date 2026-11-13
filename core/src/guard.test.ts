@@ -15,6 +15,8 @@ import type { ExecutionDTO } from "./types";
 // Relay's three "v3.2" (2026-11-09): Relay's own builds through its v3.2 contracts, in /v1/execute's shape.
 // Fynd's six (2026-11-06): RAVN's own builds, from a local server with Fynd switched on.
 // FlowRouter's three (2026-11-09): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign.
+// Khalani's one (2026-11-13): Khalani's own build of a real, unfunded order, in /v1/execute's shape, as Khalani
+// isn't in RAVN's race yet.
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -490,6 +492,56 @@ describe("checkExecution: FlowRouter's router", () => {
     for (const sel of ["0x56fda29b", "0x174da621", "0xdeadbeef", "0x00000000"]) {
       const t = tampered(TOKEN, (d) => sel + d.slice(10));
       refuses(t.e, t.intent, /call to FlowRouter isn't a swap/);
+    }
+  });
+});
+
+describe("checkExecution: Khalani's deposit", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const DEPOSIT = "0xb280c373f57c9169e009a66496ee556084afad24";
+  const NAME = "42161->8453 usdc khalani (Khalani's own build)";
+  // Word i after the selector; the payload Khalani signed starts at word 5 (after its length, word 4).
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tampered = (edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(NAME);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    const call = e.calls!.find((c) => c.to.toLowerCase() === DEPOSIT)!;
+    call.data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = call.value = value;
+    return { e, intent };
+  };
+
+  it("passes Khalani's own build, and knows its deposit contracts on its five chains only", () => {
+    const { execution, intent } = fixture(NAME);
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const chains = (address: string) => Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(address.toLowerCase()));
+    expect(chains(DEPOSIT)).toEqual(["42161"]);
+    expect(chains("0xbC60926963dC61F21B10801F90E5BF177279866D")).toEqual(["4663"]);
+  });
+
+  it("holds the deposit to the token and amount being swapped", () => {
+    let t = tampered((d) => setWord(d, 1, word(10_000_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered((d) => setWord(d, 1, word(0n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered((d) => setWord(d, 0, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+  });
+
+  it("refuses a deposit paying out anywhere but the destination, or refunding anyone but the signer", () => {
+    let t = tampered((d) => setWord(d, 5 + 3, word(ATTACKER)));
+    refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
+    t = tampered((d) => setWord(d, 5 + 4, word(ATTACKER)));
+    refuses(t.e, t.intent, /refunds an address other than the wallet that signs/);
+  });
+
+  it("refuses a coin sent with it, and any other call to the contract", () => {
+    let t = tampered((d) => d, "1");
+    refuses(t.e, t.intent, /sends the native coin too/);
+    for (const sel of ["0xdeadbeef", "0xa9059cbb", "0x00000000"]) {
+      t = tampered((d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to Khalani isn't a deposit/);
     }
   });
 });
