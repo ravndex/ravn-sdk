@@ -77,7 +77,8 @@
           "routefun",
           "metric",
           "fynd",
-          "flowrouter"
+          "flowrouter",
+          "khalani"
         ]
       },
       "ErrorCode": {
@@ -1434,7 +1435,8 @@
                         "routefun",
                         "metric",
                         "fynd",
-                        "flowrouter"
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },
@@ -1471,7 +1473,8 @@
                         "routefun",
                         "metric",
                         "fynd",
-                        "flowrouter"
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },
@@ -2951,7 +2954,8 @@
                         "routefun",
                         "metric",
                         "fynd",
-                        "flowrouter"
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },
@@ -2988,7 +2992,8 @@
                         "routefun",
                         "metric",
                         "fynd",
-                        "flowrouter"
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },

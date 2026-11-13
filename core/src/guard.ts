@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
 import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -68,6 +68,8 @@ const SEL = {
   fyndSwaps: ["0xfe745a0f", "0x3c226834", "0x0c1a0ee7"],
   /** FlowRouter swap((inputToken, inputAmount, outputToken, outputQuote, outputMin, outputReceiver), bytes, executor, referralCode). */
   flowSwap: "0xd46cadbc",
+  /** Khalani deposit(address token, uint256 amount, bytes payload, uint256 gas). */
+  khalaniDeposit: "0xf3125a1f",
 };
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
@@ -208,7 +210,7 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd or FlowRouter, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter or Khalani, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -346,6 +348,21 @@ function classifyEvmCall(
     if (pulled === 0n) fail("The swap would take the whole balance", { amount: "0" });
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
     if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
+  } else if (to === lower(KHALANI_DEPOSITS[ctx.chainId])) {
+    // Khalani's deposit, its only call RAVN routes through: the contract pulls `amount` of `token` from the
+    // sender, and the payload Khalani signed names who is paid (its word 3) and refunded (word 4). A token only
+    // (RAVN routes no coin through Khalani): the swap's, within its amount, paying the swap's destination and
+    // refunding the wallet that signs.
+    if (sel !== SEL.khalaniDeposit) fail("The call to Khalani isn't a deposit", { selector: sel });
+    if (ctx.native) fail("A Khalani deposit was built for a coin sell");
+    const token = wordAddress(data, 0);
+    pulled = wordUint(data, 1);
+    if (token !== ctx.token) fail("The deposit takes a token other than the one being swapped", { token });
+    if (pulled === 0n || pulled > ctx.amount) fail("The deposit takes more than the swap's amount", { amount: pulled.toString() });
+    const payload = offsetAt(data, 2, 0);
+    if (wordUint(data, payload) < 10n * 32n) fail("The Khalani deposit's terms are cut short");
+    if (wordAddress(data, payload + 1 + 3) !== ctx.destination) fail("The Khalani deposit pays out to an address other than the swap's destination", { to: wordAddress(data, payload + 1 + 3) });
+    if (wordAddress(data, payload + 1 + 4) !== ctx.user) fail("The Khalani deposit refunds an address other than the wallet that signs", { to: wordAddress(data, payload + 1 + 4) });
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.
@@ -598,7 +615,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's and FlowRouter's amounts are read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's and Khalani's amounts are read; others aren't);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.
@@ -627,7 +644,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd or FlowRouter: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter or Khalani: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");

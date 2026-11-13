@@ -20,7 +20,8 @@
  * code is byte-for-byte its contract's on Base and HyperEVM, and they ran on Elysium paying what they quoted.
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
  * and RAVN's own builds for them. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
- * GET /v1/health and RAVN's own builds for it.
+ * GET /v1/health and RAVN's own builds for it. Khalani's deposit contracts (Ethereum, Arbitrum, Base, Polygon,
+ * Robinhood) added 2026-11-13 from its orders' deposit steps, confirmed by Khalani.
  */
 
 const ETHEREUM = 1;
@@ -111,6 +112,16 @@ export const FYND_ROUTERS: Record<number, string> = {
  * upgradeable. The guard reads the token and amount its swap pulls. */
 export const FLOWROUTER = "0x8Ad60fAE44DD6aaFD8A98B7f25EaD026013efdF2";
 
+/** Khalani's deposit contract per chain: every Khalani order is funded by one deposit call to it, which its
+ * approval names. The guard reads the token and amount it pulls and the payout and refund Khalani signed into it. */
+export const KHALANI_DEPOSITS: Record<number, string> = {
+  [ETHEREUM]: "0x4bACc118f9CEe2f6e9b52AAb317F8b5aaf2503F5",
+  [ARBITRUM]: "0xb280C373F57c9169e009a66496EE556084afAd24",
+  [BASE]: "0x1A7c327d0f402AEf2eD3D20D1141bD71BA1C317B",
+  [POLYGON]: "0x57F1DE920c6F9b749EDB729b43b0FF1878AbeF97",
+  [ROBINHOOD]: "0xbC60926963dC61F21B10801F90E5BF177279866D",
+};
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -181,6 +192,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [[ROBINHOOD], [METRIC_ROUTER], "Metric SimpleRouter"],
   [[ROBINHOOD], [FLOWROUTER], "FlowRouter router"],
   ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
+  ...Object.entries(KHALANI_DEPOSITS).map(([chain, deposit]): [readonly number[], readonly string[], string] => [[Number(chain)], [deposit], "Khalani deposit"]),
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).

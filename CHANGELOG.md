@@ -3,6 +3,21 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.24
+
+Khalani, cross-chain stablecoin orders on Ethereum, Arbitrum, Base, Polygon and Robinhood Chain. 0.4.23 and
+older refuse its swaps: "The approval names a spender RAVN doesn't route through".
+
+### Added
+
+- Khalani's deposit contracts in the check (`checkExecution`), with its deposit read: the token and amount it
+  takes, the payout (the swap's destination) and the refund (the wallet that signs).
+- "khalani" in the generated types' venue lists.
+
+### Upgrading
+
+- Nothing to change.
+
 ## @ravnexchange/sdk 0.4.23
 
 Fly Trade on Elysium (99901). 0.4.14–0.4.22 refuse Fly's swaps there: "The approval names a spender
