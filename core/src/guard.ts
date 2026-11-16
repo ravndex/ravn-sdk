@@ -1,8 +1,8 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CHAINFLIP_VAULTS, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
-import { checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
+import { base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
 /**
  * What your user asked to swap, from your own code, never from RAVN's answer: the guard holds
@@ -70,6 +70,10 @@ const SEL = {
   flowSwap: "0xd46cadbc",
   /** Khalani deposit(address token, uint256 amount, bytes payload, uint256 gas). */
   khalaniDeposit: "0xf3125a1f",
+  /** Chainflip xSwapNative(uint32 dstChain, bytes dstAddress, uint32 dstToken, bytes cfParameters), payable. */
+  cfSwapNative: "0xdd687345",
+  /** Chainflip xSwapToken(uint32 dstChain, bytes dstAddress, uint32 dstToken, address srcToken, uint256 amount, bytes cfParameters). */
+  cfSwapToken: "0x04fc7da0",
 };
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
@@ -96,6 +100,39 @@ const wordAddress = (data: string, i: number): string => {
   return `0x${w.slice(24)}`.toLowerCase();
 };
 const wordUint = (data: string, i: number): bigint => BigInt(`0x${word(data, i)}`);
+/**
+ * A `bytes` argument at word `i`, as lowercase hex without 0x. Its own length word is read from the offset,
+ * and the bytes must lie inside the calldata — a length pointing past the end is calldata the signer cannot
+ * see, so it fails rather than reading zeros.
+ */
+const wordBytes = (data: string, i: number): string => {
+  const at = offsetAt(data, i, 0);
+  const length = Number(wordUint(data, at));
+  const start = 10 + 64 * (at + 1);
+  const hex = data.slice(start, start + length * 2);
+  if (hex.length !== length * 2) {
+    fail("Calldata's bytes argument runs past the end of the call", { data: data.slice(0, 10) });
+  }
+  return hex;
+};
+
+/**
+ * Whether Chainflip's `dstAddress` bytes name the swap's destination. Chainflip carries each chain's address
+ * in its own form (`state-chain/chains/src/address.rs`): an EVM payout as its 20 raw bytes, a Solana payout as
+ * its 32 raw bytes, a Bitcoin payout as the address text. Which form to read is decided by the destination
+ * RAVN quoted, never by the length of what the call happens to carry — the payload is the tampered side.
+ * EVM addresses compare in any case, the others exactly, as `sameAddress` does elsewhere here.
+ */
+const cfPaysDestination = (payout: string, ctx: Ctx): boolean => {
+  if (!ctx.destination) return false;
+  if (/^0x[0-9a-f]{40}$/.test(ctx.destination)) return `0x${payout}` === ctx.destination;
+  const solana = base58Decode32(ctx.destinationRaw);
+  if (solana) return payout === Array.from(solana, (b) => b.toString(16).padStart(2, "0")).join("");
+  let text = "";
+  for (let i = 0; i + 1 < payout.length; i += 2) text += String.fromCharCode(parseInt(payout.slice(i, i + 2), 16));
+  return text === ctx.destinationRaw;
+};
+
 // An ABI offset at word i, as a word count from `from` (the start of the enclosing tuple or array).
 const offsetAt = (data: string, i: number, from: number): number => {
   const offset = wordUint(data, i);
@@ -143,6 +180,8 @@ interface Ctx {
   feeCap: bigint;
   user: string;
   destination: string;
+  /** The destination as the integrator gave it: Bitcoin and Solana addresses are case-sensitive. */
+  destinationRaw: string;
   known: Set<string>;
   /** Permit2 and CoW's vault relayer: may be approved beyond the amount (see signatureGatedSpenders). */
   gated: Set<string>;
@@ -180,6 +219,7 @@ function context(intent: SwapIntent, options: GuardOptions): Ctx {
     feeCap: (amount * MAX_FEE_BPS) / 10_000n,
     user: lower(intent.userAddress),
     destination: lower(intent.destinationAddress ?? intent.userAddress),
+    destinationRaw: intent.destinationAddress ?? intent.userAddress,
     known,
     gated: signatureGatedSpenders(chainId),
   };
@@ -363,6 +403,43 @@ function classifyEvmCall(
     if (wordUint(data, payload) < 10n * 32n) fail("The Khalani deposit's terms are cut short");
     if (wordAddress(data, payload + 1 + 3) !== ctx.destination) fail("The Khalani deposit pays out to an address other than the swap's destination", { to: wordAddress(data, payload + 1 + 3) });
     if (wordAddress(data, payload + 1 + 4) !== ctx.user) fail("The Khalani deposit refunds an address other than the wallet that signs", { to: wordAddress(data, payload + 1 + 4) });
+  } else if (to === lower(CHAINFLIP_VAULTS[ctx.chainId])) {
+    // Chainflip's Vault, its only calls RAVN routes through: xSwapNative hands it the coin being sold, or
+    // xSwapToken pulls the token its approval names. The Vault takes the funds and emits the swap for
+    // Chainflip's validators; the protocol then pays out, or refunds, from its own side. Nothing of the user's
+    // stays claimable here (no balance, no allowance), so what the signer needs held is that it takes no more
+    // than the swap, that Chainflip will pay the swap's destination, and that a swap which never fills comes
+    // back to the wallet that signed it.
+    if (sel === SEL.cfSwapNative) {
+      if (!ctx.native) fail("A Chainflip vault swap of the coin was built for a token sell");
+      if (value === 0n) fail("The swap sends none of the coin being swapped");
+      if (value > ctx.amount) fail("The swap sends more than the swap's amount", { value: value.toString() });
+    } else if (sel === SEL.cfSwapToken) {
+      if (ctx.native) fail("A Chainflip vault swap of a token was built for a coin sell");
+      const token = wordAddress(data, 3);
+      pulled = wordUint(data, 4);
+      if (token !== ctx.token) fail("The swap takes a token other than the one being swapped", { token });
+      if (pulled === 0n) fail("The swap takes none of the token being swapped");
+      if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+    } else {
+      fail("The call to Chainflip isn't a vault swap", { selector: sel });
+    }
+    if (!cfPaysDestination(wordBytes(data, 1), ctx)) {
+      fail("The Chainflip swap pays out to an address other than the swap's destination");
+    }
+    // cfParameters carries the terms Chainflip settles by, and one of them decides where the money goes when
+    // the swap does NOT fill: it retries at min_price for retry_duration blocks, then refunds to
+    // refund_address. Holding the payout alone would buy nothing — a tampered call can quote the payout
+    // honestly, name a price that can never fill, and take the whole amount down the refund path instead. So
+    // the refund is held to the wallet that signs, as Khalani's is. V1's layout (SCALE, VersionedCfParameters):
+    // version(1) | retry_duration u32(4) | refund_address(20) | min_price(32) | … The version byte is pinned,
+    // so a layout RAVN hasn't read is refused rather than read at the wrong offsets.
+    const terms = wordBytes(data, sel === SEL.cfSwapNative ? 3 : 5);
+    if (terms.length < 50) fail("The Chainflip swap's terms are cut short");
+    if (terms.slice(0, 2) !== "01") fail("The Chainflip swap's terms aren't a version RAVN reads", { version: terms.slice(0, 2) });
+    if (`0x${terms.slice(10, 50)}` !== ctx.user) {
+      fail("The Chainflip swap refunds an address other than the wallet that signs", { to: `0x${terms.slice(10, 50)}` });
+    }
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.

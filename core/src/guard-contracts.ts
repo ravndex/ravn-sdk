@@ -21,7 +21,11 @@
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
  * and RAVN's own builds for them. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
  * GET /v1/health and RAVN's own builds for it. Khalani's deposit contracts (Ethereum, Arbitrum, Base, Polygon,
- * Robinhood) added 2026-11-13 from its orders' deposit steps, confirmed by Khalani.
+ * Robinhood) added 2026-11-13 from its orders' deposit steps, confirmed by Khalani. Chainflip's Vault
+ * (Ethereum, Arbitrum) added 2026-11-16 from Chainflip's own `encodeVaultSwapData`, matching its mainnet
+ * chain spec (chainflip-backend berghain.rs `eth_vault_address` / `arb_vault_address`) and its deployed
+ * Vault.sol. Note the same Arbitrum address is Chainflip's BSC Vault: a BNB-origin Chainflip swap would
+ * need its own entry here, and is refused until it has one.
  */
 
 const ETHEREUM = 1;
@@ -122,6 +126,17 @@ export const KHALANI_DEPOSITS: Record<number, string> = {
   [ROBINHOOD]: "0xbC60926963dC61F21B10801F90E5BF177279866D",
 };
 
+/**
+ * Chainflip's Vault per chain. An EVM-origin Chainflip swap is one call to it: `xSwapNative` carrying the
+ * coin, or `xSwapToken` pulling the token its approval names. The Vault takes the funds and emits the swap
+ * for Chainflip's validators to witness; it holds nothing of the user's afterwards. The guard reads the
+ * amount it takes and the destination Chainflip will pay.
+ */
+export const CHAINFLIP_VAULTS: Record<number, string> = {
+  [ETHEREUM]: "0xF5e10380213880111522dd0efD3dbb45b9f62Bcc",
+  [ARBITRUM]: "0x79001a5e762f3bEFC8e5871b42F6734e00498920",
+};
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -193,6 +208,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [[ROBINHOOD], [FLOWROUTER], "FlowRouter router"],
   ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
   ...Object.entries(KHALANI_DEPOSITS).map(([chain, deposit]): [readonly number[], readonly string[], string] => [[Number(chain)], [deposit], "Khalani deposit"]),
+  ...Object.entries(CHAINFLIP_VAULTS).map(([chain, vault]): [readonly number[], readonly string[], string] => [[Number(chain)], [vault], "Chainflip Vault"]),
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).

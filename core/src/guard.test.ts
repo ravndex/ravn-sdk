@@ -1096,3 +1096,113 @@ describe("RavnClient: a flood of alternatives can't make it forget a quote", () 
     await expect(client.execute({ quoteToken: "j0_1000" })).rejects.toThrow(/didn't fetch it/);
   });
 });
+
+describe("checkExecution: Chainflip's vault swap", () => {
+  const COIN = "1->bitcoin eth chainflip vault (Chainflip's own encoding)";
+  const TOKEN = "1->bitcoin usdc chainflip vault (Chainflip's own encoding)";
+  // The destination rides as the address text, so its own hex is what a tamper edits.
+  const DEST_HEX = Buffer.from("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "utf8").toString("hex");
+
+  const edited = (name: string, edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(name);
+    const tx = (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).transaction!;
+    tx.data = edit(tx.data!);
+    if (value !== undefined) tx.value = value;
+    const calls = (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).calls;
+    if (calls) calls[calls.length - 1] = { ...calls[calls.length - 1], data: tx.data!, value: tx.value ?? "0" };
+    return { e: execution, intent };
+  };
+
+  const EVM_DEST = "1->42161 eth chainflip vault, evm destination (Chainflip's own encoding)";
+
+  it("accepts an EVM destination, which rides as 20 raw bytes rather than text", () => {
+    const { execution, intent } = fixture(EVM_DEST);
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    // And it is really the destination being read: flip its last byte.
+    const t = edited(EVM_DEST, (d) => {
+      const dest = intent.destinationAddress!.replace(/^0x/, "").toLowerCase();
+      expect(d).toContain(dest);
+      return d.replace(dest, `${dest.slice(0, -2)}ff`);
+    });
+    refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
+  });
+
+  it("accepts Chainflip's own encoding, coin and token alike", () => {
+    for (const name of [COIN, TOKEN]) {
+      const { execution, intent } = fixture(name);
+      expect(() => checkExecution(execution, intent)).not.toThrow();
+    }
+  });
+
+  it("refuses a payout to any address but the swap's destination", () => {
+    for (const name of [COIN, TOKEN]) {
+      // Last character of the Bitcoin address: "4" → "5".
+      const t = edited(name, (d) => d.replace(DEST_HEX, DEST_HEX.slice(0, -2) + "35"));
+      refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
+    }
+  });
+
+  it("refuses sending more of the coin than the swap, or none", () => {
+    const more = edited(COIN, (d) => d, "300000000000000001");
+    refuses(more.e, more.intent, /sends more than the swap's amount/);
+    const none = edited(COIN, (d) => d, "0");
+    refuses(none.e, none.intent, /sends none of the coin being swapped/);
+  });
+
+  // The terms ride at the end of the call: version(1) | retry_duration(4) | refund_address(20) | min_price(32).
+  // The signing wallet's address appears nowhere else in these two calls, so finding it finds the refund.
+  const USER_HEX = "742d35cc6634c0532925a3b844bc9e7595f5be21";
+
+  it("refuses a swap that refunds anyone but the wallet that signs", () => {
+    for (const name of [COIN, TOKEN]) {
+      const t = edited(name, (d) => {
+        expect(d).toContain(USER_HEX);
+        return d.replace(USER_HEX, ATTACKER.replace(/^0x/, ""));
+      });
+      refuses(t.e, t.intent, /refunds an address other than the wallet that signs/);
+    }
+  });
+
+  it("refuses terms written in a layout it hasn't read", () => {
+    const t = edited(COIN, (d) => {
+      const at = d.indexOf(USER_HEX);
+      return `${d.slice(0, at - 10)}02${d.slice(at - 8)}`;
+    });
+    refuses(t.e, t.intent, /terms aren't a version RAVN reads/);
+  });
+
+  it("refuses terms too short to hold a refund address", () => {
+    const t = edited(COIN, (d) => {
+      const at = d.indexOf(USER_HEX);
+      const length = (5).toString(16).padStart(64, "0");
+      return `${d.slice(0, at - 74)}${length}0105000000${"0".repeat(54)}`;
+    });
+    refuses(t.e, t.intent, /terms are cut short/);
+  });
+
+  it("refuses a token swap that takes more than the swap, or another token", () => {
+    const setWord = (data: string, i: number, value: string) =>
+      data.slice(0, 10 + 64 * i) + value.replace(/^0x/, "").toLowerCase().padStart(64, "0") + data.slice(10 + 64 * (i + 1));
+    const more = edited(TOKEN, (d) => setWord(d, 4, (1000000001n).toString(16)));
+    refuses(more.e, more.intent, /takes more than the swap's amount/);
+    const other = edited(TOKEN, (d) => setWord(d, 3, ATTACKER));
+    refuses(other.e, other.intent, /token other than the one being swapped/);
+  });
+
+  it("refuses any other call to the Vault", () => {
+    const t = edited(COIN, (d) => `0xdeadbeef${d.slice(10)}`);
+    refuses(t.e, t.intent, /call to Chainflip isn't a vault swap/);
+  });
+
+  it("refuses the coin call on a token sell and the token call on a coin sell", () => {
+    const coinOnToken = edited(TOKEN, (d) => `0xdd687345${d.slice(10)}`);
+    refuses(coinOnToken.e, coinOnToken.intent, /vault swap of the coin was built for a token sell/);
+    const tokenOnCoin = edited(COIN, (d) => `0x04fc7da0${d.slice(10)}`);
+    refuses(tokenOnCoin.e, tokenOnCoin.intent, /vault swap of a token was built for a coin sell/);
+  });
+
+  it("refuses a destination whose bytes run past the end of the call", () => {
+    const t = edited(COIN, (d) => d.slice(0, 10 + 64 * 4) + "f".repeat(64) + d.slice(10 + 64 * 5));
+    refuses(t.e, t.intent, /ABI-encoded|runs past the end/);
+  });
+});

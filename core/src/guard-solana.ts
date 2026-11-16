@@ -574,7 +574,7 @@ function base58(bytes: Uint8Array): string {
   return s;
 }
 
-function base58Decode32(s: string): Uint8Array | undefined {
+export function base58Decode32(s: string): Uint8Array | undefined {
   let n = 0n;
   for (const c of s) {
     const d = ALPHABET.indexOf(c);

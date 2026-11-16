@@ -3,6 +3,26 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.25
+
+Chainflip from Ethereum and Arbitrum now runs as a **vault swap** — one call to Chainflip's Vault instead of a
+transfer to a deposit address. 0.4.24 and older refuse it: "The swap goes to a contract RAVN doesn't route
+through".
+
+### Added
+
+- Chainflip's Vault on Ethereum and Arbitrum in the check (`checkExecution`), with both of its swap calls read:
+  `xSwapNative` (the coin it sends, within the swap's amount) and `xSwapToken` (the token and amount it pulls,
+  and the approval naming the Vault). Either way two addresses are held: the destination Chainflip will pay,
+  and — inside the swap's own terms (`cfParameters`) — where a swap that never fills is refunded, which must
+  be the wallet that signs. Chainflip carries each chain's address in its own form, so the destination is read
+  as 20 raw bytes for an EVM payout, 32 for a Solana one, and the address text for Bitcoin. The terms' version
+  byte is pinned, so a layout this version hasn't read is refused rather than misread.
+
+### Upgrading
+
+- Nothing to change. Chainflip swaps from Bitcoin and Solana are unaffected: they keep their deposit channels.
+
 ## @ravnexchange/sdk 0.4.24
 
 Khalani, cross-chain stablecoin orders on Ethereum, Arbitrum, Base, Polygon and Robinhood Chain. 0.4.23 and
