@@ -272,6 +272,9 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
 function checkChainflipTerms(terms: string, ctx: Ctx): void {
   const byte = (i: number): string => terms.slice(i * 2, i * 2 + 2);
   const u16At = (i: number): bigint => BigInt(parseInt(byte(i), 16) + parseInt(byte(i + 1), 16) * 256);
+  // affiliateFees entries are { account u8, commissionBps u8 }: the fee is a single byte, per Chainflip's
+  // own codec (@chainflip/scale, vaultSwapParametersCodec). Striding as if it were wider would read a fee
+  // byte as an account id and miss it from the total.
   const need = (bytes: number, what: string): void => {
     if (terms.length < bytes * 2) fail(`The Chainflip swap's terms are cut short before its ${what}`);
   };
@@ -306,16 +309,23 @@ function checkChainflipTerms(terms: string, ctx: Ctx): void {
   at += 2;
 
   need(at + 1, "affiliates");
+  // A SCALE compact length: the one-byte form (its low two bits 00) covers up to 63 affiliates. The longer
+  // forms, and the same number written non-canonically, are refused rather than decoded.
   const header = parseInt(byte(at), 16);
-  if (header % 4 !== 0) fail("The Chainflip swap's affiliate list isn't one RAVN reads");
+  if (header % 4 !== 0) fail("The Chainflip swap's affiliate list isn't one RAVN reads", { header: byte(at) });
   at += 1;
   for (let i = header / 4; i > 0; i--) {
-    need(at + 3, "affiliates");
-    bps += u16At(at + 1);
-    at += 3;
+    need(at + 2, "affiliates"); // { account u8, commissionBps u8 } — two bytes, and the fee is one of them
+    bps += BigInt(parseInt(byte(at + 1), 16));
+    at += 2;
   }
   if (bps > MAX_FEE_BPS) {
     fail("The Chainflip swap's commission is more than RAVN's fee may be", { bps: bps.toString() });
+  }
+  // Nothing may follow the fields above. Trailing bytes are what let a mis-strided read hide a fee between
+  // the entries it looks at, so the terms must end exactly where this walk does — whatever else is wrong.
+  if (at * 2 !== terms.length) {
+    fail("The Chainflip swap's terms carry more than their own fields", { bytes: (terms.length / 2).toString() });
   }
 }
 
@@ -751,7 +761,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's and Khalani's amounts are read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Khalani's and Chainflip's Vault amounts are read; others aren't);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.

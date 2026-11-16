@@ -16,15 +16,18 @@ through".
   and the approval naming the Vault). Either way two addresses are held: the destination Chainflip will pay,
   and — inside the swap's own terms (`cfParameters`) — where a swap that never fills is refunded, which must
   be the wallet that signs. A vault swap also carries RAVN's commission in those terms, where a deposit channel
-  kept it on Chainflip's own chain, so the broker account is pinned to RAVN's and the commission (broker plus
-  affiliates) is held inside the same 1% ceiling as RAVN's fee everywhere else. The options RAVN never asks for
-  — a refund message, instalments, a boost fee — are refused rather than skipped. Chainflip carries each chain's address in its own form, so the destination is read
+  kept it on Chainflip's own chain, so the broker account is pinned to RAVN's and its commission — the broker's
+  and every affiliate's together — is held under 1%, the same ceiling RAVN's own fee is held to elsewhere (a
+  separate allowance from that one, not a shared budget). The options RAVN never asks for — a refund message,
+  instalments, a boost fee — are refused rather than skipped, and nothing may trail the fields it reads. Chainflip carries each chain's address in its own form, so the destination is read
   as 20 raw bytes for an EVM payout, 32 for a Solana one, and the address text for Bitcoin. The terms' version
   byte is pinned, so a layout this version hasn't read is refused rather than misread.
 
 ### Upgrading
 
-- Nothing to change. Chainflip swaps from Bitcoin and Solana are unaffected: they keep their deposit channels.
+- Upgrade before RAVN turns vault swaps on, or Chainflip swaps from Ethereum and Arbitrum will be refused on
+  0.4.24 and older. Nothing in your own code changes. Chainflip swaps whose SOURCE is Bitcoin or Solana are
+  unaffected either way: they keep their deposit channels.
 
 ## @ravnexchange/sdk 0.4.24
 

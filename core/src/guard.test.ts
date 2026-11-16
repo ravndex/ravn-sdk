@@ -1188,6 +1188,17 @@ describe("checkExecution: Chainflip's vault swap", () => {
       return d.slice(0, at) + (terms.length / 2).toString(16).padStart(64, "0") + padded;
     });
 
+  it("accepts a swap from Arbitrum, through the other Vault", () => {
+    const { execution, intent } = fixture("42161->bitcoin eth chainflip vault (Chainflip's own encoding)");
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    // The Vault is pinned per chain: Ethereum's is not Arbitrum's.
+    const wrongChain = fixture("42161->bitcoin eth chainflip vault (Chainflip's own encoding)");
+    const tx = (wrongChain.execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).transaction!;
+    tx.to = "0xf5e10380213880111522dd0efd3dbb45b9f62bcc";
+    (wrongChain.execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).calls![0].to = tx.to;
+    refuses(wrongChain.execution, wrongChain.intent, /contract RAVN doesn't route through/);
+  });
+
   it("accepts a legacy Bitcoin destination and a Solana one", () => {
     // base58 that fits 32 bytes isn't a Solana address: a P2SH address must still be read as text.
     for (const name of [P2SH, SOLANA]) {
@@ -1210,12 +1221,39 @@ describe("checkExecution: Chainflip's vault swap", () => {
     // The two bytes after the broker account are its commission, little-endian: 101 bps.
     const over = edited(COIN, (d) => d.replace(`${BROKER}0500`, `${BROKER}6500`));
     refuses(over.e, over.intent, /commission is more than RAVN's fee may be/);
-    // One affiliate taking 100 bps on top of the broker's 5: a one-entry vec (0x04) of {account, bps}.
-    const affiliated = withTerms(COIN, (t) => `${t.slice(0, -2)}04016400`);
+    // One affiliate taking 100 bps on top of the broker's 5: a one-entry vec (0x04) of {account u8, bps u8}.
+    const affiliated = withTerms(COIN, (t) => `${t.slice(0, -2)}040164`);
     refuses(affiliated.e, affiliated.intent, /commission is more than RAVN's fee may be/);
     // And an affiliate list that promises entries the terms don't carry.
-    const truncated = withTerms(COIN, (t) => `${t.slice(0, -2)}04`);
+    const truncated = withTerms(COIN, (t) => `${t.slice(0, -2)}0401`);
     refuses(truncated.e, truncated.intent, /cut short before its affiliates/);
+  });
+
+  it("refuses a fee hidden between affiliate entries, and any trailing byte at all", () => {
+    // Two entries whose second carries 255 bps. Striding as if an entry were three bytes would read the
+    // first entry's fee together with the second's account id, and miss the 255 entirely.
+    const hidden = withTerms(COIN, (t) => `${t.slice(0, -2)}08070000ff`);
+    refuses(hidden.e, hidden.intent, /commission is more than RAVN's fee may be/);
+    // And nothing may follow the fields: trailing bytes are what make that kind of misreading possible.
+    const trailing = withTerms(COIN, (t) => `${t}0000`);
+    refuses(trailing.e, trailing.intent, /carry more than their own fields/);
+  });
+
+  it("refuses an affiliate count written in a form it doesn't read", () => {
+    for (const header of ["01", "02", "03", "fd"]) {
+      const t = withTerms(COIN, (terms) => `${terms.slice(0, -2)}${header}`);
+      refuses(t.e, t.intent, /affiliate list isn't one RAVN reads/);
+    }
+  });
+
+  it("accepts terms that name no oracle slippage at all", () => {
+    // The only field whose width moves the cursor: Some(u16) is three bytes, None is one.
+    const { execution, intent } = fixture(COIN);
+    const none = withTerms(COIN, (t) => `${t.slice(0, 116)}00${t.slice(122)}`);
+    expect(() => checkExecution(none.e, none.intent)).not.toThrow();
+    // ...and the fixture it is derived from really does carry Some, or this proves nothing.
+    const tx = (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).transaction!;
+    expect(tx.data!.includes("016400")).toBe(true);
   });
 
   it("refuses the extras RAVN never asks for: a boost fee, instalments, a refund message", () => {
