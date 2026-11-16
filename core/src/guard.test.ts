@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import { checkExecution } from "./guard";
 import { KNOWN_CONTRACTS, separateSpender } from "./guard-contracts";
+import { base58Decode32 } from "./guard-solana";
 import type { SwapIntent } from "./guard";
 import { associatedTokenAddress, sha256 } from "./guard-solana";
 import { UnsafeExecutionError } from "./types";
@@ -1134,12 +1135,37 @@ describe("checkExecution: Chainflip's vault swap", () => {
     }
   });
 
-  it("refuses a payout to any address but the swap's destination", () => {
+  it("refuses a payout to any address but the swap's destination, in every form it reads", () => {
     for (const name of [COIN, TOKEN]) {
       // Last character of the Bitcoin address: "4" → "5".
       const t = edited(name, (d) => d.replace(DEST_HEX, DEST_HEX.slice(0, -2) + "35"));
       refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
     }
+    // A legacy Bitcoin address rides as its text: change its last character, "y" to "x".
+    const p2sh = Buffer.from(fixture(P2SH).intent.destinationAddress!, "utf8").toString("hex");
+    const legacy = edited(P2SH, (d) => {
+      expect(d).toContain(p2sh);
+      return d.replace(p2sh, `${p2sh.slice(0, -2)}78`);
+    });
+    refuses(legacy.e, legacy.intent, /pays out to an address other than the swap's destination/);
+
+    // A Solana address rides as its 32 raw bytes: flip the last one.
+    const decoded = base58Decode32(fixture(SOLANA).intent.destinationAddress!)!;
+    const solana = Array.from(decoded, (b) => b.toString(16).padStart(2, "0")).join("");
+    const flipped = edited(SOLANA, (d) => {
+      expect(d).toContain(solana);
+      return d.replace(solana, `${solana.slice(0, -2)}ff`);
+    });
+    refuses(flipped.e, flipped.intent, /pays out to an address other than the swap's destination/);
+  });
+
+  it("reads the destination, not the wallet that signs", () => {
+    // A payout to someone other than the signer: mixing the two up would turn nothing else red.
+    const { execution, intent } = fixture(PAYS_OTHER);
+    expect(intent.destinationAddress).not.toBe(intent.userAddress);
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const t = edited(PAYS_OTHER, (d) => d.replace(intent.destinationAddress!.replace(/^0x/, "").toLowerCase(), intent.userAddress.replace(/^0x/, "").toLowerCase()));
+    refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
   });
 
   it("refuses sending more of the coin than the swap, or none", () => {
@@ -1173,6 +1199,7 @@ describe("checkExecution: Chainflip's vault swap", () => {
 
   const P2SH = "1->bitcoin eth chainflip vault, p2sh destination (Chainflip's own encoding)";
   const SOLANA = "1->solana eth chainflip vault (Chainflip's own encoding)";
+  const PAYS_OTHER = "1->42161 eth chainflip vault, paying someone else (Chainflip's own encoding)";
   const BROKER = "e0574da819208eaf92f4800ca6073b74efb941b94b706f2b41726ac0ad51764f";
 
   // cfParameters is the call's last `bytes` argument, so rewriting it means rewriting its length word and

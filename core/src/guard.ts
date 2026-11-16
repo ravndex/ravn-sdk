@@ -502,6 +502,8 @@ function classifyEvmCall(
       if (token !== ctx.token) fail("The swap takes a token other than the one being swapped", { token });
       if (pulled === 0n) fail("The swap takes none of the token being swapped");
       if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+      // xSwapToken isn't payable, and a coin amount measured against a token's would mean nothing.
+      if (value !== 0n) fail("A Chainflip vault swap of a token sends the coin too", { value: value.toString() });
     } else {
       fail("The call to Chainflip isn't a vault swap", { selector: sel });
     }
