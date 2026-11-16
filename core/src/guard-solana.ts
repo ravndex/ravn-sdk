@@ -559,7 +559,7 @@ function base64ToBytes(b64: string): Uint8Array {
 
 const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-function base58(bytes: Uint8Array): string {
+export function base58(bytes: Uint8Array): string {
   let n = 0n;
   for (const x of bytes) n = (n << 8n) | BigInt(x);
   let s = "";

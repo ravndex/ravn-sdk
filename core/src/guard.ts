@@ -1,8 +1,8 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { CHAINFLIP_VAULTS, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt } from "./guard-bitcoin";
-import { base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
+import { base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
 /**
  * What your user asked to swap, from your own code, never from RAVN's answer: the guard holds
@@ -126,8 +126,12 @@ const wordBytes = (data: string, i: number): string => {
 const cfPaysDestination = (payout: string, ctx: Ctx): boolean => {
   if (!ctx.destination) return false;
   if (/^0x[0-9a-f]{40}$/.test(ctx.destination)) return `0x${payout}` === ctx.destination;
+  // base58Decode32 takes any base58 string that fits 32 bytes, which most Bitcoin addresses do, so the
+  // decode has to round-trip: only an address that re-encodes to itself is really a 32-byte Solana one.
   const solana = base58Decode32(ctx.destinationRaw);
-  if (solana) return payout === Array.from(solana, (b) => b.toString(16).padStart(2, "0")).join("");
+  if (solana && base58(solana) === ctx.destinationRaw) {
+    return payout === Array.from(solana, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
   let text = "";
   for (let i = 0; i + 1 < payout.length; i += 2) text += String.fromCharCode(parseInt(payout.slice(i, i + 2), 16));
   return text === ctx.destinationRaw;
@@ -249,8 +253,75 @@ function checkFeeTerms(ctx: Ctx, fee: DepositFeeDTO, wallet: string | undefined)
 type Call = { to?: string; data?: string; value?: string; chainId?: number; gasLimit?: string };
 
 /**
+ * Chainflip's vault-swap terms (`cfParameters`), in the V1 layout its own SCALE codec defines:
+ *
+ *   version(1) | retryDurationBlocks u32(4) | refundAddress(20) | minPriceX128 u256(32)
+ *   | refundCcmMetadata Option | maxOraclePriceSlippage Option<u16> | dcaParams Option
+ *   | boostFee u8 | brokerFees{ account(32), commissionBps u16 } | affiliateFees Vec<{ account u8, bps u16 }>
+ *
+ * A vault swap carries all of this in the call the user signs, where a deposit channel kept it on Chainflip's
+ * own chain, so every field here that moves money or names who receives it has to be read. Three do: the
+ * refund address (where the whole input goes if the swap never fills), the broker account and the commission
+ * — broker plus affiliates — which comes out of the swap. The options RAVN never asks for are refused rather
+ * than skipped, so the walk can't be pushed off its offsets, and the version byte is pinned so a layout this
+ * check hasn't read is refused rather than misread.
+ *
+ * What it still can't judge is the price: `minPriceX128` and `maxOraclePriceSlippage` are read past, as no
+ * venue's minimum out is checked here (see checkExecution's own limits).
+ */
+function checkChainflipTerms(terms: string, ctx: Ctx): void {
+  const byte = (i: number): string => terms.slice(i * 2, i * 2 + 2);
+  const u16At = (i: number): bigint => BigInt(parseInt(byte(i), 16) + parseInt(byte(i + 1), 16) * 256);
+  const need = (bytes: number, what: string): void => {
+    if (terms.length < bytes * 2) fail(`The Chainflip swap's terms are cut short before its ${what}`);
+  };
+
+  if (byte(0) !== "01") fail("The Chainflip swap's terms aren't a version RAVN reads", { version: byte(0) });
+  need(25, "refund address");
+  if (`0x${terms.slice(10, 50)}` !== ctx.user) {
+    fail("The Chainflip swap refunds an address other than the wallet that signs", { to: `0x${terms.slice(10, 50)}` });
+  }
+
+  let at = 57; // past version(1), retryDurationBlocks(4), refundAddress(20) and minPriceX128(32)
+  need(at + 1, "terms");
+  if (byte(at) !== "00") fail("The Chainflip swap carries a refund message RAVN doesn't ask for");
+  at += 1;
+  need(at + 1, "terms");
+  at += byte(at) === "00" ? 1 : 3; // maxOraclePriceSlippage: Option<u16>
+  need(at + 1, "terms");
+  if (byte(at) !== "00") fail("The Chainflip swap is split into instalments RAVN doesn't ask for");
+  at += 1;
+  need(at + 1, "boost fee");
+  if (byte(at) !== "00") fail("The Chainflip swap pays a boost fee RAVN doesn't ask for", { boostFee: byte(at) });
+  at += 1;
+
+  need(at + 32, "broker");
+  const broker = terms.slice(at * 2, at * 2 + 64);
+  if (broker !== lower(RAVN_CHAINFLIP_BROKER)) {
+    fail("The Chainflip swap pays its commission to a broker other than RAVN's", { broker });
+  }
+  at += 32;
+  need(at + 2, "commission");
+  let bps = u16At(at);
+  at += 2;
+
+  need(at + 1, "affiliates");
+  const header = parseInt(byte(at), 16);
+  if (header % 4 !== 0) fail("The Chainflip swap's affiliate list isn't one RAVN reads");
+  at += 1;
+  for (let i = header / 4; i > 0; i--) {
+    need(at + 3, "affiliates");
+    bps += u16At(at + 1);
+    at += 3;
+  }
+  if (bps > MAX_FEE_BPS) {
+    fail("The Chainflip swap's commission is more than RAVN's fee may be", { bps: bps.toString() });
+  }
+}
+
+/**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter or Khalani, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani or Chainflip's Vault, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -427,19 +498,7 @@ function classifyEvmCall(
     if (!cfPaysDestination(wordBytes(data, 1), ctx)) {
       fail("The Chainflip swap pays out to an address other than the swap's destination");
     }
-    // cfParameters carries the terms Chainflip settles by, and one of them decides where the money goes when
-    // the swap does NOT fill: it retries at min_price for retry_duration blocks, then refunds to
-    // refund_address. Holding the payout alone would buy nothing — a tampered call can quote the payout
-    // honestly, name a price that can never fill, and take the whole amount down the refund path instead. So
-    // the refund is held to the wallet that signs, as Khalani's is. V1's layout (SCALE, VersionedCfParameters):
-    // version(1) | retry_duration u32(4) | refund_address(20) | min_price(32) | … The version byte is pinned,
-    // so a layout RAVN hasn't read is refused rather than read at the wrong offsets.
-    const terms = wordBytes(data, sel === SEL.cfSwapNative ? 3 : 5);
-    if (terms.length < 50) fail("The Chainflip swap's terms are cut short");
-    if (terms.slice(0, 2) !== "01") fail("The Chainflip swap's terms aren't a version RAVN reads", { version: terms.slice(0, 2) });
-    if (`0x${terms.slice(10, 50)}` !== ctx.user) {
-      fail("The Chainflip swap refunds an address other than the wallet that signs", { to: `0x${terms.slice(10, 50)}` });
-    }
+    checkChainflipTerms(wordBytes(data, sel === SEL.cfSwapNative ? 3 : 5), ctx);
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.
@@ -721,7 +780,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter or Khalani: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani or Chainflip's Vault: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");

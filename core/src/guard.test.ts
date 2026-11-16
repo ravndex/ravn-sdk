@@ -1171,6 +1171,67 @@ describe("checkExecution: Chainflip's vault swap", () => {
     refuses(t.e, t.intent, /terms aren't a version RAVN reads/);
   });
 
+  const P2SH = "1->bitcoin eth chainflip vault, p2sh destination (Chainflip's own encoding)";
+  const SOLANA = "1->solana eth chainflip vault (Chainflip's own encoding)";
+  const BROKER = "e0574da819208eaf92f4800ca6073b74efb941b94b706f2b41726ac0ad51764f";
+
+  // cfParameters is the call's last `bytes` argument, so rewriting it means rewriting its length word and
+  // its padding too — a plain string splice would leave the ABI saying one thing and the bytes another.
+  const withTerms = (name: string, rewrite: (terms: string) => string) =>
+    edited(name, (d) => {
+      const wordAt = (i: number) => d.slice(10 + 64 * i, 10 + 64 * (i + 1));
+      const argument = d.slice(0, 10) === "0xdd687345" ? 3 : 5;
+      const lengthWord = Number(BigInt(`0x${wordAt(argument)}`) / 32n);
+      const at = 10 + 64 * lengthWord;
+      const terms = rewrite(d.slice(at + 64, at + 64 + Number(BigInt(`0x${d.slice(at, at + 64)}`)) * 2));
+      const padded = terms.padEnd(Math.ceil(terms.length / 64) * 64, "0");
+      return d.slice(0, at) + (terms.length / 2).toString(16).padStart(64, "0") + padded;
+    });
+
+  it("accepts a legacy Bitcoin destination and a Solana one", () => {
+    // base58 that fits 32 bytes isn't a Solana address: a P2SH address must still be read as text.
+    for (const name of [P2SH, SOLANA]) {
+      const { execution, intent } = fixture(name);
+      expect(() => checkExecution(execution, intent)).not.toThrow();
+    }
+  });
+
+  it("refuses a commission paid to a broker other than RAVN's", () => {
+    for (const name of [COIN, TOKEN]) {
+      const t = edited(name, (d) => {
+        expect(d).toContain(BROKER);
+        return d.replace(BROKER, `${"ba11".repeat(15)}dead`);
+      });
+      refuses(t.e, t.intent, /broker other than RAVN's/);
+    }
+  });
+
+  it("refuses a commission over RAVN's own ceiling, broker's or an affiliate's", () => {
+    // The two bytes after the broker account are its commission, little-endian: 101 bps.
+    const over = edited(COIN, (d) => d.replace(`${BROKER}0500`, `${BROKER}6500`));
+    refuses(over.e, over.intent, /commission is more than RAVN's fee may be/);
+    // One affiliate taking 100 bps on top of the broker's 5: a one-entry vec (0x04) of {account, bps}.
+    const affiliated = withTerms(COIN, (t) => `${t.slice(0, -2)}04016400`);
+    refuses(affiliated.e, affiliated.intent, /commission is more than RAVN's fee may be/);
+    // And an affiliate list that promises entries the terms don't carry.
+    const truncated = withTerms(COIN, (t) => `${t.slice(0, -2)}04`);
+    refuses(truncated.e, truncated.intent, /cut short before its affiliates/);
+  });
+
+  it("refuses the extras RAVN never asks for: a boost fee, instalments, a refund message", () => {
+    // boostFee is the byte before the broker account; the two before it are the dca and oracle options.
+    const boosted = edited(COIN, (d) => d.replace(`00${BROKER}`, `ff${BROKER}`));
+    refuses(boosted.e, boosted.intent, /boost fee RAVN doesn't ask for/);
+    const instalments = edited(COIN, (d) => d.replace(`0000${BROKER}`, `0100${BROKER}`));
+    refuses(instalments.e, instalments.intent, /instalments RAVN doesn't ask for/);
+    // refundCcmMetadata is the first byte after the 32-byte minPriceX128, which follows the refund address.
+    const message = edited(COIN, (d) => {
+      const at = d.indexOf(USER_HEX) + 40 + 64;
+      return `${d.slice(0, at)}01${d.slice(at + 2)}`;
+    });
+    refuses(message.e, message.intent, /refund message RAVN doesn't ask for/);
+  });
+
   it("refuses terms too short to hold a refund address", () => {
     const t = edited(COIN, (d) => {
       const at = d.indexOf(USER_HEX);
@@ -1187,6 +1248,8 @@ describe("checkExecution: Chainflip's vault swap", () => {
     refuses(more.e, more.intent, /takes more than the swap's amount/);
     const other = edited(TOKEN, (d) => setWord(d, 3, ATTACKER));
     refuses(other.e, other.intent, /token other than the one being swapped/);
+    const none = edited(TOKEN, (d) => setWord(d, 4, "0"));
+    refuses(none.e, none.intent, /takes none of the token being swapped/);
   });
 
   it("refuses any other call to the Vault", () => {
@@ -1203,6 +1266,6 @@ describe("checkExecution: Chainflip's vault swap", () => {
 
   it("refuses a destination whose bytes run past the end of the call", () => {
     const t = edited(COIN, (d) => d.slice(0, 10 + 64 * 4) + "f".repeat(64) + d.slice(10 + 64 * 5));
-    refuses(t.e, t.intent, /ABI-encoded|runs past the end/);
+    refuses(t.e, t.intent, /runs past the end of the call/);
   });
 });

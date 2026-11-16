@@ -137,6 +137,13 @@ export const CHAINFLIP_VAULTS: Record<number, string> = {
   [ARBITRUM]: "0x79001a5e762f3bEFC8e5871b42F6734e00498920",
 };
 
+/**
+ * RAVN's own Chainflip broker account (32-byte public key). A vault swap names its broker and commission
+ * inside the call the user signs, so the guard pins this: a swap that pays its commission anywhere else is
+ * refused. Deposit-channel swaps carry none of this in calldata — it lives on Chainflip's state chain.
+ */
+export const RAVN_CHAINFLIP_BROKER = "e0574da819208eaf92f4800ca6073b74efb941b94b706f2b41726ac0ad51764f";
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
