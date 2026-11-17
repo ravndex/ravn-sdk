@@ -3,6 +3,32 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.26
+
+Warnings in the console while you build, for three mistakes RAVN's server can't see from its side. Each one
+costs you the fee your share is paid from, and none of them throws, so they were easy to miss. Quiet when
+`process.env.NODE_ENV` is `"production"`.
+
+### Added
+
+- **RAVN's fee wasn't sent** by `executeAndTrack`: the wallet's receipt for the swap came back empty or failed,
+  or your user declined the fee's own transaction. Said the moment it happens, with the reason. The swap still
+  runs; `feeError` in the result is the same thing, as before.
+- **A fee transaction never passed to `getStatus`**: a swap whose fee is a transaction of its own
+  (`execution.fee.transaction`) finished, and no status poll for it carried that transaction's hash as `txHash`.
+  For integrations that send swaps themselves rather than through `executeAndTrack`.
+- **A swap built and never tracked**: `execute()` answered with a swap, and in the next 10 minutes this client
+  made no `getStatus`, `submitSignature` or `submitTransaction` call for its quoteToken. Said once per client.
+  Ignore it if you track swaps on your server or with another client. A swap `executeAndTrack` is tracking is
+  never warned on, however long the wallet takes; one it hands back unfinished (polling off, a deposit it didn't
+  send, a stop after sending) is yours to track from then.
+- `RavnClientConfig.devWarnings`: `false` turns the warnings off, `true` keeps them on in production too.
+
+### Upgrading
+
+- Nothing to change. Nothing is sent anywhere: the warnings are `console.warn` on your side only, and the timer
+  behind the last one never keeps a Node process alive.
+
 ## @ravnexchange/sdk 0.4.25
 
 Chainflip from Ethereum and Arbitrum will run as a **vault swap** — one call to Chainflip's Vault instead of a

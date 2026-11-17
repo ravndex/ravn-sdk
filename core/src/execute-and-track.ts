@@ -1,5 +1,6 @@
 import type { RavnClient } from "./client";
 import type { SwapIntent } from "./guard";
+import { noteBuilt, noteTracked, warnFeeNotSent } from "./dev-warnings";
 import { RavnApiError } from "./types";
 import type { ApprovalDTO, DepositFeeDTO, ExecuteParams, ExecutionDTO, StatusDTO } from "./types";
 import { isPollingTerminal } from "./polling";
@@ -425,6 +426,8 @@ export async function executeAndTrack(
     };
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
+    // Tracked from here, by this call or by its caller once handed back (see the end): not "never tracked".
+    noteTracked(client, quoteToken);
 
     const pollStatus = async (ref: string, txHash?: string, feeSent = false): Promise<StatusDTO | undefined> => {
       if (!pollUntilTerminal) return undefined;
@@ -592,6 +595,7 @@ export async function executeAndTrack(
         feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
       }
       partial.feeError = feeError;
+      warnFeeNotSent(client, execution, feeError);
       return {
         execution, quoteToken, resetTxHash: partial.resetTxHash, approvalTxHash: partial.approvalTxHash, txHash, statusRef, statusTxHash, feeTxHash, feeError,
         finalStatus: await pollStatus(statusRef, statusTxHash, !!feeTxHash && !!statusTxHash),
@@ -637,6 +641,7 @@ export async function executeAndTrack(
       try {
         return { ...base, feePayment: depositFeePayment(execution) };
       } catch (feeError) {
+        warnFeeNotSent(client, execution, feeError);
         return { ...base, feeError };
       }
     };
@@ -689,6 +694,7 @@ export async function executeAndTrack(
         feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
       }
       partial.feeError = feeError;
+      warnFeeNotSent(client, execution, feeError);
       return {
         execution, quoteToken, txHash, statusRef, statusTxHash, feeTxHash, feeError,
         finalStatus: await pollStatus(statusRef, statusTxHash, !!statusTxHash),
@@ -717,8 +723,13 @@ export async function executeAndTrack(
   };
 
   try {
-    return await run();
+    const result = await run();
+    // Handed back unfinished (polling off, a deposit not sent from here): the caller's to track now.
+    if (!result.finalStatus) noteBuilt(client, result.execution);
+    return result;
   } catch (err) {
+    // Stopped once something was out: the caller's to track from `partial`. Nothing out, nothing to track.
+    if (sent && partial.execution) noteBuilt(client, partial.execution);
     if (stopCode) {
       const why = stopCode === "ABORTED" ? "aborted" : `no terminal status within maxWaitMs (${maxWaitMs} ms)`;
       throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, stopCode, { ...partial }, stop.signal.reason);
