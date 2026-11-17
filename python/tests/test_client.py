@@ -102,6 +102,32 @@ class RavnClientTest(unittest.TestCase):
         self.assertEqual(seen["method"], "POST")
         self.assertEqual(json.loads(seen["body"]), {"quoteToken": "qt-exec", "signedTransaction": "AQID"})
 
+    def test_execute_sends_idempotency_key_as_header_only(self):
+        seen = {}
+
+        def _urlopen(req):
+            seen["body"], seen["key"] = json.loads(req.data), req.get_header("Idempotency-key")
+            return FakeResponse({"data": {"executionType": "DEPOSIT", "quoteToken": "qt"}})
+
+        client = RavnClient(urlopen=_urlopen)
+        params = {"quoteToken": "qt", "idempotencyKey": "4f1c-ab_9"}
+        client.execute(params)
+        self.assertEqual(seen, {"body": {"quoteToken": "qt"}, "key": "4f1c-ab_9"})
+        # The caller's dict is left as it was: the same params can be sent again with the same key.
+        self.assertEqual(params, {"quoteToken": "qt", "idempotencyKey": "4f1c-ab_9"})
+        client.execute({"quoteToken": "qt"})
+        self.assertEqual(seen, {"body": {"quoteToken": "qt"}, "key": None})
+
+    def test_execute_refuses_a_key_the_api_would_before_sending(self):
+        def _urlopen(req):
+            raise AssertionError("nothing may be sent")
+
+        client = RavnClient(urlopen=_urlopen)
+        for key in ["", "has space", "x" * 256, "caf\u00e9", "line\nbreak", 123]:
+            with self.assertRaises(RavnApiError) as ctx:
+                client.execute({"quoteToken": "qt", "idempotencyKey": key})
+            self.assertEqual(ctx.exception.code, "INVALID_REQUEST")
+
     def test_get_chains_returns_list(self):
         client = RavnClient(urlopen=fake_urlopen_returning({"data": [{"chainId": 1}]}))
         self.assertEqual(client.get_chains(), [{"chainId": 1}])

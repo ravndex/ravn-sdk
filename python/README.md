@@ -17,6 +17,8 @@ pip install ravnexchange
 ## Usage
 
 ```python
+import uuid
+
 from ravnexchange import RavnClient, RavnApiError
 
 client = RavnClient(api_key="rvn_live_...")  # omit for the anonymous tier
@@ -36,7 +38,8 @@ try:
 except RavnApiError as e:
     print(e.code, str(e))
 else:
-    execution = client.execute({"quoteToken": quote["quoteToken"]})
+    # A key per swap attempt (0.1.8+): asking again with it after a lost answer can't build twice.
+    execution = client.execute({"quoteToken": quote["quoteToken"], "idempotencyKey": str(uuid.uuid4())})
     # branch on execution["executionType"]: TRANSACTION / SIGNATURE / DEPOSIT
 ```
 
@@ -124,7 +127,9 @@ one doesn't yet:
   after sending while a venue indexes; otherwise permanent, so bound your polling).
 - **No retries.** Retry a status poll yourself on `RATE_LIMITED`, a 5xx (`INTERNAL`,
   `BUILD_FAILED`, `VENUE_RATE_LIMITED`) or a network error, waiting `e.details["retryAfterSec"]`
-  when it's set. Never re-submit a signature after `BUILD_FAILED`: the order may be placed.
+  when it's set. Never re-submit a signature after `BUILD_FAILED`: the order may be placed. Ask
+  `execute` again only with the same `idempotencyKey`, and only after a network error,
+  `RATE_LIMITED`, `VENUE_RATE_LIMITED` or `UNAVAILABLE`.
 - **`RavnApiError` has no `status` or `retry_after_sec`.** Read `e.code` and
   `e.details.get("retryAfterSec")`.
 - **`timeoutMs` isn't in `GetQuoteParams` yet**: pass it anyway (a dict key goes through as is).
