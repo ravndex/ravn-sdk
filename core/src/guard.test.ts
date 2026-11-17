@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import { checkExecution } from "./guard";
-import { KNOWN_CONTRACTS } from "./guard-contracts";
+import { KNOWN_CONTRACTS, separateSpender } from "./guard-contracts";
 import type { SwapIntent } from "./guard";
 import { associatedTokenAddress, sha256 } from "./guard-solana";
 import { UnsafeExecutionError } from "./types";
@@ -14,6 +14,9 @@ import type { ExecutionDTO } from "./types";
 // Metric's three (2026-10-25): RAVN's own builds for it (full calldata, which the check reads deep).
 // Relay's three "v3.2" (2026-11-09): Relay's own builds through its v3.2 contracts, in /v1/execute's shape.
 // Fynd's six (2026-11-06): RAVN's own builds, from a local server with Fynd switched on.
+// FlowRouter's three (2026-11-09): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign.
+// Khalani's one (2026-11-13): Khalani's own build of a real, unfunded order, in /v1/execute's shape, as Khalani
+// isn't in RAVN's race yet.
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -152,7 +155,8 @@ describe("checkExecution: EVM transactions", () => {
   });
 
   // Each with code on Elysium (2026-11-09): 0x's own Elysium config names its AllowanceHolder, KyberSwap's
-  // live quote its router; Relay's match its other chains'. No whole-family entry reaches it by default.
+  // live quote its router, OKX's /swap its pair, Nordstern's /chains its guard, Fly's builds its contract; Relay's match its other chains'. No whole-family entry
+  // reaches it by default.
   it("accepts exactly the venue contracts RAVN routes through on Elysium", () => {
     expect([...KNOWN_CONTRACTS[99901]].sort()).toEqual(
       [
@@ -163,8 +167,13 @@ describe("checkExecution: EVM transactions", () => {
         "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router (v3), a target only
         "0x5567954cd026cebfe486062cb75848e0f1c12e58", // Relay approval proxy (v3.2)
         "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay router (v3.2), a target only
+        "0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", // OKX router
+        "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA", // OKX approvals
+        "0x6af335771d1DdF7dD1501eCC89e978455Fe5c6Dd", // Nordstern's guard
+        "0x20f6ee51340adeed01a59b0e65cb3703f3dc860c", // Fly Trade
       ].map((a) => a.toLowerCase()).sort()
     );
+    expect(separateSpender(99901, "0x91ab9c4b07f479d48b60aefe8f7e31b3760c88c1")).toBe("0xa32f4ec37de04accbb6303bc6f8c7056ed1cfefa");
   });
 
   it("passes a KyberSwap swap on Elysium and refuses another chain's venue contract there", () => {
@@ -177,6 +186,43 @@ describe("checkExecution: EVM transactions", () => {
     const moved = onElysium();
     (moved.execution as Tx).transaction.to = acrossPeriphery;
     expect(() => checkExecution(moved.execution, moved.intent)).toThrow(UnsafeExecutionError);
+  });
+
+  it("passes an OKX swap on Elysium through its own pair, and refuses Arc's pair there", () => {
+    // A real Arc OKX build moved to Elysium, its router and approval contract swapped for Elysium's.
+    const onElysium = (router: string, approvals: string) =>
+      JSON.parse(
+        JSON.stringify(fixture("5042 token->token okx"))
+          .replaceAll('hainId":5042', 'hainId":99901')
+          .replace(/(0x)?4e3bcce28caf98a143fd8bd9e4875ccab3e7bbe0/gi, (_m, p) => (p ? router : router.slice(2).toLowerCase()))
+          .replace(/(0x)?2b9899bc46bf0ee094225995f4bd496d42f261af/gi, (_m, p) => (p ? approvals : approvals.slice(2).toLowerCase()))
+      ) as ReturnType<typeof fixture>;
+    const ok = onElysium("0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA");
+    expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
+    const arcPair = onElysium("0x4E3bcCE28cAf98A143Fd8BD9e4875ccAb3E7bBE0", "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af");
+    expect(() => checkExecution(arcPair.execution, arcPair.intent)).toThrow(UnsafeExecutionError);
+  });
+
+  it("passes a Nordstern swap on Elysium through its own guard, and refuses HyperEVM's guard there", () => {
+    // A real HyperEVM Nordstern build moved to Elysium, its guard swapped for Elysium's.
+    const onElysium = (guard: string) =>
+      JSON.parse(
+        JSON.stringify(fixture("999 token->native nordstern"))
+          .replaceAll('hainId":999', 'hainId":99901')
+          .replace(/(0x)?2ff506ed9729580ef8bf04429614beb1bae5f76d/gi, (_m, p) => (p ? guard : guard.slice(2).toLowerCase()))
+      ) as ReturnType<typeof fixture>;
+    const ok = onElysium("0x6af335771d1DdF7dD1501eCC89e978455Fe5c6Dd");
+    expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
+    const hyperEvmGuard = onElysium("0x2fF506ed9729580EF8Bf04429614beB1baE5F76D");
+    expect(() => checkExecution(hyperEvmGuard.execution, hyperEvmGuard.intent)).toThrow(UnsafeExecutionError);
+  });
+
+  it("passes Fly's swaps on Elysium, a token sell's approval to its contract included", () => {
+    // Real Base Fly builds moved to Elysium: Fly's contract is the same address, with the same code, there.
+    for (const name of ["8453 token->native flytrade", "8453 native->token flytrade"]) {
+      const { execution, intent } = JSON.parse(JSON.stringify(fixture(name)).replaceAll('hainId":8453', 'hainId":99901')) as ReturnType<typeof fixture>;
+      expect(() => checkExecution(execution, intent)).not.toThrow();
+    }
   });
 
   it("accepts RAVN's coin fee on Elysium only as WHYPE minted to its wallet", () => {
@@ -396,6 +442,106 @@ describe("checkExecution: Fynd's router", () => {
     for (const sel of ["0xdeadbeef", "0xf3fef3a3", "0x00000000"]) {
       const t = tampered(TOKEN, (d) => sel + d.slice(10));
       refuses(t.e, t.intent, /call to Fynd isn't a swap/);
+    }
+  });
+});
+
+describe("checkExecution: FlowRouter's router", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const ROUTER = "0x8ad60fae44dd6aafd8a98b7f25ead026013efdf2";
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tampered = (name: string, edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(name);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    const call = e.calls!.find((c) => c.to.toLowerCase() === ROUTER)!;
+    call.data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = call.value = value;
+    return { e, intent };
+  };
+  const TOKEN = "4663 usdg->nvda flowrouter (fee in the token)";
+  const COIN = "4663 eth->usdg flowrouter (coin sell, WETH fee)";
+
+  it("knows the router on Robinhood Chain only", () => {
+    expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(ROUTER))).toEqual(["4663"]);
+  });
+
+  it("holds a FlowRouter swap to the token and amount being swapped (a standing allowance to the router would cover more)", () => {
+    let t = tampered(TOKEN, (d) => setWord(d, 1, word(100_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered(TOKEN, (d) => setWord(d, 0, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+  });
+
+  it("refuses an amount of 0, which the router reads as the sender's whole balance", () => {
+    const t = tampered(TOKEN, (d) => setWord(d, 1, word(0n)));
+    refuses(t.e, t.intent, /take the whole balance/);
+  });
+
+  it("an ETH sell names the coin as the zero address and its amount is exactly the coin sent", () => {
+    let t = tampered(COIN, (d) => setWord(d, 0, word("0x5fc5360d0400a0fd4f2af552add042d716f1d168")));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+    t = tampered(COIN, (d) => d, "1");
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+    t = tampered(COIN, (d) => setWord(d, 1, word(1n)));
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+  });
+
+  it("refuses anything else to the router: its Permit2 swap, a withdrawal", () => {
+    // swapPermit2(...), transferRouterFunds(address[],uint256[],address)
+    for (const sel of ["0x56fda29b", "0x174da621", "0xdeadbeef", "0x00000000"]) {
+      const t = tampered(TOKEN, (d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to FlowRouter isn't a swap/);
+    }
+  });
+});
+
+describe("checkExecution: Khalani's deposit", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const DEPOSIT = "0xb280c373f57c9169e009a66496ee556084afad24";
+  const NAME = "42161->8453 usdc khalani (Khalani's own build)";
+  // Word i after the selector; the payload Khalani signed starts at word 5 (after its length, word 4).
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tampered = (edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(NAME);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    const call = e.calls!.find((c) => c.to.toLowerCase() === DEPOSIT)!;
+    call.data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = call.value = value;
+    return { e, intent };
+  };
+
+  it("passes Khalani's own build, and knows its deposit contracts on its five chains only", () => {
+    const { execution, intent } = fixture(NAME);
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const chains = (address: string) => Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(address.toLowerCase()));
+    expect(chains(DEPOSIT)).toEqual(["42161"]);
+    expect(chains("0xbC60926963dC61F21B10801F90E5BF177279866D")).toEqual(["4663"]);
+  });
+
+  it("holds the deposit to the token and amount being swapped", () => {
+    let t = tampered((d) => setWord(d, 1, word(10_000_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered((d) => setWord(d, 1, word(0n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered((d) => setWord(d, 0, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+  });
+
+  it("refuses a deposit paying out anywhere but the destination, or refunding anyone but the signer", () => {
+    let t = tampered((d) => setWord(d, 5 + 3, word(ATTACKER)));
+    refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
+    t = tampered((d) => setWord(d, 5 + 4, word(ATTACKER)));
+    refuses(t.e, t.intent, /refunds an address other than the wallet that signs/);
+  });
+
+  it("refuses a coin sent with it, and any other call to the contract", () => {
+    let t = tampered((d) => d, "1");
+    refuses(t.e, t.intent, /sends the native coin too/);
+    for (const sel of ["0xdeadbeef", "0xa9059cbb", "0x00000000"]) {
+      t = tampered((d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to Khalani isn't a deposit/);
     }
   });
 });

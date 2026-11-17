@@ -11,9 +11,17 @@
  * (Robinhood) added 2026-10-25 from RAVN's own builds for it. Relay's v3.2 proxy and router added
  * 2026-11-09 from Relay's own builds and /chains. Elysium (99901) added 2026-11-09, each with code there:
  * 0x's AllowanceHolder (0x's own Elysium config), KyberSwap's router (its live quote) and Relay's
- * (checked against its other chains' before Relay listed Elysium).
+ * (checked against its other chains' before Relay listed Elysium). OKX's there added 2026-11-09 from
+ * its /supported/chain and /swap: the approval contract's code and owner match OKX's on Arc and Base,
+ * the router is OKX's HyperEVM one but for its own addresses, and 4/4 builds ran on Elysium.
+ * Nordstern's there added 2026-11-10 from its /chains: the same functions and constants as its guard on
+ * Base, rebuilt (a revert message's typo fixed), and its swaps there pay the wallet they name.
+ * Fly's there added 2026-11-12 once Fly listed Elysium: its builds there call the same address, whose
+ * code is byte-for-byte its contract's on Base and HyperEVM, and they ran on Elysium paying what they quoted.
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
- * and RAVN's own builds for them.
+ * and RAVN's own builds for them. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
+ * GET /v1/health and RAVN's own builds for it. Khalani's deposit contracts (Ethereum, Arbitrum, Base, Polygon,
+ * Robinhood) added 2026-11-13 from its orders' deposit steps, confirmed by Khalani.
  */
 
 const ETHEREUM = 1;
@@ -99,6 +107,21 @@ export const FYND_ROUTERS: Record<number, string> = {
   [ARC]: "0x72C452506a551C7fe069f1F66Beb671AC58909E9",
 };
 
+/** FlowRouter's router (flowrouter.xyz), Robinhood Chain only: every FlowRouter swap calls it and its
+ * approval names it (the executor it hands the route to is never called or approved by the user). Not
+ * upgradeable. The guard reads the token and amount its swap pulls. */
+export const FLOWROUTER = "0x8Ad60fAE44DD6aaFD8A98B7f25EaD026013efdF2";
+
+/** Khalani's deposit contract per chain: every Khalani order is funded by one deposit call to it, which its
+ * approval names. The guard reads the token and amount it pulls and the payout and refund Khalani signed into it. */
+export const KHALANI_DEPOSITS: Record<number, string> = {
+  [ETHEREUM]: "0x4bACc118f9CEe2f6e9b52AAb317F8b5aaf2503F5",
+  [ARBITRUM]: "0xb280C373F57c9169e009a66496EE556084afAd24",
+  [BASE]: "0x1A7c327d0f402AEf2eD3D20D1141bD71BA1C317B",
+  [POLYGON]: "0x57F1DE920c6F9b749EDB729b43b0FF1878AbeF97",
+  [ROBINHOOD]: "0xbC60926963dC61F21B10801F90E5BF177279866D",
+};
+
 /** Where RAVN's own fee is paid, per ecosystem. */
 export const RAVN_FEE_WALLETS = {
   evm: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933",
@@ -163,11 +186,13 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [NOT_ZKSYNC.filter((c) => c !== ARC), ["0x337685fdaB40D39bd02028545a4FfA7D287cC3E2"], "Mayan forwarder"],
   [NOT_ZKSYNC, ["0xEC000769a73b70e16f361a442292500b3BCf4A85"], "Eco portal"],
   [ALL, ["0xe226e4825cb215abafad98fdd400583eab6a594f"], "Layerswap depository"],
-  [NOT_ZKSYNC, ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
+  [[...NOT_ZKSYNC, ELYSIUM], ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
   [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
   [[ROBINHOOD], [METRIC_ROUTER], "Metric SimpleRouter"],
+  [[ROBINHOOD], [FLOWROUTER], "FlowRouter router"],
   ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
+  ...Object.entries(KHALANI_DEPOSITS).map(([chain, deposit]): [readonly number[], readonly string[], string] => [[Number(chain)], [deposit], "Khalani deposit"]),
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).
@@ -205,6 +230,7 @@ const NORDSTERN: Record<number, string> = {
   [WORLD_CHAIN]: "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d",
   [HYPEREVM]: "0x2fF506ed9729580EF8Bf04429614beB1baE5F76D",
   [MONAD]: "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d",
+  [ELYSIUM]: "0x6af335771d1DdF7dD1501eCC89e978455Fe5c6Dd",
 };
 
 // OKX's DEX router (tx.to) and token-approval contract, per chain (OKX's /swap, 2026-10-21).
@@ -223,6 +249,7 @@ const OKX: Record<number, [string, string]> = {
   [ARBITRUM]: ["0x09f94b5fc68e227c323a6fbae3bd98c97fd8c849", "0x70cBb871E8f30Fc8Ce23609E9E0Ea87B6b222F58"],
   [AVALANCHE]: ["0xab96dcfa7a7d669d9bf5918fab8641479973dd0a", "0x40aA958dd87FC8305b97f2BA922CDdCa374bcD7f"],
   [LINEA]: ["0xdfcb0cecc10e78f3f3749f3f3d3ee4047b2c9829", "0x57df6092665eb6058DE53939612413ff4B09114E"],
+  [ELYSIUM]: ["0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA"],
 };
 
 // THORChain's router, per chain (inbound_addresses). The vault it pays is in the calldata.

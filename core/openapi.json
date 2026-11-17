@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "RAVN Swap API",
-    "version": "2026-11-09",
-    "description": "Cross-chain swap quoting and execution across 18 chains and every live venue (GET /api/v1/health lists them), including native (non-wrapped) Bitcoin as either source or destination. Free, self-serve, 0% protocol fee. Two ways to call it: the REST API below (works with no signup, an optional x-api-key raises your rate limit) or the pay-per-call x402 variant (see the /api/v1/x402/* paths) for agents that skip API-key signup entirely.",
+    "version": "2026-11-11",
+    "description": "Cross-chain swap quoting and execution across 19 chains and every live venue (GET /api/v1/health lists them), including native (non-wrapped) Bitcoin as either source or destination. Free, self-serve, 0% protocol fee. Two ways to call it: the REST API below (works with no signup, an optional x-api-key raises your rate limit) or the pay-per-call x402 variant (see the /api/v1/x402/* paths) for agents that skip API-key signup entirely.",
     "x-guidance": "Standard flow: POST /api/v1/quote to get a quoteToken and expected output for a swap between any two supported chains/tokens (including native Bitcoin as source or destination). Then POST /api/v1/execute with that quoteToken to receive one of three shapes tagged by executionType: TRANSACTION (sign & broadcast yourself), SIGNATURE (sign and POST to /api/v1/submit-signature, RAVN submits), or DEPOSIT (send the origin asset to the returned address); a Hinkal private quote first answers AUTHORIZE (have the paying wallet sign it and call /api/v1/execute again with authorization and signature, until the TRANSACTION comes back). Poll POST /api/v1/status with execute's quoteToken + statusRef (GET still works for small tokens). RAVN's multi-step routes (venue.id compose) list every venue they run through in hops[] (two or three) and return a packed statusRef — the user signs or sends only the first step. RAVN never custodies funds — execute only returns what the caller's own wallet needs to sign and broadcast.",
     "contact": {
       "email": "hello@ravn.exchange"
@@ -76,7 +76,9 @@
           "hinkal",
           "routefun",
           "metric",
-          "fynd"
+          "fynd",
+          "flowrouter",
+          "khalani"
         ]
       },
       "ErrorCode": {
@@ -247,7 +249,7 @@
           },
           "expectedOutputAmount": {
             "type": "string",
-            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `output.amount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself."
+            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `output.amount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself (on a call with `exactAmount`, on `inputAmount`)."
           },
           "fee": {
             "type": "object",
@@ -397,14 +399,18 @@
           },
           "pickable": {
             "type": "boolean",
-            "description": "Whether RAVN could have picked this route: `false` for a preview-only price, or for a route with no minimum quoting more than 1% above every route that holds one. To pick a route yourself, choose among `pickable` ones on `expectedOutputAmount`."
+            "description": "Whether RAVN could have picked this route: `false` for a preview-only price, or for a route with no minimum quoting more than 1% above every route that holds one. To pick a route yourself, choose among `pickable` ones on `expectedOutputAmount` (on a call with `exactAmount`, on `inputAmount`)."
+          },
+          "inputAmount": {
+            "type": "string",
+            "description": "What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs (every route delivers the same there: compare routes on this)."
           },
           "outputAmount": {
             "type": "string"
           },
           "expectedOutputAmount": {
             "type": "string",
-            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself."
+            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself (on a call with `exactAmount`, on `inputAmount`)."
           },
           "fee": {
             "type": "object",
@@ -467,6 +473,7 @@
           "routeType",
           "quoteToken",
           "pickable",
+          "inputAmount",
           "outputAmount",
           "expectedOutputAmount",
           "fee",
@@ -487,12 +494,16 @@
           "routeType": {
             "type": "string"
           },
+          "inputAmount": {
+            "type": "string",
+            "description": "What the user sends on this route, in the input token's base units: the request's `inputAmount`, or less on a `call` with `exactAmount`, where each route asks only what it needs (every route delivers the same there: compare routes on this)."
+          },
           "outputAmount": {
             "type": "string"
           },
           "expectedOutputAmount": {
             "type": "string",
-            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself."
+            "description": "What RAVN expects this route to deliver, in the output token's base units: the same as `outputAmount` unless the route has no minimum output (`slippage.noMinimum`). Rank on this if you sort routes yourself (on a call with `exactAmount`, on `inputAmount`)."
           },
           "fee": {
             "type": "object",
@@ -553,6 +564,7 @@
         "required": [
           "venue",
           "routeType",
+          "inputAmount",
           "outputAmount",
           "expectedOutputAmount",
           "fee",
@@ -863,7 +875,7 @@
                   "amount"
                 ],
                 "additionalProperties": false,
-                "description": "Send exactly `amount` of the input token to `address`. `expiresAt` (ISO 8601), when set, is when the deposit must have arrived on the origin chain: a later one lands at an expired order."
+                "description": "Send exactly `amount` of the input token to `address`. `expiresAt` (ISO 8601), when set, is the venue's deadline for this deposit: never send after it, and send it right away, since some venues need it to have arrived by then."
               },
               "statusRef": {
                 "type": "string",
@@ -1319,6 +1331,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -1342,6 +1355,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -1357,7 +1371,7 @@
                   },
                   "inputAmount": {
                     "type": "string",
-                    "description": "Positive integer string, in the input token's smallest unit"
+                    "description": "Positive integer string, in the input token's smallest unit. With call.exactAmount, the most your user sends: the quote's input.amount is what they send"
                   },
                   "userAddress": {
                     "type": "string",
@@ -1420,7 +1434,9 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },
@@ -1456,7 +1472,9 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },
@@ -1478,7 +1496,7 @@
                     "type": "boolean"
                   },
                   "timeoutMs": {
-                    "description": "The race's time limit in milliseconds, counted from when it starts. Once it has passed and some venue has priced the swap, venues still silent are left out (they aren't in alternatives) and the best of the rest is returned. If none has priced by then, the race waits for the first price (up to each venue's own limit, 10 s for most) and then leaves out the rest. A quote with slippage.noMinimum counts as a price only 2000 ms past the limit, so venues that hold a minimum get that long to answer. Defaults to 6000, the limit RAVN's app uses; a positive integer, clamped to 1000–15000. RAVN's own route gets 2000 more on pairs where its cross-chain WBTC plan races and from an Arc token other than USDC to another chain, and Houdini Swap and Hinkal get it whenever they race (confidential quotes only). Lower it to answer sooner, raise it to wait for slower venues.",
+                    "description": "The race's time limit in milliseconds, counted from when it starts. Once it has passed and some venue has priced the swap, venues still silent are left out (they aren't in alternatives) and the best of the rest is returned. If none has priced by then, the race waits for the first price (up to each venue's own limit, 10 s for most) and then leaves out the rest. A quote with slippage.noMinimum counts as a price only 2000 ms past the limit, so venues that hold a minimum get that long to answer. Defaults to 6000, the limit RAVN's app uses; a positive integer, clamped to 1000–15000. RAVN's own route gets 2000 more on pairs where its cross-chain WBTC plan races, from an Arc token other than USDC to another chain and from another EVM chain's token into Elysium, and Houdini Swap and Hinkal get it whenever they race (confidential quotes only). Lower it to answer sooner, raise it to wait for slower venues.",
                     "type": "integer",
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991
@@ -1486,6 +1504,37 @@
                   "broadcastViaRavn": {
                     "description": "Set if you can post a signed Solana transaction back to RAVN instead of broadcasting it yourself. It adds routes that only work when RAVN checks or lands the signed transaction: Layerswap's memo payments, which sell a Solana wallet's USDC (or any Solana token via Jupiter) into native BTC or a Robinhood Chain stock with no account rent — often the best price under ~$200; and Jupiter's market-maker (JupiterZ) and gas-sponsored orders, which a market maker or Jupiter signs too, inside Jupiter's own landing (a long-tail Solana token can price 7–33 bp better) — except when RAVN adds your fee to the order itself (under Jupiter's 50 bps minimum, or in a token RAVN has no referral account for), which only an order your user signs alone can take: JupiterZ is then left out, and a gas-sponsored order is a preview. Without it, Jupiter quotes only orders your user signs alone, and one that needs Jupiter's gas sponsor (a wallet short of SOL) is a preview (executable false). When /v1/execute returns a TRANSACTION with `submit` (every Jupiter one, a two-hop route's first step included — except an order carrying RAVN's transfer of your fee (as above): it is added to the order, which Jupiter's landing doesn't take, so it comes without `submit` for your user alone to sign), sign `transaction.serialized` and POST { quoteToken, signedTransaction } to `submit.url` (/v1/submit-transaction) instead of broadcasting it, within seconds (for Jupiter RAVN answers once it has landed: allow the call up to 2 minutes; posting the same signed transaction again is safe); transactions without `submit` you still broadcast yourself.",
                     "type": "boolean"
+                  },
+                  "call": {
+                    "description": "End the swap with a call into a contract on the output chain — a vault deposit, a perps or privacy-pool deposit — instead of paying outputToken to destinationAddress. outputToken (an ERC-20 on an EVM chain) is what the call receives, and outputAmount is how much: with exactAmount, exactly that, and your user sends only what the venue needs for it (input.amount, at most inputAmount; from an EVM chain or Solana nothing or about 1 bp comes back to leftoverTo (from Bitcoin, see below), on the same chain a swap's small surplus); without it, what the venue expects to deliver from inputAmount after its own costs (at least its floor, the minimum shown), all of it into the call: on Relay into Ethereum, Base, Arbitrum, Optimism and Polygon its router hands the whole fill to Across's handler, which runs the call with its balance (amountAt marks where); into Relay's other chains the call takes a fixed amount under its floor and the rest goes to leftoverTo. The venue runs, in order: approve target for the amount, call target with data (the amount written as a uint256 at byte amountAt, the 4-byte selector included — 4 for deposit(uint256 assets, address receiver)), set the approval back to 0, and send anything unspent to leftoverTo (default destinationAddress, else userAddress). The call is made by the venue's contract (Relay's router, Across's handler), not your user, so data must name your user as the owner of whatever it creates: anything credited to the caller can be taken by the next one. Every call fails or succeeds with the fill: if it reverts, the venue refunds the input on the input chain, or (Relay) may pay outputToken to destinationAddress, else userAddress, on the output chain instead. leftoverTo may not be the target or a venue's shared contract. Only contracts RAVN has registered on your key may be called (target and function selector, per chain); ask RAVN to register one. Before quoting, RAVN checks the venue's order or message runs exactly these calls, runs the fill against the chain, and returns no quote unless it succeeds and leaves the venue's contracts holding none of the token, none of the target's shares and no approval. Races Relay and Across (EVM or Solana input, Across from EVM chains; from Solana, set destinationAddress to your user's EVM address). From Bitcoin, RAVN's own route into Ethereum, Base, Arbitrum, Optimism or Polygon (Avalanche and Monad with exactAmount only): NEAR swaps the BTC into that chain's USDC paying a strict Relay deposit, whose signed order runs the call; set destinationAddress to your user's EVM address there (a refund on that chain, and anything left, go to it) and refundAddress to their Bitcoin address. Your fee is taken inside Relay's order, in outputToken before the call gets the rest (fee shows it), so your user's Bitcoin payment is one plain transfer. With exactAmount your user sends input.amount, which carries a margin so the price can move while the BTC confirms. Into a contract RAVN registered to take a leftover (a vault, at slippageBps up to 3%), NEAR swaps all of it and Relay's order puts exactly exactAmount into the call and sends the rest to leftoverTo in outputToken, in the same transaction; the margin is then about 3% at Auto (about 1.33 times slippageBps plus 0.4%), and inputAmount must cover it. Otherwise (any privacy pool), nothing is paid beside the deposit: input.amount includes up to slippageBps (2% when omitted), NEAR buys only what the call needs and returns the rest to refundAddress minus its refund fee (currently about 1,900 sats), so a smaller surplus isn't returned; there, a lower slippageBps loses less on small amounts, but if the price moves past it the deposit is refunded instead. With exactAmount, the route that needs the least input wins, gas included; each alternative shows its own inputAmount. A call quote can't be re-priced at /v1/execute after it expires: quote again.",
+                    "type": "object",
+                    "properties": {
+                      "target": {
+                        "type": "string",
+                        "pattern": "^0x[0-9a-fA-F]{40}$"
+                      },
+                      "data": {
+                        "type": "string",
+                        "pattern": "^0x(?:[0-9a-fA-F]{2}){4,}$"
+                      },
+                      "amountAt": {
+                        "type": "integer",
+                        "minimum": 4,
+                        "maximum": 9007199254740991
+                      },
+                      "exactAmount": {
+                        "type": "string"
+                      },
+                      "leftoverTo": {
+                        "type": "string",
+                        "pattern": "^0x[0-9a-fA-F]{40}$"
+                      }
+                    },
+                    "required": [
+                      "target",
+                      "data"
+                    ],
+                    "additionalProperties": false
                   },
                   "stream": {
                     "description": "Answer as newline-delimited JSON (Content-Type application/x-ndjson) while the race runs, instead of one JSON body at its end. One object per line: `{\"type\":\"venues\",\"venueIds\":[...]}` (the venues racing), then `{\"type\":\"settled\",\"venueId\":...,\"quotes\":[...]}` as each venue answers (`[]`: nothing usable; each quote is an alternative without its quoteToken or gas: a price to show, not to execute). RAVN's own multi-step route can first send `{\"type\":\"preview\",\"venueId\":\"compose\",\"quotes\":[...]}`, a route it has already priced while it prices its others: each preview replaces the last, its `settled` replaces them, and a client that ignores `preview` misses nothing. Then `{\"type\":\"done\",\"status\":200,\"data\":{...},\"meta\":{...}}` with the same body the plain response carries, quoteTokens included, or `{\"type\":\"done\",\"status\":404,\"error\":{...},\"meta\":{...}}` if the race failed (the HTTP status is already 200 by then). The winner is picked once, in `done`, net of gas: a venue that led mid-stream may not be it. A request RAVN refuses before the race (malformed body or fields, unknown token, key or rate limit) gets the usual JSON error instead; an address the race refuses comes in `done` (status 400). A stream that ends without `done` is a failed quote: request it again.",
@@ -2801,6 +2850,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -2824,6 +2874,7 @@
                       4663,
                       4217,
                       5042,
+                      99901,
                       -1,
                       -2
                     ]
@@ -2902,7 +2953,9 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },
@@ -2938,7 +2991,9 @@
                         "hinkal",
                         "routefun",
                         "metric",
-                        "fynd"
+                        "fynd",
+                        "flowrouter",
+                        "khalani"
                       ]
                     }
                   },
@@ -2956,7 +3011,7 @@
                     "type": "boolean"
                   },
                   "timeoutMs": {
-                    "description": "The race's time limit in milliseconds, counted from when it starts. Once it has passed and some venue has priced the swap, venues still silent are left out (they aren't in alternatives) and the best of the rest is returned. If none has priced by then, the race waits for the first price (up to each venue's own limit, 10 s for most) and then leaves out the rest. A quote with slippage.noMinimum counts as a price only 2000 ms past the limit, so venues that hold a minimum get that long to answer. Defaults to 6000, the limit RAVN's app uses; a positive integer, clamped to 1000–15000. RAVN's own route gets 2000 more on pairs where its cross-chain WBTC plan races and from an Arc token other than USDC to another chain, and Houdini Swap and Hinkal get it whenever they race (confidential quotes only). Lower it to answer sooner, raise it to wait for slower venues.",
+                    "description": "The race's time limit in milliseconds, counted from when it starts. Once it has passed and some venue has priced the swap, venues still silent are left out (they aren't in alternatives) and the best of the rest is returned. If none has priced by then, the race waits for the first price (up to each venue's own limit, 10 s for most) and then leaves out the rest. A quote with slippage.noMinimum counts as a price only 2000 ms past the limit, so venues that hold a minimum get that long to answer. Defaults to 6000, the limit RAVN's app uses; a positive integer, clamped to 1000–15000. RAVN's own route gets 2000 more on pairs where its cross-chain WBTC plan races, from an Arc token other than USDC to another chain and from another EVM chain's token into Elysium, and Houdini Swap and Hinkal get it whenever they race (confidential quotes only). Lower it to answer sooner, raise it to wait for slower venues.",
                     "type": "integer",
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991

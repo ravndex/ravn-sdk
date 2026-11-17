@@ -3,7 +3,7 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.4.18
+## @ravnexchange/sdk 0.4.25
 
 `executeAndTrack` now stops a swap where RAVN's own app does, before money is lost.
 
@@ -21,6 +21,114 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 ### Upgrading
 
 - Nothing to change: your handlers are called as before.
+
+## @ravnexchange/sdk 0.4.24
+
+Khalani, cross-chain stablecoin orders on Ethereum, Arbitrum, Base, Polygon and Robinhood Chain. 0.4.23 and
+older refuse its swaps: "The approval names a spender RAVN doesn't route through".
+
+### Added
+
+- Khalani's deposit contracts in the check (`checkExecution`), with its deposit read: the token and amount it
+  takes, the payout (the swap's destination) and the refund (the wallet that signs).
+- "khalani" in the generated types' venue lists.
+
+### Upgrading
+
+- Nothing to change.
+
+## @ravnexchange/sdk 0.4.23
+
+Fly Trade on Elysium (99901). 0.4.14–0.4.22 refuse Fly's swaps there: "The approval names a spender
+RAVN doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route through"
+on a HYPE sell.
+
+### Added
+
+- Fly Trade's contract on Elysium in the check (`checkExecution`).
+
+### Upgrading
+
+- Nothing to change.
+
+## @ravnexchange/sdk 0.4.22
+
+With `call.exactAmount`, your user sends only what the amount takes: `inputAmount` is the most they
+send, and the quote's `input.amount` what they send.
+
+### Added
+
+- `inputAmount` on each alternative and streamed price.
+- The generated types follow RAVN's API of 2026-11-11.
+
+### Upgrading
+
+- Nothing to change. Show your user `input.amount`, not `inputAmount`, on a call with `exactAmount`.
+
+## @ravnexchange/sdk 0.4.21
+
+Calls after the swap: `getQuote({ ..., call })` ends the swap with a call into a contract on the
+output chain, such as a vault deposit for your user, instead of paying the output token to an address.
+Only a contract and function RAVN has registered on your key; Relay and Across race it.
+
+### Added
+
+- `GetQuoteParams.call` and the `ContractCall` type: `target`, `data`, `amountAt`, `exactAmount`,
+  `leftoverTo`.
+- The generated types follow RAVN's API of 2026-11-10.
+
+### Upgrading
+
+- Nothing to change.
+
+## @ravnexchange/sdk 0.4.20
+
+Nordstern on Elysium (99901). 0.4.14–0.4.19 refuse Nordstern's swaps there: "The approval names a
+spender RAVN doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route
+through" on a HYPE sell.
+
+### Added
+
+- Nordstern's guard contract on Elysium in the check (`checkExecution`).
+
+### Upgrading
+
+- Nothing to change.
+
+## @ravnexchange/sdk 0.4.19
+
+FlowRouter (flowrouter.xyz) on Robinhood Chain. 0.3.0–0.4.18 refuse every FlowRouter swap: "The approval
+names a spender RAVN doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't
+route through" on an ETH sell or a token your user already approved. This release knows FlowRouter's
+router.
+
+### Added
+
+- FlowRouter's router (`0x8Ad6…fdF2`, Robinhood Chain only) in the check (`checkExecution`): the
+  contract a FlowRouter swap calls and the spender its approval names.
+- A FlowRouter swap must take the token being swapped (the zero address for an ETH sell, with exactly
+  the ETH sent), more than 0 and at most the swap's amount, in its one swap call: the router pulls what
+  its call says, and reads 0 as the sender's whole balance. Anything else to the router is refused.
+- The API's types list `"flowrouter"` in `onlyVenues`/`excludeVenues` and Elysium (99901) in the
+  quote's chains.
+
+### Upgrading
+
+- Nothing to change. Update to get FlowRouter's Robinhood prices once RAVN switches it on.
+
+## @ravnexchange/sdk 0.4.18
+
+OKX on Elysium (99901). 0.4.14–0.4.17 refuse OKX's swaps there: "The approval names a spender RAVN
+doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route through" on a
+HYPE sell.
+
+### Added
+
+- OKX's router and approval contract on Elysium in the check (`checkExecution`), each with code there.
+
+### Upgrading
+
+- Nothing to change. Update before you offer Elysium to your users.
 
 ## @ravnexchange/sdk 0.4.17
 
