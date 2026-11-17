@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import { checkExecution } from "./guard";
 import { KNOWN_CONTRACTS, separateSpender } from "./guard-contracts";
+import { base58Decode32 } from "./guard-solana";
 import type { SwapIntent } from "./guard";
 import { associatedTokenAddress, sha256 } from "./guard-solana";
 import { UnsafeExecutionError } from "./types";
@@ -1094,5 +1095,252 @@ describe("RavnClient: a flood of alternatives can't make it forget a quote", () 
     await expect(client.execute({ quoteToken: "T" })).rejects.toThrow(/two different quote requests/);
     // Past the per-answer cap a token isn't remembered at all, so it can't be executed unchecked.
     await expect(client.execute({ quoteToken: "j0_1000" })).rejects.toThrow(/didn't fetch it/);
+  });
+});
+
+describe("checkExecution: Chainflip's vault swap", () => {
+  const COIN = "1->bitcoin eth chainflip vault (Chainflip's own encoding)";
+  const TOKEN = "1->bitcoin usdc chainflip vault (Chainflip's own encoding)";
+  // The destination rides as the address text, so its own hex is what a tamper edits.
+  const DEST_HEX = Buffer.from("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "utf8").toString("hex");
+
+  const edited = (name: string, edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(name);
+    const tx = (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).transaction!;
+    tx.data = edit(tx.data!);
+    if (value !== undefined) tx.value = value;
+    const calls = (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).calls;
+    if (calls) calls[calls.length - 1] = { ...calls[calls.length - 1], data: tx.data!, value: tx.value ?? "0" };
+    return { e: execution, intent };
+  };
+
+  const EVM_DEST = "1->42161 eth chainflip vault, evm destination (Chainflip's own encoding)";
+
+  it("accepts an EVM destination, which rides as 20 raw bytes rather than text", () => {
+    const { execution, intent } = fixture(EVM_DEST);
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    // And it is really the destination being read: flip its last byte.
+    const t = edited(EVM_DEST, (d) => {
+      const dest = intent.destinationAddress!.replace(/^0x/, "").toLowerCase();
+      expect(d).toContain(dest);
+      return d.replace(dest, `${dest.slice(0, -2)}ff`);
+    });
+    refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
+  });
+
+  it("accepts Chainflip's own encoding, coin and token alike", () => {
+    for (const name of [COIN, TOKEN]) {
+      const { execution, intent } = fixture(name);
+      expect(() => checkExecution(execution, intent)).not.toThrow();
+    }
+  });
+
+  it("refuses a payout to any address but the swap's destination, in every form it reads", () => {
+    for (const name of [COIN, TOKEN]) {
+      // Last character of the Bitcoin address: "4" → "5".
+      const t = edited(name, (d) => d.replace(DEST_HEX, DEST_HEX.slice(0, -2) + "35"));
+      refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
+    }
+    // A legacy Bitcoin address rides as its text: change its last character, "y" to "x".
+    const p2sh = Buffer.from(fixture(P2SH).intent.destinationAddress!, "utf8").toString("hex");
+    const legacy = edited(P2SH, (d) => {
+      expect(d).toContain(p2sh);
+      return d.replace(p2sh, `${p2sh.slice(0, -2)}78`);
+    });
+    refuses(legacy.e, legacy.intent, /pays out to an address other than the swap's destination/);
+
+    // A Solana address rides as its 32 raw bytes: flip the last one.
+    const decoded = base58Decode32(fixture(SOLANA).intent.destinationAddress!)!;
+    const solana = Array.from(decoded, (b) => b.toString(16).padStart(2, "0")).join("");
+    const flipped = edited(SOLANA, (d) => {
+      expect(d).toContain(solana);
+      return d.replace(solana, `${solana.slice(0, -2)}ff`);
+    });
+    refuses(flipped.e, flipped.intent, /pays out to an address other than the swap's destination/);
+  });
+
+  it("reads the destination, not the wallet that signs", () => {
+    // A payout to someone other than the signer: mixing the two up would turn nothing else red.
+    const { execution, intent } = fixture(PAYS_OTHER);
+    expect(intent.destinationAddress).not.toBe(intent.userAddress);
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const t = edited(PAYS_OTHER, (d) => d.replace(intent.destinationAddress!.replace(/^0x/, "").toLowerCase(), intent.userAddress.replace(/^0x/, "").toLowerCase()));
+    refuses(t.e, t.intent, /pays out to an address other than the swap's destination/);
+  });
+
+  it("refuses sending more of the coin than the swap, or none", () => {
+    const more = edited(COIN, (d) => d, "300000000000000001");
+    refuses(more.e, more.intent, /sends more than the swap's amount/);
+    const none = edited(COIN, (d) => d, "0");
+    refuses(none.e, none.intent, /sends none of the coin being swapped/);
+  });
+
+  // The terms ride at the end of the call: version(1) | retry_duration(4) | refund_address(20) | min_price(32).
+  // The signing wallet's address appears nowhere else in these two calls, so finding it finds the refund.
+  const USER_HEX = "742d35cc6634c0532925a3b844bc9e7595f5be21";
+
+  it("refuses a fee beside the swap: the commission in its terms is the fee", () => {
+    const { execution, intent } = fixture(COIN);
+    (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).fee = {
+      address: FEE_WALLET,
+      chainId: 1,
+      amount: "1000000000000000",
+    };
+    refuses(execution, intent, /already carries RAVN's fee in its own terms/);
+  });
+
+  it("refuses a swap that refunds anyone but the wallet that signs", () => {
+    for (const name of [COIN, TOKEN]) {
+      const t = edited(name, (d) => {
+        expect(d).toContain(USER_HEX);
+        return d.replace(USER_HEX, ATTACKER.replace(/^0x/, ""));
+      });
+      refuses(t.e, t.intent, /refunds an address other than the wallet that signs/);
+    }
+  });
+
+  it("refuses terms written in a layout it hasn't read", () => {
+    const t = edited(COIN, (d) => {
+      const at = d.indexOf(USER_HEX);
+      return `${d.slice(0, at - 10)}02${d.slice(at - 8)}`;
+    });
+    refuses(t.e, t.intent, /terms aren't a version RAVN reads/);
+  });
+
+  const P2SH = "1->bitcoin eth chainflip vault, p2sh destination (Chainflip's own encoding)";
+  const SOLANA = "1->solana eth chainflip vault (Chainflip's own encoding)";
+  const PAYS_OTHER = "1->42161 eth chainflip vault, paying someone else (Chainflip's own encoding)";
+  const BROKER = "e0574da819208eaf92f4800ca6073b74efb941b94b706f2b41726ac0ad51764f";
+
+  // cfParameters is the call's last `bytes` argument, so rewriting it means rewriting its length word and
+  // its padding too — a plain string splice would leave the ABI saying one thing and the bytes another.
+  const withTerms = (name: string, rewrite: (terms: string) => string) =>
+    edited(name, (d) => {
+      const wordAt = (i: number) => d.slice(10 + 64 * i, 10 + 64 * (i + 1));
+      const argument = d.slice(0, 10) === "0xdd687345" ? 3 : 5;
+      const lengthWord = Number(BigInt(`0x${wordAt(argument)}`) / 32n);
+      const at = 10 + 64 * lengthWord;
+      const terms = rewrite(d.slice(at + 64, at + 64 + Number(BigInt(`0x${d.slice(at, at + 64)}`)) * 2));
+      const padded = terms.padEnd(Math.ceil(terms.length / 64) * 64, "0");
+      return d.slice(0, at) + (terms.length / 2).toString(16).padStart(64, "0") + padded;
+    });
+
+  it("accepts a swap from Arbitrum, through the other Vault", () => {
+    const { execution, intent } = fixture("42161->bitcoin eth chainflip vault (Chainflip's own encoding)");
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    // The Vault is pinned per chain: Ethereum's is not Arbitrum's.
+    const wrongChain = fixture("42161->bitcoin eth chainflip vault (Chainflip's own encoding)");
+    const tx = (wrongChain.execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).transaction!;
+    tx.to = "0xf5e10380213880111522dd0efd3dbb45b9f62bcc";
+    (wrongChain.execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).calls![0].to = tx.to;
+    refuses(wrongChain.execution, wrongChain.intent, /contract RAVN doesn't route through/);
+  });
+
+  it("accepts a legacy Bitcoin destination and a Solana one", () => {
+    // base58 that fits 32 bytes isn't a Solana address: a P2SH address must still be read as text.
+    for (const name of [P2SH, SOLANA]) {
+      const { execution, intent } = fixture(name);
+      expect(() => checkExecution(execution, intent)).not.toThrow();
+    }
+  });
+
+  it("refuses a commission paid to a broker other than RAVN's", () => {
+    for (const name of [COIN, TOKEN]) {
+      const t = edited(name, (d) => {
+        expect(d).toContain(BROKER);
+        return d.replace(BROKER, `${"ba11".repeat(15)}dead`);
+      });
+      refuses(t.e, t.intent, /broker other than RAVN's/);
+    }
+  });
+
+  it("refuses a commission over RAVN's own ceiling, broker's or an affiliate's", () => {
+    // The two bytes after the broker account are its commission, little-endian: 101 bps.
+    const over = edited(COIN, (d) => d.replace(`${BROKER}0500`, `${BROKER}6500`));
+    refuses(over.e, over.intent, /commission is more than RAVN's fee may be/);
+    // One affiliate taking 100 bps on top of the broker's 5: a one-entry vec (0x04) of {account u8, bps u8}.
+    const affiliated = withTerms(COIN, (t) => `${t.slice(0, -2)}040164`);
+    refuses(affiliated.e, affiliated.intent, /commission is more than RAVN's fee may be/);
+    // And an affiliate list that promises entries the terms don't carry.
+    const truncated = withTerms(COIN, (t) => `${t.slice(0, -2)}0401`);
+    refuses(truncated.e, truncated.intent, /cut short before its affiliates/);
+  });
+
+  it("refuses a fee hidden between affiliate entries, and any trailing byte at all", () => {
+    // Two entries whose second carries 255 bps. Striding as if an entry were three bytes would read the
+    // first entry's fee together with the second's account id, and miss the 255 entirely.
+    const hidden = withTerms(COIN, (t) => `${t.slice(0, -2)}08070000ff`);
+    refuses(hidden.e, hidden.intent, /commission is more than RAVN's fee may be/);
+    // And nothing may follow the fields: trailing bytes are what make that kind of misreading possible.
+    const trailing = withTerms(COIN, (t) => `${t}0000`);
+    refuses(trailing.e, trailing.intent, /carry more than their own fields/);
+  });
+
+  it("refuses an affiliate count written in a form it doesn't read", () => {
+    for (const header of ["01", "02", "03", "fd"]) {
+      const t = withTerms(COIN, (terms) => `${terms.slice(0, -2)}${header}`);
+      refuses(t.e, t.intent, /affiliate list isn't one RAVN reads/);
+    }
+  });
+
+  it("accepts terms that name no oracle slippage at all", () => {
+    // The only field whose width moves the cursor: Some(u16) is three bytes, None is one.
+    const { execution, intent } = fixture(COIN);
+    const none = withTerms(COIN, (t) => `${t.slice(0, 116)}00${t.slice(122)}`);
+    expect(() => checkExecution(none.e, none.intent)).not.toThrow();
+    // ...and the fixture it is derived from really does carry Some, or this proves nothing.
+    const tx = (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).transaction!;
+    expect(tx.data!.includes("016400")).toBe(true);
+  });
+
+  it("refuses the extras RAVN never asks for: a boost fee, instalments, a refund message", () => {
+    // boostFee is the byte before the broker account; the two before it are the dca and oracle options.
+    const boosted = edited(COIN, (d) => d.replace(`00${BROKER}`, `ff${BROKER}`));
+    refuses(boosted.e, boosted.intent, /boost fee RAVN doesn't ask for/);
+    const instalments = edited(COIN, (d) => d.replace(`0000${BROKER}`, `0100${BROKER}`));
+    refuses(instalments.e, instalments.intent, /instalments RAVN doesn't ask for/);
+    // refundCcmMetadata is the first byte after the 32-byte minPriceX128, which follows the refund address.
+    const message = edited(COIN, (d) => {
+      const at = d.indexOf(USER_HEX) + 40 + 64;
+      return `${d.slice(0, at)}01${d.slice(at + 2)}`;
+    });
+    refuses(message.e, message.intent, /refund message RAVN doesn't ask for/);
+  });
+
+  it("refuses terms too short to hold a refund address", () => {
+    const t = edited(COIN, (d) => {
+      const at = d.indexOf(USER_HEX);
+      const length = (5).toString(16).padStart(64, "0");
+      return `${d.slice(0, at - 74)}${length}0105000000${"0".repeat(54)}`;
+    });
+    refuses(t.e, t.intent, /terms are cut short/);
+  });
+
+  it("refuses a token swap that takes more than the swap, or another token", () => {
+    const setWord = (data: string, i: number, value: string) =>
+      data.slice(0, 10 + 64 * i) + value.replace(/^0x/, "").toLowerCase().padStart(64, "0") + data.slice(10 + 64 * (i + 1));
+    const more = edited(TOKEN, (d) => setWord(d, 4, (1000000001n).toString(16)));
+    refuses(more.e, more.intent, /takes more than the swap's amount/);
+    const other = edited(TOKEN, (d) => setWord(d, 3, ATTACKER));
+    refuses(other.e, other.intent, /token other than the one being swapped/);
+    const none = edited(TOKEN, (d) => setWord(d, 4, "0"));
+    refuses(none.e, none.intent, /takes none of the token being swapped/);
+  });
+
+  it("refuses any other call to the Vault", () => {
+    const t = edited(COIN, (d) => `0xdeadbeef${d.slice(10)}`);
+    refuses(t.e, t.intent, /call to Chainflip isn't a vault swap/);
+  });
+
+  it("refuses the coin call on a token sell and the token call on a coin sell", () => {
+    const coinOnToken = edited(TOKEN, (d) => `0xdd687345${d.slice(10)}`);
+    refuses(coinOnToken.e, coinOnToken.intent, /vault swap of the coin was built for a token sell/);
+    const tokenOnCoin = edited(COIN, (d) => `0x04fc7da0${d.slice(10)}`);
+    refuses(tokenOnCoin.e, tokenOnCoin.intent, /vault swap of a token was built for a coin sell/);
+  });
+
+  it("refuses a destination whose bytes run past the end of the call", () => {
+    const t = edited(COIN, (d) => d.slice(0, 10 + 64 * 4) + "f".repeat(64) + d.slice(10 + 64 * 5));
+    refuses(t.e, t.intent, /runs past the end of the call/);
   });
 });
