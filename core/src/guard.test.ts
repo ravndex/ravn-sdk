@@ -1179,6 +1179,17 @@ describe("checkExecution: Chainflip's vault swap", () => {
   // The signing wallet's address appears nowhere else in these two calls, so finding it finds the refund.
   const USER_HEX = "742d35cc6634c0532925a3b844bc9e7595f5be21";
 
+  it("refuses a fee beside the swap: the commission in its terms is the fee", () => {
+    const { execution, intent } = fixture(COIN);
+    (execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>).fee = {
+      address: FEE_WALLET,
+      chainId: 1,
+      amount: "1000000000000000",
+      token: { address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", chainId: 1, decimals: 18, symbol: "ETH" },
+    } as never;
+    refuses(execution, intent, /already carries RAVN's fee in its own terms/);
+  });
+
   it("refuses a swap that refunds anyone but the wallet that signs", () => {
     for (const name of [COIN, TOKEN]) {
       const t = edited(name, (d) => {

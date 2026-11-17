@@ -257,7 +257,7 @@ type Call = { to?: string; data?: string; value?: string; chainId?: number; gasL
  *
  *   version(1) | retryDurationBlocks u32(4) | refundAddress(20) | minPriceX128 u256(32)
  *   | refundCcmMetadata Option | maxOraclePriceSlippage Option<u16> | dcaParams Option
- *   | boostFee u8 | brokerFees{ account(32), commissionBps u16 } | affiliateFees Vec<{ account u8, bps u16 }>
+ *   | boostFee u8 | brokerFees{ account(32), commissionBps u16 } | affiliateFees Vec<{ account u8, bps u8 }>
  *
  * A vault swap carries all of this in the call the user signs, where a deposit channel kept it on Chainflip's
  * own chain, so every field here that moves money or names who receives it has to be read. Three do: the
@@ -808,6 +808,12 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     let value = swap.value;
     let tokens = approved > swap.tokens ? approved : swap.tokens;
     if (execution.fee) {
+      // A Chainflip vault swap carries RAVN's fee inside its own terms, as the broker's commission, so a fee
+      // beside it would be a second one. Refusing the pair holds the fee on these swaps to a single ceiling
+      // rather than two. If RAVN ever needs a fee beside Chainflip, this is the line that says it can't.
+      if (lower(execution.transaction.to) === lower(CHAINFLIP_VAULTS[ctx.chainId])) {
+        fail("A Chainflip swap already carries RAVN's fee in its own terms, so it can't pay one beside it too");
+      }
       const feeAmount = checkFeeTerms(ctx, execution.fee, RAVN_FEE_WALLETS.evm);
       if (execution.fee.transaction) {
         const fee = classifyEvmCall(ctx, execution.fee.transaction, "fee", feeAmount);

@@ -17,8 +17,8 @@ through".
   and — inside the swap's own terms (`cfParameters`) — where a swap that never fills is refunded, which must
   be the wallet that signs. A vault swap also carries RAVN's commission in those terms, where a deposit channel
   kept it on Chainflip's own chain, so the broker account is pinned to RAVN's and its commission — the broker's
-  and every affiliate's together — is held under 1%, the same ceiling RAVN's own fee is held to elsewhere (a
-  separate allowance from that one, not a shared budget). The options RAVN never asks for — a refund message,
+  and every affiliate's together — is held under 1%. That commission **is** RAVN's fee on these swaps, so a fee
+  paid beside the swap is refused outright: one fee, under one ceiling, never two. The options RAVN never asks for — a refund message,
   instalments, a boost fee — are refused rather than skipped, and nothing may trail the fields it reads. Chainflip carries each chain's address in its own form, so the destination is read
   as 20 raw bytes for an EVM payout, 32 for a Solana one, and the address text for Bitcoin. The terms' version
   byte is pinned, so a layout this version hasn't read is refused rather than misread.
