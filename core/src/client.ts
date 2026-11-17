@@ -39,9 +39,10 @@ export interface RavnClientConfig {
   guard?: false | GuardOptions;
   /**
    * Console warnings while you build, for what RAVN's server can't see: RAVN's fee not sent beside a
-   * swap (executeAndTrack's `feeError`, or a fee transaction never passed to getStatus as `txHash`),
-   * and a swap execute() built that nothing tracked within 10 minutes. On unless
-   * process.env.NODE_ENV is "production". `false` turns them off; `true` keeps them on everywhere.
+   * swap (executeAndTrack's `feeError`, or no `txHash` on any getStatus poll in the 10 minutes after
+   * such a swap succeeded), and a swap execute() built that nothing tracked within 10 minutes. On
+   * unless process.env.NODE_ENV is "production" or "test". `false` turns them off; `true` keeps them
+   * on everywhere. A warning never throws into a swap.
    */
   devWarnings?: boolean;
 }

@@ -379,7 +379,15 @@ export async function executeAndTrack(
     // limit is repeated. A BUILD_FAILED wants a fresh quote either way.
     const execute = (call: ExecuteParams, key: string | undefined = globalThis.crypto?.randomUUID?.()) =>
       withRetries(
-        () => orAbort(client.execute({ ...call, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent }), stop.signal),
+        () =>
+          orAbort(
+            client.execute({ ...call, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent }).then((answer) => {
+              // Answered after a stop: never sent, so never the caller's to track.
+              if (stop.signal.aborted && answer) noteTracked(client, answer.quoteToken);
+              return answer;
+            }),
+            stop.signal
+          ),
         key ? answerLost : rateLimited,
         key ? EXECUTE_ATTEMPTS : MAX_ATTEMPTS
       );
@@ -595,7 +603,8 @@ export async function executeAndTrack(
         feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
       }
       partial.feeError = feeError;
-      warnFeeNotSent(client, execution, feeError);
+      // Sent, its hash on the polls: RAVN proves it there even when its receipt wasn't seen.
+      if (!feeTxHash || statusTxHash !== feeTxHash) warnFeeNotSent(client, execution, feeError);
       return {
         execution, quoteToken, resetTxHash: partial.resetTxHash, approvalTxHash: partial.approvalTxHash, txHash, statusRef, statusTxHash, feeTxHash, feeError,
         finalStatus: await pollStatus(statusRef, statusTxHash, !!feeTxHash && !!statusTxHash),
@@ -694,7 +703,8 @@ export async function executeAndTrack(
         feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
       }
       partial.feeError = feeError;
-      warnFeeNotSent(client, execution, feeError);
+      // Sent, its hash on the polls: RAVN proves it there even when its receipt wasn't seen.
+      if (!feeTxHash || statusTxHash !== feeTxHash) warnFeeNotSent(client, execution, feeError);
       return {
         execution, quoteToken, txHash, statusRef, statusTxHash, feeTxHash, feeError,
         finalStatus: await pollStatus(statusRef, statusTxHash, !!statusTxHash),
@@ -728,8 +738,9 @@ export async function executeAndTrack(
     if (!result.finalStatus) noteBuilt(client, result.execution);
     return result;
   } catch (err) {
-    // Stopped once something was out: the caller's to track from `partial`. Nothing out, nothing to track.
-    if (sent && partial.execution) noteBuilt(client, partial.execution);
+    // Stopped once the swap itself was out: the caller's to track from `partial`. Nothing out (or
+    // only an approval), nothing to track.
+    if (partial.execution && (partial.txHash || partial.signedTransaction || partial.signature)) noteBuilt(client, partial.execution);
     if (stopCode) {
       const why = stopCode === "ABORTED" ? "aborted" : `no terminal status within maxWaitMs (${maxWaitMs} ms)`;
       throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, stopCode, { ...partial }, stop.signal.reason);

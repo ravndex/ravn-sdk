@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import type { RavnClientConfig } from "./client";
-import { TRACK_WITHIN_MS } from "./dev-warnings";
+import { resetUntrackedWarning, startDevWarnings, TRACK_WITHIN_MS, warnFeeNotSent } from "./dev-warnings";
 import { executeAndTrack } from "./execute-and-track";
 import type { ExecuteAndTrackHandlers } from "./execute-and-track";
+import type { ExecutionDTO } from "./types";
 
 // Each path answers its list in order, then repeats the last.
 function api(answers: Record<string, unknown[]>) {
@@ -34,15 +35,20 @@ const wallet = (over: Partial<ExecuteAndTrackHandlers> = {}): ExecuteAndTrackHan
   waitForReceipt: vi.fn(async (hash: string) => ({ status: "success", transactionHash: hash })),
   ...over,
 });
+const noReceipt = () => wallet({ waitForReceipt: vi.fn(async () => null) });
 
 let warn: ReturnType<typeof vi.spyOn>;
 const warnings = () => warn.mock.calls.map((c: unknown[]) => String(c[0]));
 beforeEach(() => {
+  // vitest runs with NODE_ENV "test", where they're off: these tests are about development.
+  vi.stubEnv("NODE_ENV", "development");
+  resetUntrackedWarning();
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -53,57 +59,41 @@ describe("development warnings: RAVN's fee not sent by executeAndTrack", () => {
     const r = await executeAndTrack(c, { quoteToken: "q" }, wallet({ sendTransaction: vi.fn(async (tx: { data?: string }) => { if (tx.data === "0xfeetransfer") throw declined; return SWAP; }) }), { pollIntervalMs: 0 });
     expect(r.feeError).toBe(declined);
     expect(r.finalStatus?.status).toBe("success");
-    // Once: the success polled without a fee hash that follows isn't a second warning for the same swap.
-    expect(warnings()).toEqual([expect.stringMatching(/^\[@ravnexchange\/sdk\] RAVN's fee on this swap wasn't sent: User rejected the request\. .*feeError.*devWarnings: false/)]);
+    expect(warnings()).toEqual([expect.stringMatching(/^\[@ravnexchange\/sdk\] RAVN's fee on this swap wasn't sent, or can't be proven: User rejected the request\. If the swap went through, no fee is owed.*feeError.*devWarnings: false/)]);
   });
 
-  it("an empty receipt for the swap: no fee sent, said so", async () => {
-    const c = client({ execute: [feeBeside], status: [success] });
-    await executeAndTrack(c, { quoteToken: "q" }, wallet({ waitForReceipt: vi.fn(async () => null) }), { pollIntervalMs: 0 });
-    expect(warnings()).toEqual([expect.stringMatching(/wasn't sent: executeAndTrack: no successful receipt/)]);
+  it("an empty receipt for the swap, or a batch id for the fee: said so", async () => {
+    await executeAndTrack(client({ execute: [feeBeside], status: [success] }), { quoteToken: "q" }, noReceipt(), { pollIntervalMs: 0 });
+    const batch = wallet({ sendCalls: vi.fn(async () => [SWAP, "0xbatch-id"]) });
+    await executeAndTrack(client({ execute: [feeBeside], status: [success] }), { quoteToken: "q" }, batch, { pollIntervalMs: 0 });
+    expect(warnings()).toEqual([expect.stringMatching(/can't be proven: executeAndTrack: no successful receipt/), expect.stringMatching(/not an on-chain transaction hash/)]);
+  });
+
+  it("quiet when the fee went out and its hash rides on the polls, even with its receipt unseen", async () => {
+    const fetchImpl = api({ execute: [feeBeside], status: [success] });
+    const timedOut = wallet({ waitForReceipt: vi.fn(async (hash: string) => { if (hash === FEE) throw new Error("Timed out while waiting for transaction receipt"); return { status: "success", transactionHash: hash }; }) });
+    const r = await executeAndTrack(new RavnClient({ guard: false, fetch: fetchImpl }), { quoteToken: "q" }, timedOut, { pollIntervalMs: 0 });
+    expect(r.feeError).toBeDefined();
+    expect(r.statusTxHash).toBe(FEE);
+    const polls = vi.mocked(fetchImpl).mock.calls.filter(([url]) => String(url).endsWith("/status"));
+    expect(polls.length).toBeGreaterThan(0);
+    expect(polls.every(([, init]) => JSON.parse(String(init?.body)).txHash === FEE)).toBe(true);
+    expect(warnings()).toEqual([]);
   });
 
   it("a deposit it sent whose fee then failed, and a deposit fee it can't describe", async () => {
     const depositTx = { to: "0xDeposit", data: "0x", value: "100", chainId: 1 };
     const evm = { executionType: "DEPOSIT", quoteToken: "qt-d", statusRef: "dep-1", deposit: { address: "0xDeposit", amount: "100" }, calls: [depositTx, fee.transaction], fee };
-    await executeAndTrack(client({ execute: [evm], status: [success] }), { quoteToken: "q" }, wallet({ waitForReceipt: vi.fn(async () => null) }), { sendDeposit: true, pollIntervalMs: 0 });
+    await executeAndTrack(client({ execute: [evm], status: [success] }), { quoteToken: "q" }, noReceipt(), { sendDeposit: true, pollIntervalMs: 0 });
     const odd = { executionType: "DEPOSIT", quoteToken: "qt-x", statusRef: "dep-2", deposit: { address: "x", amount: "1" }, fee: { amount: "1", address: "x", chainId: 999 } };
     await executeAndTrack(client({ execute: [odd] }), { quoteToken: "q" }, wallet());
-    expect(warnings()).toEqual([expect.stringMatching(/wasn't sent: executeAndTrack: no successful receipt/), expect.stringMatching(/wasn't sent: depositFeePayment: no known way to pay a fee on chain 999/)]);
+    expect(warnings()).toEqual([expect.stringMatching(/can't be proven: executeAndTrack: no successful receipt/), expect.stringMatching(/can't be proven: depositFeePayment: no known way to pay a fee on chain 999/)]);
   });
 
   it("quiet when the fee goes out, or the swap has none beside it", async () => {
     await executeAndTrack(client({ execute: [feeBeside], status: [success] }), { quoteToken: "q" }, wallet(), { pollIntervalMs: 0 });
     await executeAndTrack(client({ execute: [plain], status: [success] }), { quoteToken: "q" }, wallet(), { pollIntervalMs: 0 });
     expect(warnings()).toEqual([]);
-  });
-
-  it("quiet in production, unless turned on; off when turned off", async () => {
-    const declining = () => wallet({ waitForReceipt: vi.fn(async () => null) });
-    vi.stubEnv("NODE_ENV", "production");
-    await executeAndTrack(client({ execute: [feeBeside], status: [success] }), { quoteToken: "q" }, declining(), { pollIntervalMs: 0 });
-    expect(warnings()).toEqual([]);
-    await executeAndTrack(client({ execute: [feeBeside], status: [success] }, { devWarnings: true }), { quoteToken: "q" }, declining(), { pollIntervalMs: 0 });
-    expect(warnings()).toHaveLength(1);
-    vi.stubEnv("NODE_ENV", "development");
-    await executeAndTrack(client({ execute: [feeBeside], status: [success] }, { devWarnings: false }), { quoteToken: "q" }, declining(), { pollIntervalMs: 0 });
-    expect(warnings()).toHaveLength(1);
-  });
-
-  it("on where NODE_ENV isn't set, or nothing defines process (a browser without a bundler)", async () => {
-    vi.stubEnv("NODE_ENV", undefined);
-    await executeAndTrack(client({ execute: [feeBeside], status: [success] }), { quoteToken: "q" }, wallet({ waitForReceipt: vi.fn(async () => null) }), { pollIntervalMs: 0 });
-    expect(warnings()).toHaveLength(1);
-    // Only the constructor reads it: put back before anything else runs.
-    vi.stubGlobal("process", undefined);
-    let noProcess: RavnClient;
-    try {
-      noProcess = client({ execute: [feeBeside], status: [success] });
-    } finally {
-      vi.unstubAllGlobals();
-    }
-    await executeAndTrack(noProcess, { quoteToken: "q" }, wallet({ waitForReceipt: vi.fn(async () => null) }), { pollIntervalMs: 0 });
-    expect(warnings()).toHaveLength(2);
   });
 
   it("never on a sandbox swap", async () => {
@@ -113,24 +103,99 @@ describe("development warnings: RAVN's fee not sent by executeAndTrack", () => {
   });
 });
 
-describe("development warnings: a fee transaction never passed to getStatus", () => {
-  it("a swap with its fee beside it that succeeds, never polled with a txHash: warned once", async () => {
-    const c = client({ execute: [feeBeside], status: [pending, success, success] });
-    const ex = await c.execute({ quoteToken: "q" });
-    await c.getStatus(ex.quoteToken, SWAP);
+describe("development warnings: when they're on", () => {
+  const failFee = (config: RavnClientConfig = {}) =>
+    executeAndTrack(client({ execute: [feeBeside], status: [success] }, config), { quoteToken: "q" }, noReceipt(), { pollIntervalMs: 0 });
+
+  it("quiet in production and in test runs, unless turned on; off when turned off", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    await failFee();
+    vi.stubEnv("NODE_ENV", "test");
+    await failFee();
     expect(warnings()).toEqual([]);
-    await c.getStatus(ex.quoteToken, SWAP);
-    expect(warnings()).toEqual([expect.stringMatching(/fee\.transaction.*txHash.*no fee is owed to you on this swap/)]);
-    await c.getStatus(ex.quoteToken, SWAP);
+    await failFee({ devWarnings: true });
+    expect(warnings()).toHaveLength(1);
+    vi.stubEnv("NODE_ENV", "development");
+    await failFee({ devWarnings: false });
     expect(warnings()).toHaveLength(1);
   });
 
-  it("quiet once any poll passed a txHash, and on a swap that didn't succeed", async () => {
+  it("on where NODE_ENV isn't set, or nothing defines process (a browser without a bundler)", async () => {
+    vi.stubEnv("NODE_ENV", undefined);
+    await failFee();
+    expect(warnings()).toHaveLength(1);
+    // Only the constructor reads it: put back before anything else runs.
+    vi.stubGlobal("process", undefined);
+    let noProcess: RavnClient;
+    try {
+      noProcess = client({ execute: [feeBeside], status: [success] });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    await executeAndTrack(noProcess, { quoteToken: "q" }, noReceipt(), { pollIntervalMs: 0 });
+    expect(warnings()).toHaveLength(2);
+  });
+
+  it("never throws into a swap: an odd answer, or a console.warn that throws", async () => {
+    // guard: false, an answer with no data: execute resolves to it as before, never a TypeError.
+    await expect(client({ execute: [null] }).execute({ quoteToken: "q" })).resolves.toBeNull();
+    vi.useFakeTimers();
+    warn.mockImplementation(() => {
+      throw new Error("a suite that fails on console.warn");
+    });
+    const r = await executeAndTrack(client({ execute: [feeBeside], status: [success] }), { quoteToken: "q" }, noReceipt(), { pollIntervalMs: 0 });
+    expect(r.feeError).toBeDefined();
+    expect(r.finalStatus?.status).toBe("success");
+    // A timer's warning that throws doesn't surface either (vitest fails the test on an uncaught error).
+    await client({ execute: [plain] }).execute({ quoteToken: "q" });
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("one fee warning per swap, remembering at most 1,000 swaps", () => {
+    const c = {};
+    startDevWarnings(c, true);
+    const swap = (quoteToken: string) => ({ ...plain, quoteToken }) as unknown as ExecutionDTO;
+    warnFeeNotSent(c, swap("first"), "declined");
+    warnFeeNotSent(c, swap("first"), "declined");
+    expect(warnings()).toHaveLength(1);
+    for (let i = 0; i < 1_000; i++) warnFeeNotSent(c, swap(`other-${i}`), "declined");
+    expect(warnings()).toHaveLength(1_001);
+    // Forgotten as the 1,001st came in: said again.
+    warnFeeNotSent(c, swap("first"), "declined");
+    expect(warnings()).toHaveLength(1_002);
+  });
+});
+
+describe("development warnings: a fee transaction never passed to getStatus", () => {
+  beforeEach(() => vi.useFakeTimers());
+
+  it("a swap with its fee beside it that succeeded, and no poll with a txHash in the 10 minutes after: warned once", async () => {
     const c = client({ execute: [feeBeside], status: [pending, success] });
-    await c.getStatus((await c.execute({ quoteToken: "q" })).quoteToken, SWAP, FEE);
-    await c.getStatus("qt-1", SWAP);
+    const ex = await c.execute({ quoteToken: "q" });
+    await c.getStatus(ex.quoteToken, SWAP);
+    await c.getStatus(ex.quoteToken, SWAP);
+    await c.getStatus(ex.quoteToken, SWAP);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS - 1);
+    expect(warnings()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(warnings()).toEqual([expect.stringMatching(/fee\.transaction\) succeeded 10 minutes ago.*If that fee transaction wasn't sent, no fee is owed/)]);
+    await c.getStatus(ex.quoteToken, SWAP);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
+    expect(warnings()).toHaveLength(1);
+  });
+
+  it("quiet when a poll brings the fee's hash, even after the swap succeeded, and on a swap that didn't", async () => {
+    // RAVN keeps the swap open for a poll that brings the fee's hash: a useRavnStatus given txHash once the fee confirms.
+    const c = client({ execute: [feeBeside], status: [success] });
+    const ex = await c.execute({ quoteToken: "q" });
+    await c.getStatus(ex.quoteToken, SWAP);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS - 1);
+    await c.getStatus(ex.quoteToken, SWAP, FEE);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
     const refunded = client({ execute: [feeBeside], status: [{ status: "refunded", venue: "eco" }] });
     await refunded.getStatus((await refunded.execute({ quoteToken: "q" })).quoteToken, SWAP);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
     expect(warnings()).toEqual([]);
   });
 
@@ -138,20 +203,29 @@ describe("development warnings: a fee transaction never passed to getStatus", ()
     const deposit = { executionType: "DEPOSIT", quoteToken: "qt-d", statusRef: "dep-1", deposit: { address: "0xDeposit", amount: "100" }, fee };
     const d = client({ execute: [deposit], status: [success] });
     await d.getStatus((await d.execute({ quoteToken: "q" })).quoteToken, "dep-1");
-    expect(warnings()).toHaveLength(1);
     const sandbox = client({ execute: [{ ...feeBeside, sandbox: true }], status: [success] });
     await sandbox.getStatus((await sandbox.execute({ quoteToken: "q" })).quoteToken, "sandbox");
-    const btc = { ...deposit, fee: { amount: "600", address: "bc1qravnfee", chainId: -1 } };
+    const btc = { ...deposit, quoteToken: "qt-b", fee: { amount: "600", address: "bc1qravnfee", chainId: -1 } };
     const b = client({ execute: [btc], status: [success] });
     await b.getStatus((await b.execute({ quoteToken: "q" })).quoteToken, "dep-1");
-    expect(warnings()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
+    expect(warnings()).toEqual([expect.stringMatching(/fee\.transaction/)]);
+  });
+
+  it("executeAndTrack's own swaps: its fee hash on every poll, or its own warning once, never two", async () => {
+    // Their polls wait on (fake) timers too.
+    const runs = [wallet(), noReceipt()].map((w) => executeAndTrack(client({ execute: [feeBeside], status: [success] }), { quoteToken: "q" }, w, { pollIntervalMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await Promise.all(runs)).map((r) => r.finalStatus?.status)).toEqual(["success", "success"]);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
+    expect(warnings()).toEqual([expect.stringMatching(/wasn't sent, or can't be proven/)]);
   });
 });
 
 describe("development warnings: a swap built and never tracked", () => {
   beforeEach(() => vi.useFakeTimers());
 
-  it("warns 10 minutes after execute() when nothing tracked it, once per client", async () => {
+  it("warns 10 minutes after execute() when nothing tracked it, once per process", async () => {
     const c = client({ execute: [plain, { ...plain, quoteToken: "qt-2" }] });
     await c.execute({ quoteToken: "q" });
     await c.execute({ quoteToken: "q2" });
@@ -159,7 +233,9 @@ describe("development warnings: a swap built and never tracked", () => {
     expect(warnings()).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(warnings()).toEqual([expect.stringMatching(/built a swap 10 minutes ago and nothing has tracked it.*Ignore this if you track swaps on your server/)]);
+    // A server making a client per request: still once.
     await c.execute({ quoteToken: "q3" });
+    await client({ execute: [plain] }).execute({ quoteToken: "q" });
     await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
     expect(warnings()).toHaveLength(1);
   });
@@ -177,7 +253,7 @@ describe("development warnings: a swap built and never tracked", () => {
     expect(warnings()).toEqual([]);
   });
 
-  it("executeAndTrack: never for a swap it tracks, however long the wallet takes; never when nothing was sent", async () => {
+  it("executeAndTrack: never for a swap it tracks, however long the wallet takes", async () => {
     // The user leaves the fee's prompt open for 11 minutes: executeAndTrack still tracks it after.
     let confirmFee!: () => void;
     const slow = wallet({
@@ -193,9 +269,30 @@ describe("development warnings: a swap built and never tracked", () => {
     // Its polls wait on (fake) timers too.
     await vi.advanceTimersByTimeAsync(1_000);
     expect((await tracked).finalStatus?.status).toBe("success");
-    // The user declines the swap itself: nothing sent, nothing to track.
-    const rejected = wallet({ sendTransaction: vi.fn(async () => Promise.reject(new Error("User rejected the request"))) });
-    await expect(executeAndTrack(client({ execute: [plain] }), { quoteToken: "q" }, rejected)).rejects.toThrow(/rejected/);
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
+    expect(warnings()).toEqual([]);
+  });
+
+  it("executeAndTrack: never when the swap itself wasn't sent", async () => {
+    const rejected = new Error("User rejected the request");
+    // Declined at the swap.
+    await expect(executeAndTrack(client({ execute: [plain] }), { quoteToken: "q" }, wallet({ sendTransaction: vi.fn(async () => Promise.reject(rejected)) }))).rejects.toThrow(/rejected/);
+    // Approved, then declined at the swap.
+    const approval = { to: "0xToken", data: "0xapprove", value: "0", chainId: 1, token: "0xToken", spender: "0xRouter", amount: "1" };
+    const approvedOnly = wallet({ sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? `0x${"b".repeat(64)}` : Promise.reject(rejected))) });
+    await expect(executeAndTrack(client({ execute: [{ ...plain, approval }] }), { quoteToken: "q" }, approvedOnly)).rejects.toMatchObject({ code: "FAILED", partial: { approvalTxHash: `0x${"b".repeat(64)}` } });
+    // Stopped while execute() was still waiting on RAVN's answer.
+    const stop = new AbortController();
+    let answer!: () => void;
+    const slowApi = vi.fn(async () => {
+      await new Promise<void>((resolve) => (answer = resolve));
+      return { ok: true, status: 200, json: async () => ({ data: plain }) };
+    }) as unknown as typeof fetch;
+    const inFlight = executeAndTrack(new RavnClient({ guard: false, fetch: slowApi }), { quoteToken: "q" }, wallet(), { signal: stop.signal });
+    await vi.advanceTimersByTimeAsync(0);
+    stop.abort();
+    await expect(inFlight).rejects.toMatchObject({ code: "ABORTED" });
+    answer();
     await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
     expect(warnings()).toEqual([]);
   });
@@ -206,16 +303,18 @@ describe("development warnings: a swap built and never tracked", () => {
     expect(r.finalStatus).toBeUndefined();
     await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
     expect(warnings()).toEqual([expect.stringMatching(/nothing has tracked it/)]);
-    // A deposit it didn't send, polled by the caller in time: quiet.
+  });
+
+  it("a deposit executeAndTrack didn't send, polled by the caller in time: quiet", async () => {
     const d = client({ execute: [{ executionType: "DEPOSIT", quoteToken: "qt-d", statusRef: "dep-1", deposit: { address: "bc1q", amount: "1" } }], status: [pending] });
     const unsent = await executeAndTrack(d, { quoteToken: "q" }, wallet());
     await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS - 1);
     await d.getStatus(unsent.quoteToken, "dep-1");
     await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
-    expect(warnings()).toHaveLength(1);
+    expect(warnings()).toEqual([]);
   });
 
-  it("stopped once something was out: the caller's to track from partial", async () => {
+  it("stopped once the swap was out: the caller's to track from partial", async () => {
     const c = client({ execute: [plain] });
     const stop = new AbortController();
     const handlers = wallet({ sendTransaction: vi.fn(async () => (stop.abort(), SWAP)) });
@@ -224,8 +323,10 @@ describe("development warnings: a swap built and never tracked", () => {
     expect(warnings()).toHaveLength(1);
   });
 
-  it("never keeps a Node process alive", async () => {
+  it("never keeps a process alive: Node's timers unref'd, Deno's ids too", async () => {
     vi.useRealTimers();
+    const unrefTimer = vi.fn();
+    vi.stubGlobal("Deno", { unrefTimer });
     const timers: ReturnType<typeof setTimeout>[] = [];
     const real = globalThis.setTimeout;
     vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
@@ -236,6 +337,7 @@ describe("development warnings: a swap built and never tracked", () => {
     await client({ execute: [plain] }).execute({ quoteToken: "q" });
     expect(timers).toHaveLength(1);
     expect((timers[0] as unknown as { hasRef(): boolean }).hasRef()).toBe(false);
+    expect(unrefTimer).toHaveBeenCalledWith(timers[0]);
     clearTimeout(timers[0]);
   });
 });
