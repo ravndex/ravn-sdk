@@ -34,8 +34,11 @@ interface Watch {
   warned: Set<string>;
   /** Built, not yet tracked: quoteToken → its warning's timer. */
   untracked: Map<string, Timer>;
-  /** Built with RAVN's fee as a transaction of its own, never yet polled with a hash: its timer once it succeeded. */
-  feeBeside: Map<string, Timer | undefined>;
+  /**
+   * Built with RAVN's fee as a transaction of its own: undefined while no poll has carried a hash, its
+   * timer once it succeeded so, null once settled (a hash seen, or warned): never watched again.
+   */
+  feeBeside: Map<string, Timer | undefined | null>;
 }
 const watches = new WeakMap<object, Watch>();
 /** "Never tracked" is said once per process: the first says it all, and a server making a client per request isn't flooded. */
@@ -59,9 +62,16 @@ const say = (message: string) => console.warn(`${PREFIX} ${message} ${OFF}`);
 // Never what keeps a process alive (a script, a server shutting down): Node's and Bun's timers, and Deno's ids.
 const later = (fn: () => void): Timer => {
   const timer = setTimeout(safe(fn), TRACK_WITHIN_MS);
-  (timer as { unref?: () => void }).unref?.();
-  (globalThis as { Deno?: { unrefTimer?: (id: unknown) => void } }).Deno?.unrefTimer?.(timer);
+  try {
+    (timer as { unref?: () => void }).unref?.();
+    if (typeof timer === "number") (globalThis as { Deno?: { unrefTimer?: (id: number) => void } }).Deno?.unrefTimer?.(timer);
+  } catch {
+    // Still returned, so still cleared.
+  }
   return timer;
+};
+const stop = (timer: Timer | undefined | null) => {
+  if (timer) clearTimeout(timer);
 };
 const cap = <K>(kept: Set<K> | Map<K, unknown>, drop?: (key: K) => void) => {
   while (kept.size > MAX_WATCHED) {
@@ -70,12 +80,14 @@ const cap = <K>(kept: Set<K> | Map<K, unknown>, drop?: (key: K) => void) => {
     kept.delete(oldest);
   }
 };
-const forgetFee = (w: Watch, quoteToken: string) => {
-  clearTimeout(w.feeBeside.get(quoteToken));
-  w.feeBeside.delete(quoteToken);
+// Settled, not forgotten: execute() repeated, or executeAndTrack handing it back, doesn't watch it again.
+const settleFee = (w: Watch, quoteToken: string) => {
+  if (!w.feeBeside.has(quoteToken)) return;
+  stop(w.feeBeside.get(quoteToken));
+  w.feeBeside.set(quoteToken, null);
 };
 const warnFee = (w: Watch, quoteToken: string, message: string) => {
-  forgetFee(w, quoteToken);
+  settleFee(w, quoteToken);
   if (w.warned.has(quoteToken)) return;
   w.warned.add(quoteToken);
   cap(w.warned);
@@ -93,7 +105,7 @@ export const noteBuilt = safe((client: object, execution: ExecutionDTO | Authori
   const { quoteToken } = execution;
   if ("fee" in execution && execution.fee?.transaction && !execution.sandbox && !w.feeBeside.has(quoteToken)) {
     w.feeBeside.set(quoteToken, undefined);
-    cap(w.feeBeside, (k) => clearTimeout(w.feeBeside.get(k)));
+    cap(w.feeBeside, (k) => stop(w.feeBeside.get(k)));
   }
   clearTimeout(w.untracked.get(quoteToken));
   w.untracked.delete(quoteToken);
@@ -117,7 +129,7 @@ export const noteTracked = safe((client: object, quoteToken: string, txHash?: st
   if (!w) return;
   clearTimeout(w.untracked.get(quoteToken));
   w.untracked.delete(quoteToken);
-  if (txHash) forgetFee(w, quoteToken);
+  if (txHash) settleFee(w, quoteToken);
 });
 
 /**

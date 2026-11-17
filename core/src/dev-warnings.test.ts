@@ -152,6 +152,11 @@ describe("development warnings: when they're on", () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
+  it("executeAndTrack with a JS stand-in client that answers plain values, as before", async () => {
+    const standIn = { execute: () => plain, getStatus: () => success } as unknown as RavnClient;
+    expect((await executeAndTrack(standIn, { quoteToken: "q" }, wallet(), { pollIntervalMs: 0 })).finalStatus).toEqual(success);
+  });
+
   it("one fee warning per swap, remembering at most 1,000 swaps", () => {
     const c = {};
     startDevWarnings(c, true);
@@ -210,6 +215,19 @@ describe("development warnings: a fee transaction never passed to getStatus", ()
     await b.getStatus((await b.execute({ quoteToken: "q" })).quoteToken, "dep-1");
     await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
     expect(warnings()).toEqual([expect.stringMatching(/fee\.transaction/)]);
+  });
+
+  it("a swap whose polls carried the fee's hash, resumed without it after a stop: never watched again", async () => {
+    const status: unknown[] = [pending];
+    const c = client({ execute: [feeBeside], status });
+    const stopped = expect(executeAndTrack(c, { quoteToken: "q" }, wallet(), { pollIntervalMs: 1_000, maxWaitMs: 5_000 })).rejects.toMatchObject({ code: "TIMEOUT", partial: { statusTxHash: FEE } });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stopped;
+    // RAVN has the hash already; this poll just leaves it off.
+    status.push(success);
+    expect((await c.getStatus("qt-1", SWAP)).status).toBe("success");
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
+    expect(warnings()).toEqual([]);
   });
 
   it("executeAndTrack's own swaps: its fee hash on every poll, or its own warning once, never two", async () => {
@@ -323,10 +341,8 @@ describe("development warnings: a swap built and never tracked", () => {
     expect(warnings()).toHaveLength(1);
   });
 
-  it("never keeps a process alive: Node's timers unref'd, Deno's ids too", async () => {
+  it("never keeps a Node process alive", async () => {
     vi.useRealTimers();
-    const unrefTimer = vi.fn();
-    vi.stubGlobal("Deno", { unrefTimer });
     const timers: ReturnType<typeof setTimeout>[] = [];
     const real = globalThis.setTimeout;
     vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
@@ -337,7 +353,23 @@ describe("development warnings: a swap built and never tracked", () => {
     await client({ execute: [plain] }).execute({ quoteToken: "q" });
     expect(timers).toHaveLength(1);
     expect((timers[0] as unknown as { hasRef(): boolean }).hasRef()).toBe(false);
-    expect(unrefTimer).toHaveBeenCalledWith(timers[0]);
     clearTimeout(timers[0]);
+  });
+
+  it("Deno's numeric timer ids unref'd too; one that can't be is still cleared", async () => {
+    vi.useRealTimers();
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((() => 7) as unknown as typeof setTimeout);
+    const cleared = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const unrefTimer = vi.fn();
+    vi.stubGlobal("Deno", { unrefTimer });
+    await client({ execute: [plain] }).execute({ quoteToken: "q" });
+    expect(unrefTimer).toHaveBeenCalledWith(7);
+    unrefTimer.mockImplementation(() => {
+      throw new TypeError("not a timer id");
+    });
+    const c = client({ execute: [plain], status: [pending] });
+    await c.execute({ quoteToken: "q" });
+    await c.getStatus("qt-1", SWAP);
+    expect(cleared).toHaveBeenCalledWith(7);
   });
 });

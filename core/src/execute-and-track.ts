@@ -381,7 +381,8 @@ export async function executeAndTrack(
       withRetries(
         () =>
           orAbort(
-            client.execute({ ...call, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent }).then((answer) => {
+            // Promise.resolve: a JS stand-in client may hand back the value itself.
+            Promise.resolve(client.execute({ ...call, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent })).then((answer) => {
               // Answered after a stop: never sent, so never the caller's to track.
               if (stop.signal.aborted && answer) noteTracked(client, answer.quoteToken);
               return answer;
