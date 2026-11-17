@@ -11,7 +11,8 @@ publishes it to PyPI (`.github/workflows/publish-python-sdk.yml`).
 ### Added
 
 - `ExecuteParams.idempotencyKey`, sent as the `Idempotency-Key` header (never in the body): any unique
-  value per swap attempt, such as `str(uuid.uuid4())`. Calling `execute` again with the same key and
+  value per swap attempt, such as `str(uuid.uuid4())`, and a new one for each answer to an `AUTHORIZE` step
+  (Hinkal), which is an execute of its own: one key sent with a different request is refused. Calling `execute` again with the same key and
   request within a day returns the first answer instead of building again, so an execute whose answer was
   lost (a network error, a rate limit, `UNAVAILABLE`) is safe to ask again; at a deposit venue that's the
   difference between one deposit address and two. A key that isn't 1-255 printable ASCII characters
