@@ -1185,8 +1185,7 @@ describe("checkExecution: Chainflip's vault swap", () => {
       address: FEE_WALLET,
       chainId: 1,
       amount: "1000000000000000",
-      token: { address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", chainId: 1, decimals: 18, symbol: "ETH" },
-    } as never;
+    };
     refuses(execution, intent, /already carries RAVN's fee in its own terms/);
   });
 
