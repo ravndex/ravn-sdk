@@ -3,6 +3,24 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/widget-connector 0.1.5
+
+The widget can follow your page's light/dark toggle without reloading.
+
+### Added
+
+- `bridge.updateConfig(config)`: merges `config` into the bridge's config and sends it to the running
+  widget as a `bridge:config` message, and the widget re-applies its theme. Only the theme changes live;
+  `apiKey` and the starting pair are read once, when the widget starts. A reloaded iframe's handshake
+  gets the merged config, `apiKey` included.
+- `RavnWidgetConfig` and `RavnWidgetColors`: the fields the widget reads (colours, `appearance`, per-mode
+  `light`/`dark` colours, radii, font, starting pair, `apiKey`), typed and documented.
+
+### Upgrading
+
+- Nothing to change: `config` still takes any `Record<string, unknown>`, and the protocol version stays
+  "1". A widget that doesn't know `bridge:config` ignores it.
+
 ## ravnexchange (Python) 0.1.8
 
 An execute can be asked again without building twice, as in `@ravnexchange/sdk` since 0.2.1. Merging
