@@ -18,7 +18,10 @@ function fakeIframe() {
   });
 
   const iframe = {
-    contentWindow: { postMessage: (message: unknown, targetOrigin: string) => posted.push({ message, targetOrigin }) },
+    // Clones like the real postMessage, which throws DataCloneError on a function.
+    contentWindow: {
+      postMessage: (message: unknown, targetOrigin: string) => posted.push({ message: structuredClone(message), targetOrigin }),
+    },
   } as unknown as HTMLIFrameElement;
 
   return {
@@ -151,5 +154,38 @@ describe("createRavnWidgetBridge", () => {
       // @ts-expect-error appearance is "dark" | "light" | "auto"
       bridge.updateConfig({ appearance: "dim" });
     });
+  });
+
+  it("an update can replace apiKey but never clear it", () => {
+    const { iframe, posted } = fakeIframe();
+    const bridge = createRavnWidgetBridge({ iframe, widgetOrigin: WIDGET_ORIGIN, getWallet: () => null, config: { apiKey: "key" } });
+
+    bridge.updateConfig({ apiKey: undefined }); // a host prop that hasn't loaded yet
+    bridge.updateConfig({ apiKey: " " });
+    bridge.updateConfig({ apiKey: "key2" });
+    bridge.updateConfig({ apiKey: undefined });
+
+    const keys = posted.map((p) => (p.message as BridgeEnvelope<BridgeConfigPayload>).payload.config.apiKey);
+    expect(keys).toEqual(["key", "key", "key2", "key2"]);
+  });
+
+  it("a value postMessage can't send throws and leaves the config as it was, even before the iframe loads", () => {
+    const { iframe, posted, simulate } = fakeIframe();
+    const bridge = createRavnWidgetBridge({ iframe, widgetOrigin: WIDGET_ORIGIN, getWallet: () => null, config: { apiKey: "key" } });
+    const frame = iframe as unknown as { contentWindow: unknown };
+    const contentWindow = frame.contentWindow;
+
+    frame.contentWindow = null; // not loaded yet: nothing is posted, so only the check can catch it
+    expect(() => bridge.updateConfig({ onChange: () => {} })).toThrow();
+    frame.contentWindow = contentWindow;
+
+    bridge.updateConfig({ appearance: "light" });
+    simulate(makeEnvelope("bridge:ready", {}, "r1"));
+
+    const configs = posted.map((p) => (p.message as BridgeEnvelope<BridgeConfigPayload | BridgeInitPayload>).payload.config);
+    expect(configs).toEqual([
+      { apiKey: "key", appearance: "light" },
+      { apiKey: "key", appearance: "light" },
+    ]);
   });
 });

@@ -91,8 +91,9 @@ bridge.updateConfig({ appearance: "light" });
 `updateConfig` merges into the config you already gave (a `light` or `dark` colour object is replaced
 whole), and the running widget re-applies its theme without reloading. Only the theme changes live:
 `apiKey` and the starting pair (`sellChain`, `sellToken`, `buyChain`, `buyToken`, `amount`) are read
-once, when the widget starts. A reloaded iframe starts with the merged config. A widget that doesn't
-know this message ignores it. `RavnWidgetConfig` lists every field the widget reads.
+once, when the widget starts. A reloaded iframe starts with the merged config. A field set to
+`undefined` is cleared, except `apiKey`, which an update can replace but never clear. A widget that
+doesn't know this message ignores it. `RavnWidgetConfig` lists every field the widget reads.
 
 ## Examples
 

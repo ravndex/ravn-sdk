@@ -12,7 +12,9 @@ The widget can follow your page's light/dark toggle without reloading.
 - `bridge.updateConfig(config)`: merges `config` into the bridge's config and sends it to the running
   widget as a `bridge:config` message, and the widget re-applies its theme. Only the theme changes live;
   `apiKey` and the starting pair are read once, when the widget starts. A reloaded iframe's handshake
-  gets the merged config, `apiKey` included.
+  gets the merged config, `apiKey` included. A field set to `undefined` is cleared, except `apiKey`, which
+  an update can replace but never clear. A value `postMessage` can't send, such as a function, throws and
+  leaves the config as it was.
 - `RavnWidgetConfig` and `RavnWidgetColors`: the fields the widget reads (colours, `appearance`, per-mode
   `light`/`dark` colours, radii, font, starting pair, `apiKey`), typed and documented.
 
