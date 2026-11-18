@@ -832,13 +832,13 @@ export async function executeAndTrack(
   try {
     return await run();
   } catch (err) {
+    // A handler that can't say whether it sent (SentUnclearError): as if it had.
+    if (sentUnclear(err)) partial.sentUnclear = true;
     if (stopCode) {
       const why = stopCode === "ABORTED" ? "aborted" : `no terminal status within maxWaitMs (${maxWaitMs} ms)`;
       throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, stopCode, { ...partial }, stop.signal.reason);
     }
-    // A handler that can't say whether it sent (SentUnclearError): as if it had.
-    if (sentUnclear(err)) partial.sentUnclear = true;
-    else if (!sent) throw err;
+    if (!sent && !partial.sentUnclear) throw err;
     // String(): a wallet's Error can carry a message that isn't one, and this catch must never throw.
     const why = String(err instanceof Error ? err.message : err).replace(/^executeAndTrack: /, "");
     throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, "FAILED", { ...partial }, err);

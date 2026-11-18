@@ -23,13 +23,14 @@ export interface SolanaHandlersOptions {
 }
 
 // web3.js's SendTransactionError: the node answered with an error (its `transactionMessage`; "failed
-// to send transaction: …" before 1.9x), so it didn't pass the transaction on. Except "already been
-// processed": the node has it already (a wallet or an RPC sent it first).
+// to send transaction: …" before 1.9x), so it didn't pass the transaction on itself.
 function nodeRefused(e: unknown): boolean {
   const x = (e ?? {}) as { transactionMessage?: unknown; message?: unknown };
-  const answer = typeof x.transactionMessage === "string" ? x.transactionMessage : /^failed to send transaction: /i.test(String(x.message)) ? String(x.message) : undefined;
-  return answer !== undefined && !/already been processed/i.test(answer);
+  return typeof x.transactionMessage === "string" || /^failed to send transaction: /i.test(String(x.message));
 }
+
+// A clear outcome of a broadcast: it failed on-chain, or it expired with nothing moved.
+class Settled extends Error {}
 
 const fromBase64 = (b64: string): Uint8Array =>
   typeof atob === "function"
@@ -73,7 +74,8 @@ export async function simulateOrThrow(connection: Pick<Connection, "simulateTran
  * can't any more. Expired, nothing moved, only on proof from the finalized chain: a node showed its
  * blockhash valid, a node further along says it no longer is, and two history lookups from at least
  * that far along don't know the signature. A failure counts only once confirmed (one seen on a fork
- * can still succeed). Past `capMs` without an answer: SentUnclearError (it may still land).
+ * can still succeed). Past `capMs` without an answer, or on anything it didn't expect:
+ * SentUnclearError (it may still land).
  */
 export async function confirmSolanaBroadcast(
   connection: Pick<Connection, "sendRawTransaction" | "getSignatureStatuses" | "isBlockhashValid">,
@@ -86,30 +88,37 @@ export async function confirmSolanaBroadcast(
   const answer = <T>(call: () => Promise<T>) => call().catch(() => null);
   const landed = (status: SignatureStatus | null | undefined) => {
     const final = status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized";
-    if (final && status?.err) throw new Error(`The transaction failed on-chain, so the swap's funds didn't move. Refresh the quote and try again. (Signature ${signature})`);
+    if (final && status?.err) throw new Settled(`The transaction failed on-chain, so the swap's funds didn't move. Refresh the quote and try again. (Signature ${signature})`);
     return final;
   };
   let validAt: number | null = null;
   let expired = false;
   let unknownAfterExpiry = 0;
   const deadline = Date.now() + capMs;
-  while (Date.now() < deadline) {
-    const now = await answer(() => connection.getSignatureStatuses([signature]));
-    if (landed(now?.value[0])) return;
-    // Past its blockhash it can't land any more: nothing to re-send.
-    if (!expired) await answer(() => connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }));
-    const valid = await answer(() => connection.isBlockhashValid(blockhash, { commitment: "finalized" }));
-    if (valid?.value) validAt = Math.max(validAt ?? 0, valid.context.slot);
-    else if (valid && validAt !== null && valid.context.slot > validAt) {
-      expired = true;
-      const final = await answer(() => connection.getSignatureStatuses([signature], { searchTransactionHistory: true }));
-      if (landed(final?.value[0])) return;
-      unknownAfterExpiry = final && !final.value[0] && final.context.slot >= valid.context.slot ? unknownAfterExpiry + 1 : 0;
-      if (unknownAfterExpiry >= 2) {
-        throw new Error(`This transaction expired before the network included it, so nothing left the wallet. Refresh the quote and try again. (Signature ${signature})`);
+  try {
+    while (Date.now() < deadline) {
+      const now = await answer(() => connection.getSignatureStatuses([signature]));
+      if (landed(now?.value[0])) return;
+      // Past its blockhash it can't land any more: nothing to re-send.
+      if (!expired) await answer(() => connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }));
+      const valid = await answer(() => connection.isBlockhashValid(blockhash, { commitment: "finalized" }));
+      // Number(): web3.js 3.x answers slots as bigints.
+      const validSlot = Number(valid?.context.slot);
+      if (valid?.value) validAt = Math.max(validAt ?? 0, validSlot);
+      else if (valid && validAt !== null && validSlot > validAt) {
+        expired = true;
+        const final = await answer(() => connection.getSignatureStatuses([signature], { searchTransactionHistory: true }));
+        if (landed(final?.value[0])) return;
+        unknownAfterExpiry = final && !final.value[0] && Number(final.context.slot) >= validSlot ? unknownAfterExpiry + 1 : 0;
+        if (unknownAfterExpiry >= 2) {
+          throw new Settled(`This transaction expired before the network included it, so nothing left the wallet. Refresh the quote and try again. (Signature ${signature})`);
+        }
       }
+      await new Promise((r) => setTimeout(r, pollMs));
     }
-    await new Promise((r) => setTimeout(r, pollMs));
+  } catch (e) {
+    // Anything but a clear outcome (an answer shaped as this code didn't expect): it may still land.
+    if (e instanceof Settled) throw e;
   }
   throw new SentUnclearError(
     `Lost track of this transaction after it was sent: it may still confirm. Check signature ${signature} on a Solana explorer before trying again, so it isn't sent twice.`,
@@ -141,9 +150,13 @@ export function solanaHandlers({ connection, wallet, VersionedTransaction }: Sol
       try {
         await connection.sendRawTransaction(signed.serialize());
       } catch (e) {
-        // Refused by the node: it wasn't passed on. Anything else (no answer, "already processed") may
-        // have reached the chain: the re-sends below find out.
-        if (nodeRefused(e)) throw e;
+        // Refused by the node, and the network doesn't know the signature: nothing went out. Known
+        // ("already processed": a wallet or an RPC sent it first), unreadable, or no answer at all: it
+        // may have, and the re-sends below find out.
+        const known = nodeRefused(e)
+          ? await connection.getSignatureStatuses([signature], { searchTransactionHistory: true }).then((r) => r.value[0] ?? null, () => undefined)
+          : undefined;
+        if (known === null) throw e;
       }
       await confirmSolanaBroadcast(connection, signature, signed);
       return signature;

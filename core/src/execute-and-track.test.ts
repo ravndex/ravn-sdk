@@ -1897,6 +1897,20 @@ describe("executeAndTrack: wallet add-on hooks", () => {
     expect(e2.partial.txHash).toBeUndefined();
   });
 
+  it("sets sentUnclear on an aborted run too", async () => {
+    const controller = new AbortController();
+    const unclear = new SentUnclearError("lost track of it");
+    const { handlers } = steps({
+      sendSolanaTransaction: vi.fn(async () => {
+        controller.abort(new Error("user left"));
+        throw unclear;
+      }),
+    });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" } }], status: [{ status: "success" }] }) });
+    const error = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, signal: controller.signal }).catch((e) => e);
+    expect(error).toMatchObject({ code: "ABORTED", partial: { sentUnclear: true } });
+  });
+
   it("any other rejection before a send still comes as it is (nothing sent)", async () => {
     const cancel = Object.assign(new Error("User rejected the request."), { code: 4001 });
     const { handlers } = steps({ batchApprovals: true, sendCalls: vi.fn(async () => Promise.reject(cancel)) });

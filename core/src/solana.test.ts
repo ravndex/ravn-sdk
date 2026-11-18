@@ -105,6 +105,29 @@ describe("confirmSolanaBroadcast", () => {
     await expect(confirmSolanaBroadcast(connection, SIG, signed, fast)).rejects.toThrow(/may still confirm/);
   });
 
+  // web3.js 3.x (npm's latest) answers slots as bigints: Math.max(0, 5n) threw, after a send.
+  it("reads web3.js 3.x's bigint slots: lands, and proves expiry, the same", async () => {
+    const big = rpc({ status: [null, { confirmationStatus: "confirmed" }], valid: [{ slot: 100, value: true }] });
+    big.raw.isBlockhashValid.mockImplementation(async () => ({ context: { slot: 100n as never }, value: true }));
+    await expect(confirmSolanaBroadcast(big.connection, SIG, signed, roomy)).resolves.toBeUndefined();
+
+    const expiring3x = rpc({ history: [{ slot: 261, status: null }] });
+    let v = 0;
+    expiring3x.raw.isBlockhashValid.mockImplementation(async () => (v++ ? { context: { slot: 260n as never }, value: false } : { context: { slot: 100n as never }, value: true }));
+    expiring3x.raw.getSignatureStatuses.mockImplementation(async (_s: string[], opts?: { searchTransactionHistory?: boolean }) =>
+      opts?.searchTransactionHistory ? { context: { slot: 261n as never }, value: [null] } : { context: { slot: 0n as never }, value: [null] }
+    );
+    await expect(confirmSolanaBroadcast(expiring3x.connection, SIG, signed, roomy)).rejects.toThrow(/expired before the network included it/);
+  });
+
+  it("an answer it didn't expect, after the broadcast, is 'may still land', never 'nothing sent'", async () => {
+    const odd = rpc({});
+    odd.raw.getSignatureStatuses.mockImplementation(async () => ({ context: { slot: 0 } }) as never);
+    const error = await confirmSolanaBroadcast(odd.connection, SIG, signed, roomy).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(SentUnclearError);
+    expect((error as SentUnclearError).txHash).toBe(SIG);
+  });
+
   it("keeps the cautious answer, with the signature, when the RPC won't answer", async () => {
     const down = new Error("fetch failed");
     const { connection } = rpc({ status: [down], valid: [down], history: [down] });
@@ -214,9 +237,11 @@ describe("solanaHandlers", () => {
   });
 
   it("a node refusing the first send: nothing sent; no answer at all: re-sent until it lands", async () => {
-    const refused = { simulateTransaction: ok, sendRawTransaction: vi.fn(async () => Promise.reject(new SendTransactionError({ action: "send", signature: "", transactionMessage: "Blockhash not found" }))) };
+    const unknown = vi.fn(async () => ({ context: { slot: 1 }, value: [null] }));
+    const refused = { simulateTransaction: ok, getSignatureStatuses: unknown, sendRawTransaction: vi.fn(async () => Promise.reject(new SendTransactionError({ action: "send", signature: "", transactionMessage: "Blockhash not found" }))) };
     await expect(solanaHandlers({ connection: refused as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).rejects.toBeInstanceOf(SendTransactionError);
     expect(refused.sendRawTransaction).toHaveBeenCalledOnce();
+    expect(unknown).toHaveBeenCalledWith([expect.any(String)], { searchTransactionHistory: true });
 
     const { raw } = rpc({ status: [null, { confirmationStatus: "confirmed" }] });
     raw.sendRawTransaction.mockImplementationOnce(async () => Promise.reject(new Error("fetch failed")));
@@ -224,16 +249,24 @@ describe("solanaHandlers", () => {
     await expect(solanaHandlers({ connection: silent as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).resolves.toEqual(expect.any(String));
   });
 
-  it("a node saying it already has it ('already been processed'): sent, so watched until it lands, never refused", async () => {
-    const { raw } = rpc({ status: [null, { confirmationStatus: "confirmed" }] });
+  it("a refusal from a node when the network already has it ('already processed'): sent, so watched until it lands", async () => {
+    const { raw } = rpc({ history: [{ slot: 5, status: { confirmationStatus: "processed" } }], status: [null, { confirmationStatus: "confirmed" }] });
     raw.sendRawTransaction.mockImplementationOnce(async () =>
       Promise.reject(new SendTransactionError({ action: "simulate", signature: "", transactionMessage: "Transaction simulation failed: This transaction has already been processed" }))
     );
     const connection = { ...raw, simulateTransaction: ok };
     await expect(solanaHandlers({ connection: connection as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).resolves.toEqual(expect.any(String));
+    // web3.js 3.x drops the node's words when there are logs: the network's own answer decides.
+    const { raw: raw3 } = rpc({ history: [{ slot: 5, status: { confirmationStatus: "processed" } }], status: [null, { confirmationStatus: "confirmed" }] });
+    raw3.sendRawTransaction.mockImplementationOnce(async () => Promise.reject(Object.assign(new Error("Simulation failed. Message: log."), { transactionMessage: "log" })));
+    await expect(solanaHandlers({ connection: { ...raw3, simulateTransaction: ok } as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).resolves.toEqual(expect.any(String));
+    // A refusal whose lookup can't be read: watched, never called "nothing sent".
+    const { raw: blind } = rpc({ history: [new Error("rpc down")], status: [null, { confirmationStatus: "confirmed" }] });
+    blind.sendRawTransaction.mockImplementationOnce(async () => Promise.reject(new SendTransactionError({ action: "simulate", signature: "", transactionMessage: "x" })));
+    await expect(solanaHandlers({ connection: { ...blind, simulateTransaction: ok } as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).resolves.toEqual(expect.any(String));
     // An older web3.js's refusal (message only) is still a refusal.
-    const older = { simulateTransaction: ok, sendRawTransaction: vi.fn(async () => Promise.reject(new Error("failed to send transaction: Transaction simulation failed: Blockhash not found"))) };
+    const older = { simulateTransaction: ok, getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }), sendRawTransaction: vi.fn(async () => Promise.reject(new Error("failed to send transaction: Transaction simulation failed: Blockhash not found"))) };
     await expect(solanaHandlers({ connection: older as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).rejects.toThrow(/failed to send transaction/);
     expect(older.sendRawTransaction).toHaveBeenCalledOnce();
-  });
+  }, 15_000); // three sends, each waiting the real 2 s between re-sends
 });
