@@ -5,22 +5,27 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 
 ## @ravnexchange/sdk 0.4.26
 
-`executeAndTrack` now stops a swap where RAVN's own app does, before money is lost.
+`executeAndTrack` stops a swap before money is lost: after a failed approval, and before a deposit
+too close to its deadline.
 
 ### Changed
 
 - An approval whose receipt says it failed stops the swap: it rejects with an `ExecuteAndTrackError`
-  (`FAILED`, the approval's hash in `partial`) instead of sending a swap that would fail and cost gas.
-  The same for a failed `approval.reset`, and on a signed order (nothing is signed). A receipt that
-  doesn't say (`null`, no status) goes on as before.
+  (`FAILED`, the approval's hash in `partial.approvalTxHash`) instead of sending a swap that would
+  fail and cost gas. A failed `approval.reset` stops it too (its hash in `partial.resetTxHash`; no
+  approval is sent). On a signed order, nothing is signed. A receipt that doesn't say (`null`, no
+  status) goes on as before.
 - With `sendDeposit`, a deposit due by `deposit.expiresAt` isn't sent with under 2 minutes of it
-  left, or with an `expiresAt` it can't read: it rejects before anything is sent. A Hinkal deposit
-  holds the same 2 minutes inside its 10-minute window: none is sent after 8 minutes.
+  left, or with an `expiresAt` it can't read: it rejects before anything is sent, where it used to
+  be sent, or come back as `depositNotSent` for you to send.
+- A Hinkal deposit, with or without `sendDeposit`, isn't sent after 8 minutes of its 10-minute
+  window.
 - An `ExecuteAndTrackError`'s message starts with "executeAndTrack:" once, not twice.
 
 ### Upgrading
 
-- Nothing to change: your handlers are called as before.
+- Your handlers are called as before. With `sendDeposit`, a deposit under 2 minutes from its
+  deadline now rejects: send nothing, and get a fresh quote.
 
 ## @ravnexchange/sdk 0.4.25
 

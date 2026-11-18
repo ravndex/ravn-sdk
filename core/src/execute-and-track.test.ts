@@ -1586,7 +1586,7 @@ describe("executeAndTrack: review fixes, round 5", () => {
   });
 });
 
-// 0.4.18: what RAVN's app already does, so a swap stops before money is lost.
+// A swap stops before money is lost, as RAVN's app stops it.
 describe("executeAndTrack: a failed approval stops the swap", () => {
   const [APPROVAL, RESET, SWAP] = ["e", "0", "a"].map((c) => `0x${c.repeat(64)}`);
   const approval = { to: "0xUSDC", data: "0xapprove", value: "0", chainId: 8453 };
@@ -1664,7 +1664,7 @@ describe("executeAndTrack: a failed approval stops the swap", () => {
   });
 });
 
-// Not in 0.4.18: a hand-written sendCalls that rejects on a wallet without atomic batches (Rabby,
+// Not batched: a hand-written sendCalls that rejects on a wallet without atomic batches (Rabby,
 // Phantom, HyperEVM) would fail every such token sell, with no way to say "can't batch, use steps".
 describe("executeAndTrack: approve and swap without a fee stay two steps", () => {
   const [APPROVAL, SWAP] = ["e", "a"].map((c) => `0x${c.repeat(64)}`);
