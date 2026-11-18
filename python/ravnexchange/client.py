@@ -13,6 +13,7 @@ nothing to a project's dependency tree.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -83,6 +84,12 @@ class ExecuteParams(TypedDict, total=False):
     destinationAddress: str
     refundAddress: str
     clientTimezone: str
+    # Sent as the Idempotency-Key header, never in the body: any unique value per swap attempt (e.g.
+    # str(uuid.uuid4())), 1-255 printable ASCII characters, no spaces. execute again with the same key
+    # and request (quoteToken and any addresses) within a day returns the first answer instead of
+    # building again (at a deposit venue, a second deposit address), so an execute whose answer was
+    # lost can be asked again. Each answer to an AUTHORIZE step takes a key of its own.
+    idempotencyKey: str
     # Only after an AUTHORIZE answer: its authorization, with the paying wallet's signature over its
     # `sign`. Both or neither.
     authorization: str
@@ -123,6 +130,9 @@ def _hex_signatures(params: Any) -> Dict[str, Any]:
 # unusual runtimes) supply their own opener instead of hitting the network.
 UrlOpener = Callable[[urllib.request.Request], Any]
 
+# The API's own rule for Idempotency-Key: anything else it answers 400.
+_IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
+
 
 class RavnClient:
     def __init__(
@@ -135,8 +145,14 @@ class RavnClient:
         self._base_url = base_url.rstrip("/")
         self._urlopen = urlopen
 
-    def _request(self, path: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Any:
-        headers = {"content-type": "application/json"}
+    def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        headers = {"content-type": "application/json", **(extra_headers or {})}
         if self._api_key:
             headers["x-api-key"] = self._api_key
         data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -182,8 +198,14 @@ class RavnClient:
         """POST /v1/execute: branch on the returned executionType (TRANSACTION / SIGNATURE / DEPOSIT;
         AUTHORIZE only on an authorizeSteps quote: check it with check_authorize, sign `sign` with
         the paying wallet and execute again with the same quoteToken, authorization and signature,
-        until a TRANSACTION comes back)."""
-        return self._request("/execute", "POST", _hex_signatures(params))
+        until a TRANSACTION comes back). `idempotencyKey` goes as the Idempotency-Key header."""
+        body = _hex_signatures(params)
+        key = body.pop("idempotencyKey", None)
+        if key is None:
+            return self._request("/execute", "POST", body)
+        if not isinstance(key, str) or not _IDEMPOTENCY_KEY.fullmatch(key):
+            raise RavnApiError("INVALID_REQUEST", "idempotencyKey must be 1-255 printable ASCII characters, no spaces")
+        return self._request("/execute", "POST", body, {"Idempotency-Key": key})
 
     def recover(self, params: RecoverParams, user_address: str) -> Dict[str, Any]:
         """POST /v1/recover: one step of getting back what a failed Hinkal swap left at Hinkal.

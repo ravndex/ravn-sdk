@@ -3,6 +3,26 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## ravnexchange (Python) 0.1.8
+
+An execute can be asked again without building twice, as in `@ravnexchange/sdk` since 0.2.1. Merging
+publishes it to PyPI (`.github/workflows/publish-python-sdk.yml`).
+
+### Added
+
+- `ExecuteParams.idempotencyKey`, sent as the `Idempotency-Key` header (never in the body): any unique
+  value per swap attempt, such as `str(uuid.uuid4())`, and a new one for each answer to an `AUTHORIZE` step
+  (Hinkal), which is an execute of its own: one key sent with a different request is refused. Calling `execute` again with the same key and
+  request within a day returns the first answer instead of building again, so an execute whose answer was
+  lost (a network error, a rate limit, `UNAVAILABLE`) is safe to ask again; at a deposit venue that's the
+  difference between one deposit address and two. A key that isn't 1-255 printable ASCII characters
+  without spaces raises `RavnApiError("INVALID_REQUEST")` before anything is sent. RAVN's partner
+  dashboard counts swaps executed without one.
+
+### Upgrading
+
+- Nothing to change; without `idempotencyKey`, `execute` sends what it always has.
+
 ## @ravnexchange/sdk 0.4.29
 
 Warnings in the console while you build, for three mistakes RAVN's server can't see from its side. Each one

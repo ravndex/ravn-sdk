@@ -17,6 +17,8 @@ pip install ravnexchange
 ## Usage
 
 ```python
+import uuid
+
 from ravnexchange import RavnClient, RavnApiError
 
 client = RavnClient(api_key="rvn_live_...")  # omit for the anonymous tier
@@ -36,7 +38,9 @@ try:
 except RavnApiError as e:
     print(e.code, str(e))
 else:
-    execution = client.execute({"quoteToken": quote["quoteToken"]})
+    # A key per swap attempt (0.1.8+): asking again with it after a lost answer can't build twice.
+    # Each answer to an AUTHORIZE step (Hinkal, below) is an execute of its own, with a key of its own.
+    execution = client.execute({"quoteToken": quote["quoteToken"], "idempotencyKey": str(uuid.uuid4())})
     # branch on execution["executionType"]: TRANSACTION / SIGNATURE / DEPOSIT
 ```
 
@@ -55,6 +59,7 @@ with the same `quoteToken`, the `authorization` and the `signature`. See
 
 ```python
 import time
+import uuid
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from ravnexchange import check_authorize, check_hinkal_deposit
@@ -63,7 +68,7 @@ account = Account.from_key(private_key)  # the paying wallet: userAddress
 params = {"inputChainId": 8453, "inputToken": USDC, "inputAmount": "20000000", "userAddress": account.address,
           "destinationAddress": recipient, "confidential": True, "authorizeSteps": True}
 quote = client.get_quote(params)
-execution = client.execute({"quoteToken": quote["quoteToken"]})
+execution = client.execute({"quoteToken": quote["quoteToken"], "idempotencyKey": str(uuid.uuid4())})
 while execution["executionType"] == "AUTHORIZE":
     check_authorize(execution, params)  # raises UnsafeExecutionError before anything is signed
     sign = execution["sign"]
@@ -74,7 +79,7 @@ while execution["executionType"] == "AUTHORIZE":
         signature = account.sign_typed_data(full_message=sign["typedData"]).signature
     # Bytes or hex without 0x (hexbytes 1.x's .hex()) both go out as 0x hex.
     execution = client.execute({"quoteToken": quote["quoteToken"], "authorization": execution["authorization"],
-                                "signature": signature})
+                                "signature": signature, "idempotencyKey": str(uuid.uuid4())})  # a new key per step
 check_hinkal_deposit(execution, params)  # before sending anything: approval, deposit, RAVN's fee
 # then send execution["calls"] (or approval, transaction, fee["transaction"]) as for any TRANSACTION
 ```
@@ -124,7 +129,9 @@ one doesn't yet:
   after sending while a venue indexes; otherwise permanent, so bound your polling).
 - **No retries.** Retry a status poll yourself on `RATE_LIMITED`, a 5xx (`INTERNAL`,
   `BUILD_FAILED`, `VENUE_RATE_LIMITED`) or a network error, waiting `e.details["retryAfterSec"]`
-  when it's set. Never re-submit a signature after `BUILD_FAILED`: the order may be placed.
+  when it's set. Never re-submit a signature after `BUILD_FAILED`: the order may be placed. Ask
+  `execute` again only with the same `idempotencyKey`, and only after a network error,
+  `RATE_LIMITED`, `VENUE_RATE_LIMITED` or `UNAVAILABLE`.
 - **`RavnApiError` has no `status` or `retry_after_sec`.** Read `e.code` and
   `e.details.get("retryAfterSec")`.
 - **`timeoutMs` isn't in `GetQuoteParams` yet**: pass it anyway (a dict key goes through as is).
