@@ -21,9 +21,10 @@ Nothing changes for handlers you write yourself, except a Solana swap when you a
 - `@ravnexchange/sdk/solana` (`solanaHandlers`, `simulateOrThrow`, `confirmSolanaBroadcast`):
   simulates each transaction before the wallet sees it, and re-sends a broadcast one every 2 s until
   it lands at `confirmed` (up to 2 minutes), calling it expired only on proof from the finalized
-  chain. Needs `@solana/web3.js` 1.x (an optional peer dependency).
+  chain. Needs `@solana/web3.js` 1.87+ or 3.x in your app; not declared as a dependency, so installing
+  this version never changes yours.
 - `@ravnexchange/sdk/bitcoin` (`satsConnectHandlers`, `unisatHandlers`): `sendBitcoinPsbt` for
-  Xverse (sats-connect) and Unisat-style wallets (Unisat, OKX, Bitget). No dependencies.
+  Xverse (sats-connect) and Unisat (or a wallet with its signPsbt and pushPsbt). No dependencies.
 - `batchApprovals` handler flag: `sendCalls` may resolve `null` ("this wallet can't batch these,
   nothing was sent"), and the calls then go one by one. With it, an approval rides in the swap's
   confirmation even with no fee, where RAVN's `batch` allows. Off by default.

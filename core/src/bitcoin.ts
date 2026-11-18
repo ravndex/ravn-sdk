@@ -13,7 +13,7 @@ export type SatsConnectRequest = (
   params: { psbt: string; signInputs: Record<string, number[]>; broadcast: boolean }
 ) => Promise<{ status: "success"; result: { psbt: string; txid?: string } } | { status: "error"; error: { code: number; message: string } }>;
 
-/** A Unisat-style provider: `window.unisat`, OKX's `window.okxwallet.bitcoin`, Bitget's `window.bitkeep.unisat`. */
+/** Unisat's provider (`window.unisat`), or another wallet's with the same signPsbt and pushPsbt. */
 export interface UnisatLike {
   signPsbt(psbtHex: string, options: { autoFinalized: boolean; toSignInputs: { index: number; address: string }[] }): Promise<string>;
   pushPsbt(psbtHex: string): Promise<string>;
@@ -44,7 +44,7 @@ export function satsConnectHandlers(request: SatsConnectRequest, address: string
   };
 }
 
-/** `sendBitcoinPsbt` through a Unisat-style provider: signs the PSBT (as hex), then broadcasts it. */
+/** `sendBitcoinPsbt` through Unisat's provider: signs the PSBT (as hex), then broadcasts it. */
 export function unisatHandlers(unisat: UnisatLike, address: string): Pick<ExecuteAndTrackHandlers, "sendBitcoinPsbt"> {
   return {
     async sendBitcoinPsbt(psbt) {

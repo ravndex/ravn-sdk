@@ -491,6 +491,17 @@ export async function executeAndTrack(
       }
     };
 
+    // sendCalls' hashes, or undefined when it declined (null, nothing sent: one by one), which only a
+    // sendCalls with batchApprovals can. Anything else may have sent the batch: never one by one after it.
+    const sendBatch = async (calls: TxLike[]): Promise<string[] | undefined> => {
+      const hashes = await sendSwap(() => handlers.sendCalls!(calls));
+      if (hashes === null && handlers.batchApprovals) return undefined;
+      // The wallet resolved, so something may be out: from here an error carries what's known.
+      sent = true;
+      if (!Array.isArray(hashes) || !hashes[0]) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
+      return hashes;
+    };
+
     const pollStatus = async (ref: string, txHash?: string, feeSent = false): Promise<StatusDTO | undefined> => {
       if (!pollUntilTerminal) return undefined;
       if (maxWaitMs !== undefined) {
@@ -642,23 +653,15 @@ export async function executeAndTrack(
           : handlers.batchApprovals && execution.batch === true && approvals.length
             ? [...approvals, transaction]
             : undefined;
-      let hashes: string[] | null = null;
+      let hashes: string[] | undefined;
       if (batch) {
         checkpoint();
         depositWindow();
-        hashes = await sendSwap(() => handlers.sendCalls!(batch));
-        // null: declined, nothing sent, so one by one below. Only from a sendCalls that says it can.
-        if (hashes === null && !handlers.batchApprovals) {
-          sent = true;
-          throw new Error("executeAndTrack: sendCalls returned no transaction hash");
-        }
+        hashes = await sendBatch(batch);
       }
       if (hashes) {
-        // The wallet resolved, so something may be out: from here an error carries what's known.
-        sent = true;
         // Fewer hashes back than calls: the last one carried the rest.
         const carrier = (i: number) => hashes![Math.min(i, hashes!.length - 1)];
-        if (!carrier(0)) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
         txHash = carrier(approvals.length);
         if (reset) report("reset_sent", { resetTxHash: carrier(0) });
         if (needed) report("approval_sent", { approvalTxHash: carrier(approvals.length - 1) });
@@ -777,19 +780,9 @@ export async function executeAndTrack(
       let feeTxHash: string | undefined;
       let feeError: unknown;
       checkpoint();
-      let hashes: string[] | null = null;
-      if (feeTx && execution.batch && handlers.sendCalls) {
-        hashes = await sendSwap(() => handlers.sendCalls!(calls));
-        // null: declined, nothing sent, so one by one below. Only from a sendCalls that says it can.
-        if (hashes === null && !handlers.batchApprovals) {
-          sent = true;
-          throw new Error("executeAndTrack: sendCalls returned no transaction hash");
-        }
-      }
+      const hashes = feeTx && execution.batch && handlers.sendCalls ? await sendBatch(calls) : undefined;
       if (hashes) {
-        sent = true;
         // Fewer hashes back than calls: the last one carried the rest.
-        if (!hashes[0]) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
         txHash = hashes[0];
         feeTxHash = hashes[Math.min(1, hashes.length - 1)];
         report("swap_sent", { txHash, statusRef });

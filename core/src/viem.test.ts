@@ -57,7 +57,7 @@ describe("viemHandlers: sendTransaction", () => {
     expect(w.sendTransaction).toHaveBeenCalledWith(expect.objectContaining({ chain: expect.objectContaining({ id: BASE }) }));
 
     const stuck = wallet({ switchChain: vi.fn(async () => {}) }, 1);
-    await expect(handlersFor(stuck, publicClient()).sendTransaction(swap)).rejects.toThrow(/on chain 1, not 8453, so nothing was sent/);
+    await expect(handlersFor(stuck, publicClient()).sendTransaction(swap)).rejects.toThrow(/on chain 1, not 8453, so nothing more was signed or sent/);
     expect(stuck.sendTransaction).not.toHaveBeenCalled();
   });
 
@@ -79,7 +79,7 @@ describe("viemHandlers: sendTransaction", () => {
       const p = publicClient({ estimateGas: vi.fn(async () => Promise.reject(new Error("execution reverted"))) });
       const sent = handlersFor(w, p).sendTransaction(swap).catch((e: Error) => e);
       await vi.advanceTimersByTimeAsync(800);
-      expect(((await sent) as Error).message).toMatch(/Couldn't confirm this transaction will succeed, so nothing was sent/);
+      expect(((await sent) as Error).message).toMatch(/Couldn't confirm this transaction will succeed, so it wasn't sent/);
       expect(p.estimateGas).toHaveBeenCalledTimes(3);
       expect(w.sendTransaction).not.toHaveBeenCalled();
     } finally {
@@ -111,7 +111,7 @@ describe("viemHandlers: sendTransaction", () => {
       cause: { name: "InsufficientFundsError" },
     });
     const w = wallet({ sendTransaction: vi.fn(async () => Promise.reject(insufficient)) });
-    await expect(handlersFor(w, publicClient()).sendTransaction(swap)).rejects.toThrow("This wallet needs about 0.0016 more ETH to pay the network fee, so nothing was sent.");
+    await expect(handlersFor(w, publicClient()).sendTransaction(swap)).rejects.toThrow("This wallet needs about 0.0016 more ETH to pay the network fee, so it wasn't sent.");
   });
 
   it("refuses a Solana transaction and a chain without a public client, sending nothing", async () => {
@@ -315,7 +315,7 @@ describe("viemHandlers with executeAndTrack", () => {
   it("a gas-money refusal stops the swap before the approval spends anything", async () => {
     const w = wallet({ getCapabilities: vi.fn(async () => ({ atomic: { status: "unsupported" } })) });
     const p = publicClient({ getBalance: vi.fn(async () => 1n) });
-    await expect(run(handlersFor(w, p), execution(true))).rejects.toThrow(/more ETH to pay the network fee, so nothing was sent/);
+    await expect(run(handlersFor(w, p), execution(true))).rejects.toThrow(/more ETH to pay the network fee, so it wasn't sent/);
     expect(w.sendTransaction).not.toHaveBeenCalled();
   });
 });
@@ -329,5 +329,90 @@ describe("viem's own clients fit", () => {
     const handlers = viemHandlers({ walletClient, publicClient });
     viemHandlers({ walletClient: async () => walletClient, publicClient: (chainId: number) => (chainId === base.id ? publicClient : undefined) });
     expect(handlers.batchApprovals).toBe(true);
+  });
+});
+
+// Real viem clients, over a scripted wallet and node: what viem actually puts on the wire.
+describe("viemHandlers over real viem clients", () => {
+  // Its own wallet per test: batch support is remembered per wallet + chain.
+  let USER = `0x${"7".repeat(40)}` as Hex;
+  const TOKEN = `0x${"2".repeat(40)}` as Hex;
+  const ROUTER = `0x${"3".repeat(40)}` as Hex;
+  const hex = (n: bigint | number) => `0x${n.toString(16)}`;
+  const receiptOf = (hash: string) => ({
+    transactionHash: hash, status: "0x1", blockNumber: "0x10", blockHash: `0x${"b".repeat(64)}`, gasUsed: "0x5208", cumulativeGasUsed: "0x5208",
+    effectiveGasPrice: "0x1", from: USER, to: ROUTER, logs: [], logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x2", contractAddress: null,
+  });
+
+  function node(opts: { atomic: string; startChain?: number }) {
+    USER = nextAccount().address;
+    const wire: { method: string; params: unknown }[] = [];
+    let chain = opts.startChain ?? BASE;
+    let sent = 0;
+    const request = async ({ method, params }: { method: string; params?: unknown }) => {
+      wire.push({ method, params });
+      switch (method) {
+        case "eth_chainId": return hex(chain);
+        case "wallet_switchEthereumChain": chain = Number((params as [{ chainId: string }])[0].chainId); return null;
+        case "eth_accounts": case "eth_requestAccounts": return [USER];
+        case "wallet_getCapabilities": return { [hex(BASE)]: { atomic: { status: opts.atomic } } };
+        case "wallet_sendCalls": return { id: "0xbatch" };
+        case "wallet_getCallsStatus": return { version: "2.0.0", id: "0xbatch", chainId: hex(BASE), status: 200, atomic: true, receipts: [receiptOf(SWAP_HASH)] };
+        case "eth_sendTransaction": return [APPROVE_HASH, SWAP_HASH][sent++];
+        case "eth_estimateGas": return hex(60_000);
+        case "eth_call": return `0x${"0".repeat(64)}`; // no allowance yet
+        case "eth_blockNumber": return "0x10";
+        case "eth_getBlockByNumber": return { number: "0x10", hash: `0x${"b".repeat(64)}`, timestamp: hex(1_000), baseFeePerGas: hex(1_000_000), gasLimit: hex(30_000_000), gasUsed: "0x0", transactions: [] };
+        case "eth_simulateV1": {
+          const calls = (params as [{ blockStateCalls: { calls: unknown[] }[] }])[0].blockStateCalls[0].calls;
+          return [{ number: "0x11", hash: `0x${"c".repeat(64)}`, timestamp: hex(1_002), gasLimit: hex(30_000_000), gasUsed: "0x0", baseFeePerGas: "0x0", transactions: [], calls: calls.map(() => ({ status: "0x1", gasUsed: hex(60_000), returnData: "0x", logs: [] })) }];
+        }
+        case "eth_getBalance": return hex(10n ** 18n);
+        case "eth_getCode": return "0x";
+        case "eth_maxPriorityFeePerGas": return "0x0";
+        case "eth_getTransactionReceipt": return receiptOf((params as string[])[0]);
+        case "eth_getTransactionByHash": return null;
+        default: throw new Error(`unscripted ${method}`);
+      }
+    };
+    const walletClient = createWalletClient({ account: USER, chain: base, transport: custom({ request }), pollingInterval: 5 });
+    const publicClient = createPublicClient({ chain: base, transport: custom({ request }), pollingInterval: 5 });
+    return { wire, walletClient, publicClient, sends: () => wire.filter((w) => w.method === "eth_sendTransaction").map((w) => (w.params as [Record<string, string>])[0]) };
+  }
+
+  const execution = {
+    executionType: "TRANSACTION", quoteToken: "qt-exec",
+    approval: { to: TOKEN, data: "0x095ea7b3", value: "0", chainId: BASE, spender: SPENDER, amount: "1000" },
+    transaction: { to: ROUTER, data: "0xswap", value: "0", chainId: BASE, gasLimit: "150000" },
+    batch: true,
+  };
+  const run = (h: ReturnType<typeof viemHandlers>) => {
+    const fetch = vi.fn(async (url: string) => ({ ok: true, status: 200, json: async () => ({ data: url.includes("execute") ? execution : { status: "success", venue: "kyberswap" } }) })) as unknown as typeof globalThis.fetch;
+    return executeAndTrack(new RavnClient({ guard: false, fetch }), { quoteToken: "qt-1" }, h, { pollIntervalMs: 0 });
+  };
+
+  it("one confirmation: an atomic wallet_sendCalls on the swap's chain, its receipt's hash back", async () => {
+    const { wire, walletClient, publicClient, sends } = node({ atomic: "supported", startChain: 1 });
+    const r = await run(viemHandlers({ walletClient, publicClient }));
+    expect(wire.find((w) => w.method === "wallet_switchEthereumChain")?.params).toEqual([{ chainId: hex(BASE) }]);
+    const [batch] = wire.find((w) => w.method === "wallet_sendCalls")!.params as [{ atomicRequired: boolean; chainId: string; from: string; calls: { to: string; data: string }[] }];
+    expect(batch).toMatchObject({ atomicRequired: true, chainId: hex(BASE), from: USER, calls: [{ to: TOKEN, data: "0x095ea7b3" }, { to: ROUTER, data: "0xswap" }] });
+    expect(sends()).toEqual([]);
+    expect(r).toMatchObject({ approvalTxHash: SWAP_HASH, txHash: SWAP_HASH });
+  });
+
+  it("one by one: the approval at 1.5× its estimate, its receipt, then the swap at RAVN's limit, each right after viem reads the chain", async () => {
+    const { wire, walletClient, publicClient, sends } = node({ atomic: "unsupported" });
+    const r = await run(viemHandlers({ walletClient, publicClient }));
+    expect(sends()).toEqual([
+      { from: USER, to: TOKEN, data: "0x095ea7b3", value: "0x0", gas: hex(90_000) },
+      { from: USER, to: ROUTER, data: "0xswap", value: "0x0", gas: hex(150_000) },
+    ]);
+    // viem names no chain in eth_sendTransaction: it checks the wallet's live chain just before.
+    const methods = wire.map((w) => w.method);
+    expect(methods.flatMap((m, i) => (m === "eth_sendTransaction" ? [methods[i - 1]] : []))).toEqual(["eth_chainId", "eth_chainId"]);
+    expect(methods.indexOf("eth_simulateV1")).toBeLessThan(methods.indexOf("eth_sendTransaction"));
+    expect(methods.indexOf("eth_getTransactionReceipt")).toBeLessThan(methods.lastIndexOf("eth_sendTransaction"));
+    expect(r).toMatchObject({ approvalTxHash: APPROVE_HASH, txHash: SWAP_HASH });
   });
 });

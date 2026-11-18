@@ -14,12 +14,6 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {},
-  "peerDependencies": {
-    "@solana/web3.js": "^1.87.0"
-  },
-  "peerDependenciesMeta": {
-    "@solana/web3.js": { "optional": true }
-  },
   "devDependencies": {
     "typescript": "^5.7.0"
   }

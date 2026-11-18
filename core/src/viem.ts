@@ -1,7 +1,7 @@
 /**
  * @ravnexchange/sdk/viem: ready-made executeAndTrack handlers for a viem wallet client (wagmi's
  * getWalletClient too), with the checks RAVN's own app makes before anything reaches the wallet.
- * No viem import: it reads the clients you pass by shape, so any viem 2.x works.
+ * No viem import: it reads the clients you pass by shape (checked against viem 2.54's own types).
  */
 import { SentUnclearError } from "./execute-and-track";
 import type { ExecuteAndTrackHandlers } from "./execute-and-track";
@@ -29,7 +29,7 @@ export interface ViemWalletClient {
   }): Promise<Hex>;
   signTypedData(args: { domain: Record<string, unknown>; types: Record<string, unknown>; primaryType: string; message: Record<string, unknown> }): Promise<Hex>;
   signMessage(args: { message: string }): Promise<Hex>;
-  /** EIP-5792 (viem 2.30+): without these three, nothing is batched. */
+  /** EIP-5792: without these three, nothing is batched. */
   getCapabilities?(args: { chainId: number }): Promise<{ atomic?: { status?: string } }>;
   sendCalls?(args: { chain: ChainLike; calls: { to: Hex; data: Hex; value: bigint }[]; forceAtomic: boolean }): Promise<{ id: string }>;
   waitForCallsStatus?(args: { id: string; timeout: number }): Promise<{ status?: string; statusCode: number; receipts?: { transactionHash: Hex }[] }>;
@@ -45,7 +45,7 @@ export interface ViemPublicClient {
   getBalance(args: { address: Hex }): Promise<bigint>;
   getCode(args: { address: Hex }): Promise<Hex | undefined>;
   estimateMaxPriorityFeePerGas(): Promise<bigint>;
-  /** eth_simulateV1 (viem 2.22+): without it, the gas check and batching are skipped. */
+  /** eth_simulateV1: without it, the gas check and batching are skipped. */
   simulateBlocks?(args: {
     blockNumber?: bigint;
     blocks: { blockOverrides: { time: bigint }; calls: { account: Hex; to: Hex; data: Hex; value: bigint; gas?: bigint }[] }[];
@@ -112,7 +112,7 @@ function gasMoneyError(client: ViemPublicClient | undefined, short: bigint): Err
   const coin = client?.chain?.nativeCurrency;
   const symbol = coin?.symbol ?? "of the chain's gas coin";
   const about = short > 0n ? ` about ${coins(short, coin?.decimals ?? 18)}` : "";
-  return new Error(`This wallet needs${about} more ${symbol} to pay the network fee, so nothing was sent. Add a little, then try again.`);
+  return new Error(`This wallet needs${about} more ${symbol} to pay the network fee, so it wasn't sent. Add a little, then try again.`);
 }
 
 /** A wallet's refusal for gas money (viem's InsufficientFundsError) as the gas-money error, else null. */
@@ -166,19 +166,19 @@ export function viemHandlers(options: ViemHandlersOptions): ExecuteAndTrackHandl
   const chainFor = (chainId: number, client: ViemPublicClient): ChainLike =>
     client.chain ?? { id: chainId, name: `chain ${chainId}`, nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [] } } };
   const accountOf = (w: ViemWalletClient): Account => {
-    if (!w.account) throw new Error("The wallet client has no account, so nothing was sent");
+    if (!w.account) throw new Error("The wallet client has no account, so nothing more was signed or sent");
     return w.account;
   };
 
   // Switched, then read back: a dismissed switch prompt can resolve without moving the wallet.
   const onChain = async (chainId: number | undefined): Promise<ViemWalletClient> => {
-    if (!chainId) throw new Error("This transaction names no chain, so nothing was sent");
+    if (!chainId) throw new Error("This transaction names no chain, so it wasn't sent");
     const w = await wallet();
     if ((await w.getChainId()) === chainId) return w;
     await w.switchChain({ id: chainId });
     const moved = await wallet();
     const active = await moved.getChainId();
-    if (active !== chainId) throw new Error(`The wallet is on chain ${active}, not ${chainId}, so nothing was sent. Switch networks and try again.`);
+    if (active !== chainId) throw new Error(`The wallet is on chain ${active}, not ${chainId}, so nothing more was signed or sent. Switch networks and try again.`);
     return moved;
   };
 
@@ -186,11 +186,11 @@ export function viemHandlers(options: ViemHandlersOptions): ExecuteAndTrackHandl
     batchApprovals: true,
 
     async sendTransaction(tx) {
-      if (tx.serialized || !tx.to) throw new Error("This is a Solana transaction: add the Solana add-on's handlers. Nothing was sent.");
+      if (tx.serialized || !tx.to) throw new Error("This is a Solana transaction: add the Solana add-on's handlers. It wasn't sent.");
       const w = await onChain(tx.chainId);
       const chainId = tx.chainId!;
       const client = publicFor(chainId);
-      if (!client) throw new Error(`No public client for chain ${chainId}, so nothing was sent`);
+      if (!client) throw new Error(`No public client for chain ${chainId}, so this transaction wasn't sent`);
       const account = accountOf(w);
       const [call] = callsOf([tx]);
       // RAVN's limit (its own run, plus half), except on HyperEVM, where 50% over delays the send.
@@ -200,9 +200,9 @@ export function viemHandlers(options: ViemHandlersOptions): ExecuteAndTrackHandl
         if (attempt) await sleep(400);
         gas = await client.estimateGas({ account: account.address, ...call }).then((g) => limitFor(chainId, g), () => undefined);
       }
-      if (gas === undefined) throw new Error("Couldn't confirm this transaction will succeed, so nothing was sent. Refresh the quote and try again.");
+      if (gas === undefined) throw new Error("Couldn't confirm this transaction will succeed, so it wasn't sent. Refresh the quote and try again.");
       if (chainId === HYPEREVM && gas > HYPEREVM_BLOCK_GAS) {
-        throw new Error("This swap is too heavy for HyperEVM's blocks right now, so nothing was sent. Try a smaller amount, or refresh the quote for another route.");
+        throw new Error("This transaction is too heavy for HyperEVM's blocks right now, so it wasn't sent. Try a smaller amount, or refresh the quote for another route.");
       }
       let fees = {};
       if (FEE_HEADROOM_CHAINS.has(chainId)) {

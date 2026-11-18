@@ -1,7 +1,8 @@
 /**
  * @ravnexchange/sdk/solana: ready-made executeAndTrack handlers for a Solana wallet
  * (@solana/wallet-adapter's signTransaction, or any signer of a VersionedTransaction), with the
- * checks RAVN's own app makes. Needs @solana/web3.js 1.x, which core never imports.
+ * checks RAVN's own app makes. Needs @solana/web3.js 1.87+ or 3.x in the app (core never imports
+ * it, and it isn't a declared dependency: installing the SDK never changes the app's own version).
  */
 import { SendTransactionError, VersionedTransaction } from "@solana/web3.js";
 import type { Connection, SignatureStatus } from "@solana/web3.js";
@@ -16,7 +17,7 @@ export interface SolanaHandlersOptions {
   /** Your RPC. Its answers decide when a transaction counts as landed or expired. */
   connection: SolanaConnection;
   /** The paying wallet: wallet-adapter's `useWallet()` (or anything with this signTransaction). */
-  wallet: { signTransaction(transaction: VersionedTransaction): Promise<VersionedTransaction> };
+  wallet: { signTransaction?(transaction: VersionedTransaction): Promise<VersionedTransaction> };
 }
 
 const fromBase64 = (b64: string): Uint8Array =>
@@ -114,6 +115,7 @@ export async function confirmSolanaBroadcast(
  */
 export function solanaHandlers({ connection, wallet }: SolanaHandlersOptions): Pick<ExecuteAndTrackHandlers, "signSolanaTransaction" | "sendSolanaTransaction"> {
   const sign = async (serialized: string) => {
+    if (!wallet.signTransaction) throw new Error("This Solana wallet can't sign transactions, so nothing was sent");
     const tx = VersionedTransaction.deserialize(fromBase64(serialized));
     await simulateOrThrow(connection, tx);
     return wallet.signTransaction(tx);

@@ -1902,3 +1902,37 @@ describe("executeAndTrack: wallet add-on hooks", () => {
     await expect(run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, batch: true }, handlers)).rejects.toBe(cancel);
   });
 });
+
+// A JS sendCalls that sent the batch but returned nothing must never be read as "declined": the swap
+// would go out a second time, one by one.
+describe("executeAndTrack: only a strict null from sendCalls means nothing was sent", () => {
+  const approval = { to: "0xUSDC", data: "0xapprove", value: "0", chainId: 8453 };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453 };
+  const tokenFee = { amount: "500", address: "0xRavnFee", chainId: 8453, transaction: { to: "0xUSDC", data: "0xfeetransfer", value: "0", chainId: 8453 } };
+  const DEPOSIT = `0x${"de".repeat(20)}`;
+  const depositTx = { to: DEPOSIT, data: "0x", value: "995000", chainId: 8453 };
+  const executions = {
+    transaction: { executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, fee: tokenFee, batch: true },
+    deposit: { executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "near-ref", deposit: { address: DEPOSIT, amount: "995000", chainId: 8453 }, fee: tokenFee, calls: [depositTx, tokenFee.transaction], batch: true },
+  };
+
+  for (const [site, execution] of Object.entries(executions)) {
+    for (const batchApprovals of [true, false]) {
+      for (const answer of [undefined, [], [""], "0xabc"]) {
+        it(`${site}: ${JSON.stringify(answer) ?? "undefined"}${batchApprovals ? " with batchApprovals" : ""} fails, sending nothing one by one`, async () => {
+          const handlers = {
+            sendTransaction: vi.fn(async () => `0x${"a".repeat(64)}`),
+            waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+            sendCalls: vi.fn(async () => answer as never),
+            batchApprovals,
+          };
+          const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success" }] }) });
+          const error = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true }).catch((e) => e);
+          expect(error).toBeInstanceOf(ExecuteAndTrackError);
+          expect(error.code).toBe("FAILED");
+          expect(handlers.sendTransaction).not.toHaveBeenCalled();
+        });
+      }
+    }
+  }
+});

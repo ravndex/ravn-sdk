@@ -189,6 +189,12 @@ describe("solanaHandlers", () => {
     expect(connection.sendRawTransaction).not.toHaveBeenCalled();
   });
 
+  it("refuses, sending nothing, with a wallet that can't sign (wallet-adapter's signTransaction is optional)", async () => {
+    const connection = { simulateTransaction: vi.fn(ok) };
+    await expect(solanaHandlers({ connection: connection as never, wallet: {} }).sendSolanaTransaction!(unsigned())).rejects.toThrow(/can't sign transactions, so nothing was sent/);
+    expect(connection.simulateTransaction).not.toHaveBeenCalled();
+  });
+
   it("never opens the wallet for a transaction the simulation says fails", async () => {
     wallet.signTransaction.mockClear();
     const connection = { simulateTransaction: async () => ({ context: { slot: 1 }, value: { err: { InstructionError: [0, "Custom"] }, logs: [] } }) };
