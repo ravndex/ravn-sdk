@@ -157,6 +157,15 @@ describe("development warnings: when they're on", () => {
     expect((await executeAndTrack(standIn, { quoteToken: "q" }, wallet(), { pollIntervalMs: 0 })).finalStatus).toEqual(success);
   });
 
+  it("submitSignature and submitTransaction with no params: a promise, as before, never a throw", async () => {
+    const c = client({ "submit-signature": [{ statusRef: "s" }], "submit-transaction": [{ txHash: "sig" }] });
+    let calls: Promise<unknown>[] = [];
+    expect(() => {
+      calls = [c.submitSignature(undefined as never), c.submitTransaction(undefined as never)];
+    }).not.toThrow();
+    await Promise.allSettled(calls);
+  });
+
   it("one fee warning per swap, remembering at most 1,000 swaps", () => {
     const c = {};
     startDevWarnings(c, true);

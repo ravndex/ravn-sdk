@@ -296,7 +296,8 @@ export class RavnClient {
 
   /** POST /v1/submit-signature: for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */
   submitSignature(params: SubmitSignatureParams): Promise<{ statusRef: string }> {
-    noteTracked(this, params.quoteToken);
+    // params?.: a call with no params still fails as a rejected promise, never a throw.
+    noteTracked(this, params?.quoteToken);
     return this.request<{ statusRef: string }>("/submit-signature", {
       method: "POST",
       body: JSON.stringify(params),
@@ -307,7 +308,8 @@ export class RavnClient {
    * (broadcastViaRavn quotes). RAVN checks the signed transaction, then sends it; refused, nothing
    * is sent. Returns the Solana signature; poll getStatus with the execution's statusRef. */
   submitTransaction(params: SubmitTransactionParams): Promise<{ txHash: string }> {
-    noteTracked(this, params.quoteToken);
+    // params?.: a call with no params still fails as a rejected promise, never a throw.
+    noteTracked(this, params?.quoteToken);
     return this.request<{ txHash: string }>("/submit-transaction", {
       method: "POST",
       body: JSON.stringify(params),
