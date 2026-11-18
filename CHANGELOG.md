@@ -3,7 +3,7 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.4.25
+## @ravnexchange/sdk 0.4.26
 
 `executeAndTrack` now stops a swap where RAVN's own app does, before money is lost.
 
@@ -21,6 +21,32 @@ to npm (see `.github/workflows/publish-sdk.yml`).
 ### Upgrading
 
 - Nothing to change: your handlers are called as before.
+
+## @ravnexchange/sdk 0.4.25
+
+Chainflip from Ethereum and Arbitrum will run as a **vault swap** — one call to Chainflip's Vault instead of a
+transfer to a deposit address — once RAVN turns it on; this release is what lets a wallet sign one. 0.4.24 and older refuse it: "The swap goes to a contract RAVN doesn't route
+through".
+
+### Added
+
+- Chainflip's Vault on Ethereum and Arbitrum in the check (`checkExecution`), with both of its swap calls read:
+  `xSwapNative` (the coin it sends, within the swap's amount) and `xSwapToken` (the token and amount it pulls,
+  and the approval naming the Vault). Either way two addresses are held: the destination Chainflip will pay,
+  and — inside the swap's own terms (`cfParameters`) — where a swap that never fills is refunded, which must
+  be the wallet that signs. A vault swap also carries RAVN's commission in those terms, where a deposit channel
+  kept it on Chainflip's own chain, so the broker account is pinned to RAVN's and its commission — the broker's
+  and every affiliate's together — is held to at most 1%. That commission **is** RAVN's fee on these swaps, so a fee
+  paid beside the swap is refused outright: one fee, under one ceiling, never two. The options RAVN never asks for — a refund message,
+  instalments, a boost fee — are refused rather than skipped, and nothing may trail the fields it reads. Chainflip carries each chain's address in its own form, so the destination is read
+  as 20 raw bytes for an EVM payout, 32 for a Solana one, and the address text for Bitcoin. The terms' version
+  byte is pinned, so a layout this version hasn't read is refused rather than misread.
+
+### Upgrading
+
+- Upgrade before RAVN turns vault swaps on, or Chainflip swaps from Ethereum and Arbitrum will be refused on
+  0.4.24 and older. Nothing in your own code changes. Chainflip swaps whose SOURCE is Bitcoin or Solana are
+  unaffected either way: they keep their deposit channels.
 
 ## @ravnexchange/sdk 0.4.24
 
