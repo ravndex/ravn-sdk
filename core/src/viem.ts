@@ -2,6 +2,7 @@
  * @ravnexchange/sdk/viem: ready-made executeAndTrack handlers for a viem wallet client (wagmi's
  * getWalletClient too), with the checks RAVN's own app makes before anything reaches the wallet.
  * No viem import: it reads the clients you pass by shape (checked against viem 2.54's own types).
+ * Plain Node ESM (no bundler) imports "@ravnexchange/sdk/dist/viem.js".
  */
 import { SentUnclearError } from "./execute-and-track";
 import type { ExecuteAndTrackHandlers } from "./execute-and-track";

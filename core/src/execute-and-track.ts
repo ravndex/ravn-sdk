@@ -199,6 +199,9 @@ export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & {
   lastStatus?: StatusDTO;
   signedTransaction?: string;
   signature?: `0x${string}`;
+  /** A handler couldn't say whether the swap went out (SentUnclearError): with no hash here, it may
+   * still have. Have your user check their wallet before trying again. */
+  sentUnclear?: true;
 };
 
 /**
@@ -834,7 +837,8 @@ export async function executeAndTrack(
       throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, stopCode, { ...partial }, stop.signal.reason);
     }
     // A handler that can't say whether it sent (SentUnclearError): as if it had.
-    if (!sent && !sentUnclear(err)) throw err;
+    if (sentUnclear(err)) partial.sentUnclear = true;
+    else if (!sent) throw err;
     // String(): a wallet's Error can carry a message that isn't one, and this catch must never throw.
     const why = String(err instanceof Error ? err.message : err).replace(/^executeAndTrack: /, "");
     throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, "FAILED", { ...partial }, err);

@@ -1,7 +1,7 @@
 /**
  * @ravnexchange/sdk/bitcoin: executeAndTrack's `sendBitcoinPsbt` for the wallets most Bitcoin users
  * hold, signing the PSBT RAVN builds (a bc1q… sender's deposit and RAVN's fee). No dependencies:
- * pass the wallet's own API in.
+ * pass the wallet's own API in. Plain Node ESM (no bundler) imports "@ravnexchange/sdk/dist/bitcoin.js".
  */
 import { SentUnclearError } from "./execute-and-track";
 import type { ExecuteAndTrackHandlers } from "./execute-and-track";

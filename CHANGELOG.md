@@ -21,8 +21,8 @@ Nothing changes for handlers you write yourself, except a Solana swap when you a
 - `@ravnexchange/sdk/solana` (`solanaHandlers`, `simulateOrThrow`, `confirmSolanaBroadcast`):
   simulates each transaction before the wallet sees it, and re-sends a broadcast one every 2 s until
   it lands at `confirmed` (up to 2 minutes), calling it expired only on proof from the finalized
-  chain. Needs `@solana/web3.js` 1.87+ or 3.x in your app; not declared as a dependency, so installing
-  this version never changes yours.
+  chain. Pass `VersionedTransaction` from your app's own `@solana/web3.js` (1.87+ or 3.x): the add-on
+  never loads it, so your bundle carries one copy, and installing this version never changes yours.
 - `@ravnexchange/sdk/bitcoin` (`satsConnectHandlers`, `unisatHandlers`): `sendBitcoinPsbt` for
   Xverse (sats-connect) and Unisat (or a wallet with its signPsbt and pushPsbt). No dependencies.
 - `batchApprovals` handler flag: `sendCalls` may resolve `null` ("this wallet can't batch these,
@@ -32,7 +32,9 @@ Nothing changes for handlers you write yourself, except a Solana swap when you a
   the swap) before the first is sent; reject to stop with nothing sent.
 - `SentUnclearError`: a handler rejecting with it (the wallet took the swap but never said how it
   ended) gets an `ExecuteAndTrackError` (`FAILED`) with every hash in `partial`, the swap's too when
-  the error names it, instead of its own error as if nothing was sent.
+  the error names it, and `partial.sentUnclear`, instead of its own error as if nothing was sent.
+- Each add-on is its own import (`@ravnexchange/sdk/viem`, `/solana`, `/bitcoin`). Plain Node ESM
+  without a bundler imports `@ravnexchange/sdk/dist/viem.js` (`solana.js`, `bitcoin.js`) instead.
 
 ### Changed
 
@@ -43,6 +45,8 @@ Nothing changes for handlers you write yourself, except a Solana swap when you a
 
 - Nothing to do. If you pass `sendSolanaTransaction` (for `sendDeposit`), it now also sends Solana
   swaps: it signs and sends a base64 transaction either way.
+- `sendCalls`' type now allows `null`: code that calls a handler object's `sendCalls` itself, typed
+  as `ExecuteAndTrackHandlers`, must handle it.
 
 ## @ravnexchange/sdk 0.4.26
 

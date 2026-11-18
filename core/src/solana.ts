@@ -1,11 +1,11 @@
 /**
  * @ravnexchange/sdk/solana: ready-made executeAndTrack handlers for a Solana wallet
  * (@solana/wallet-adapter's signTransaction, or any signer of a VersionedTransaction), with the
- * checks RAVN's own app makes. Needs @solana/web3.js 1.87+ or 3.x in the app (core never imports
- * it, and it isn't a declared dependency: installing the SDK never changes the app's own version).
+ * checks RAVN's own app makes. Works with the app's own @solana/web3.js (1.87+ or 3.x), passed in:
+ * this never loads it, so a bundle never carries a second copy, and installing the SDK never changes
+ * the app's version. Plain Node ESM (no bundler) imports "@ravnexchange/sdk/dist/solana.js".
  */
-import { SendTransactionError, VersionedTransaction } from "@solana/web3.js";
-import type { Connection, SignatureStatus } from "@solana/web3.js";
+import type { Connection, SignatureStatus, VersionedTransaction } from "@solana/web3.js";
 import { SentUnclearError } from "./execute-and-track";
 import type { ExecuteAndTrackHandlers } from "./execute-and-track";
 import { base58 } from "./guard-solana";
@@ -18,6 +18,17 @@ export interface SolanaHandlersOptions {
   connection: SolanaConnection;
   /** The paying wallet: wallet-adapter's `useWallet()` (or anything with this signTransaction). */
   wallet: { signTransaction?(transaction: VersionedTransaction): Promise<VersionedTransaction> };
+  /** `VersionedTransaction` from your app's own @solana/web3.js. */
+  VersionedTransaction: { deserialize(serialized: Uint8Array): VersionedTransaction };
+}
+
+// web3.js's SendTransactionError: the node answered with an error (its `transactionMessage`; "failed
+// to send transaction: …" before 1.9x), so it didn't pass the transaction on. Except "already been
+// processed": the node has it already (a wallet or an RPC sent it first).
+function nodeRefused(e: unknown): boolean {
+  const x = (e ?? {}) as { transactionMessage?: unknown; message?: unknown };
+  const answer = typeof x.transactionMessage === "string" ? x.transactionMessage : /^failed to send transaction: /i.test(String(x.message)) ? String(x.message) : undefined;
+  return answer !== undefined && !/already been processed/i.test(answer);
 }
 
 const fromBase64 = (b64: string): Uint8Array =>
@@ -113,7 +124,7 @@ export async function confirmSolanaBroadcast(
  * provably expired rejects (nothing moved); one it lost track of rejects with SentUnclearError
  * carrying the signature, which executeAndTrack keeps.
  */
-export function solanaHandlers({ connection, wallet }: SolanaHandlersOptions): Pick<ExecuteAndTrackHandlers, "signSolanaTransaction" | "sendSolanaTransaction"> {
+export function solanaHandlers({ connection, wallet, VersionedTransaction }: SolanaHandlersOptions): Pick<ExecuteAndTrackHandlers, "signSolanaTransaction" | "sendSolanaTransaction"> {
   const sign = async (serialized: string) => {
     if (!wallet.signTransaction) throw new Error("This Solana wallet can't sign transactions, so nothing was sent");
     const tx = VersionedTransaction.deserialize(fromBase64(serialized));
@@ -130,9 +141,9 @@ export function solanaHandlers({ connection, wallet }: SolanaHandlersOptions): P
       try {
         await connection.sendRawTransaction(signed.serialize());
       } catch (e) {
-        // The node answered with an error (it simulated it and refused): it wasn't passed on. Anything
-        // else (no answer) may have reached it: the re-sends below find out.
-        if (e instanceof SendTransactionError) throw e;
+        // Refused by the node: it wasn't passed on. Anything else (no answer, "already processed") may
+        // have reached the chain: the re-sends below find out.
+        if (nodeRefused(e)) throw e;
       }
       await confirmSolanaBroadcast(connection, signature, signed);
       return signature;

@@ -182,7 +182,7 @@ describe("solanaHandlers", () => {
 
   it("signs after a clean simulation and hands the signed transaction back, sending nothing", async () => {
     const connection = { simulateTransaction: vi.fn(ok), sendRawTransaction: vi.fn() };
-    const out = await solanaHandlers({ connection: connection as never, wallet }).signSolanaTransaction!(unsigned());
+    const out = await solanaHandlers({ connection: connection as never, wallet, VersionedTransaction }).signSolanaTransaction!(unsigned());
     const tx = VersionedTransaction.deserialize(Buffer.from(out, "base64"));
     expect(tx.signatures[0].some((b) => b !== 0)).toBe(true);
     expect(connection.simulateTransaction).toHaveBeenCalledOnce();
@@ -191,21 +191,21 @@ describe("solanaHandlers", () => {
 
   it("refuses, sending nothing, with a wallet that can't sign (wallet-adapter's signTransaction is optional)", async () => {
     const connection = { simulateTransaction: vi.fn(ok) };
-    await expect(solanaHandlers({ connection: connection as never, wallet: {} }).sendSolanaTransaction!(unsigned())).rejects.toThrow(/can't sign transactions, so nothing was sent/);
+    await expect(solanaHandlers({ connection: connection as never, wallet: {}, VersionedTransaction }).sendSolanaTransaction!(unsigned())).rejects.toThrow(/can't sign transactions, so nothing was sent/);
     expect(connection.simulateTransaction).not.toHaveBeenCalled();
   });
 
   it("never opens the wallet for a transaction the simulation says fails", async () => {
     wallet.signTransaction.mockClear();
     const connection = { simulateTransaction: async () => ({ context: { slot: 1 }, value: { err: { InstructionError: [0, "Custom"] }, logs: [] } }) };
-    await expect(solanaHandlers({ connection: connection as never, wallet }).sendSolanaTransaction!(unsigned())).rejects.toThrow(/nothing was sent/);
+    await expect(solanaHandlers({ connection: connection as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).rejects.toThrow(/nothing was sent/);
     expect(wallet.signTransaction).not.toHaveBeenCalled();
   });
 
   it("sends, waits for it to land at confirmed, and returns its signature", async () => {
     const { raw } = rpc({ status: [null, { confirmationStatus: "confirmed" }] });
     const connection = { ...raw, simulateTransaction: vi.fn(ok) };
-    const sig = await solanaHandlers({ connection: connection as never, wallet }).sendSolanaTransaction!(unsigned());
+    const sig = await solanaHandlers({ connection: connection as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned());
     const sent = VersionedTransaction.deserialize(raw.sendRawTransaction.mock.calls[0][0]);
     expect(sig).toBe(base58(sent.signatures[0]));
     // The first send with the node's preflight, then the same bytes re-sent without it.
@@ -215,12 +215,25 @@ describe("solanaHandlers", () => {
 
   it("a node refusing the first send: nothing sent; no answer at all: re-sent until it lands", async () => {
     const refused = { simulateTransaction: ok, sendRawTransaction: vi.fn(async () => Promise.reject(new SendTransactionError({ action: "send", signature: "", transactionMessage: "Blockhash not found" }))) };
-    await expect(solanaHandlers({ connection: refused as never, wallet }).sendSolanaTransaction!(unsigned())).rejects.toBeInstanceOf(SendTransactionError);
+    await expect(solanaHandlers({ connection: refused as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).rejects.toBeInstanceOf(SendTransactionError);
     expect(refused.sendRawTransaction).toHaveBeenCalledOnce();
 
     const { raw } = rpc({ status: [null, { confirmationStatus: "confirmed" }] });
     raw.sendRawTransaction.mockImplementationOnce(async () => Promise.reject(new Error("fetch failed")));
     const silent = { ...raw, simulateTransaction: ok };
-    await expect(solanaHandlers({ connection: silent as never, wallet }).sendSolanaTransaction!(unsigned())).resolves.toEqual(expect.any(String));
+    await expect(solanaHandlers({ connection: silent as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).resolves.toEqual(expect.any(String));
+  });
+
+  it("a node saying it already has it ('already been processed'): sent, so watched until it lands, never refused", async () => {
+    const { raw } = rpc({ status: [null, { confirmationStatus: "confirmed" }] });
+    raw.sendRawTransaction.mockImplementationOnce(async () =>
+      Promise.reject(new SendTransactionError({ action: "simulate", signature: "", transactionMessage: "Transaction simulation failed: This transaction has already been processed" }))
+    );
+    const connection = { ...raw, simulateTransaction: ok };
+    await expect(solanaHandlers({ connection: connection as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).resolves.toEqual(expect.any(String));
+    // An older web3.js's refusal (message only) is still a refusal.
+    const older = { simulateTransaction: ok, sendRawTransaction: vi.fn(async () => Promise.reject(new Error("failed to send transaction: Transaction simulation failed: Blockhash not found"))) };
+    await expect(solanaHandlers({ connection: older as never, wallet, VersionedTransaction }).sendSolanaTransaction!(unsigned())).rejects.toThrow(/failed to send transaction/);
+    expect(older.sendRawTransaction).toHaveBeenCalledOnce();
   });
 });

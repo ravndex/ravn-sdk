@@ -1885,14 +1885,15 @@ describe("executeAndTrack: wallet add-on hooks", () => {
     const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" } }], status: [{ status: "success" }] }) });
     const error = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, onProgress }).catch((e) => e);
     expect(error).toBeInstanceOf(ExecuteAndTrackError);
-    expect(error).toMatchObject({ code: "FAILED", cause: unclear, partial: { txHash: "5igSig", statusRef: "5igSig", quoteToken: "qt-exec" } });
+    expect(error).toMatchObject({ code: "FAILED", cause: unclear, partial: { txHash: "5igSig", statusRef: "5igSig", quoteToken: "qt-exec", sentUnclear: true } });
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: "swap_sent" }));
 
     // A copy of the class from another SDK version: read by its flag.
     const batchUnclear = Object.assign(new Error("may still go through"), { sentUnclear: true });
     const b = steps({ batchApprovals: true, sendCalls: vi.fn(async () => Promise.reject(batchUnclear)) });
     const e2 = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, batch: true }, b.handlers).catch((e) => e);
-    expect(e2).toMatchObject({ code: "FAILED", partial: { quoteToken: "qt-exec" } });
+    // No hash, but sentUnclear: never read as "no swap went out".
+    expect(e2).toMatchObject({ code: "FAILED", partial: { quoteToken: "qt-exec", sentUnclear: true } });
     expect(e2.partial.txHash).toBeUndefined();
   });
 
