@@ -1,0 +1,4 @@
+{
+  "main": "../dist/viem.js",
+  "types": "../dist/viem.d.ts"
+}

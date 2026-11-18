@@ -44,9 +44,25 @@ export interface ExecuteAndTrackHandlers {
    * wallet's (EIP-5792 carries none): give it headroom, as a wallet estimating it tight reverts
    * the whole batch (no fee leaves without the swap). A heavy swap needs the most: Fly's on
    * Robinhood Chain measured 430–560k gas (2026-10-20). Reject only when nothing was sent: a
-   * rejection loses the swap's hash.
+   * rejection loses the swap's hash. With `batchApprovals`, resolve `null` when this wallet can't
+   * batch them and nothing was sent: they then go one by one.
    */
-  sendCalls?(txs: TxLike[]): Promise<string[]>;
+  sendCalls?(txs: TxLike[]): Promise<string[] | null>;
+  /**
+   * Set true only when `sendCalls` resolves `null` for "this wallet can't batch these, nothing was
+   * sent" (the viem add-on's does): then a swap's approval rides in the swap's own confirmation even
+   * with no fee, when RAVN's `batch` allows, and any batch that comes back `null` goes one by one.
+   * A sendCalls that rejects on a wallet without atomic batches (Rabby, Phantom) would fail every such
+   * token sell: leave this off for it.
+   */
+  batchApprovals?: boolean;
+  /**
+   * Optional: called with the transactions about to go out one by one (an approval's reset, the
+   * approval, then the swap, last), after the allowance read and before the first is sent. Reject to
+   * stop the swap with nothing sent: the viem add-on refuses there when the wallet can't pay the gas
+   * for all of them, so an approval never spends gas for a swap that can't follow.
+   */
+  preflight?(txs: TxLike[]): Promise<void>;
   /** Sign an EIP-712 typed-data payload. Only called for SIGNATURE executions and an AUTHORIZE's typed data. */
   signTypedData?(typedData: Record<string, unknown>): Promise<`0x${string}`>;
   /** Sign a message (EIP-191 personal_sign) with the paying wallet. Only called for an AUTHORIZE
@@ -68,10 +84,12 @@ export interface ExecuteAndTrackHandlers {
    */
   sendBitcoinPsbt?(psbt: string): Promise<string>;
   /**
-   * With `sendDeposit`: sign a Solana DEPOSIT's ready-made transaction (`deposit.transaction`,
-   * base64: the deposit and RAVN's fee) and send it, returning its signature. It must land within
-   * about a minute of execute (its blockhash expires). Reject only when nothing was sent: a
-   * rejection loses its signature, and executeAndTrack called again builds a new deposit.
+   * Sign a base64 Solana transaction and send it, returning its signature: a Solana swap
+   * (a TRANSACTION without `submit`), and with `sendDeposit` a Solana DEPOSIT's ready-made
+   * transaction (`deposit.transaction`: the deposit and RAVN's fee). It must land within about a
+   * minute of execute (its blockhash expires). Reject only when nothing was sent: a rejection loses
+   * its signature, and executeAndTrack called again builds a new swap. Without it, a Solana swap
+   * goes to `sendTransaction` as `{ serialized }`, as before.
    */
   sendSolanaTransaction?(serialized: string): Promise<string>;
   /**
@@ -181,6 +199,9 @@ export type ExecuteAndTrackPartial = Partial<ExecuteAndTrackResult> & {
   lastStatus?: StatusDTO;
   signedTransaction?: string;
   signature?: `0x${string}`;
+  /** A handler couldn't say whether the swap went out (SentUnclearError): with no hash here, it may
+   * still have. Have your user check their wallet before trying again. */
+  sentUnclear?: true;
 };
 
 /**
@@ -206,6 +227,28 @@ export class ExecuteAndTrackError extends Error {
     if (cause !== undefined) this.cause = cause;
   }
 }
+
+/**
+ * Reject a handler with this when something may have gone out but the handler can't say how it
+ * ended: a wallet that took a batch and never said, a broadcast it lost track of. executeAndTrack
+ * then rejects with an ExecuteAndTrackError ("FAILED") whose `partial` keeps every hash, `txHash`
+ * too when given (the swap's own), so the swap is tracked, not sent again. Read by its `sentUnclear`,
+ * so a copy of the class from another SDK version counts too.
+ */
+export class SentUnclearError extends Error {
+  readonly sentUnclear = true;
+  constructor(
+    message: string,
+    /** The swap's own transaction hash or signature, when known. */
+    public readonly txHash?: string
+  ) {
+    super(message);
+    this.name = "SentUnclearError";
+  }
+}
+
+const sentUnclear = (err: unknown): err is { sentUnclear: true; txHash?: unknown } =>
+  (err as { sentUnclear?: unknown } | null | undefined)?.sentUnclear === true;
 
 /** How to pay a DEPOSIT's `fee`, so it's proven against this swap. See DepositFeeDTO. Either way,
  * poll RAVN's getStatus until a terminal status even when the venue's own tracker (e.g. Rift's API)
@@ -440,6 +483,32 @@ export async function executeAndTrack(
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
 
+    // Sends the swap (or deposit). A handler that can't say whether it went out (SentUnclearError)
+    // names its hash when it has one: that hash is the swap's, kept for tracking, and on a TRANSACTION
+    // with its own statusRef (a two-hop route) the fee's proof too, as when it's sent.
+    const sendSwap = async <T>(send: () => Promise<T>): Promise<T> => {
+      try {
+        return await send();
+      } catch (err) {
+        if (sentUnclear(err) && typeof err.txHash === "string") {
+          const proves = execution.executionType === "TRANSACTION" && execution.statusRef && EVM_TX_HASH.test(err.txHash);
+          report("swap_sent", { txHash: err.txHash, statusRef: execution.statusRef ?? err.txHash, ...(proves ? { statusTxHash: err.txHash } : {}) });
+        }
+        throw err;
+      }
+    };
+
+    // sendCalls' hashes, or undefined when it declined (null, nothing sent: one by one), which only a
+    // sendCalls with batchApprovals can. Anything else may have sent the batch: never one by one after it.
+    const sendBatch = async (calls: TxLike[]): Promise<string[] | undefined> => {
+      const hashes = await sendSwap(() => handlers.sendCalls!(calls));
+      if (hashes === null && handlers.batchApprovals) return undefined;
+      // The wallet resolved, so something may be out: from here an error carries what's known.
+      sent = true;
+      if (!Array.isArray(hashes) || !hashes[0]) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
+      return hashes;
+    };
+
     const pollStatus = async (ref: string, txHash?: string, feeSent = false): Promise<StatusDTO | undefined> => {
       if (!pollUntilTerminal) return undefined;
       if (maxWaitMs !== undefined) {
@@ -577,33 +646,50 @@ export async function executeAndTrack(
       const batchFee = execution.batch ?? BigInt(feeTx?.value ?? "1") === 0n;
       // Before the approval too: no gas spent on a deposit that can't go out.
       depositWindow();
-      // ponytail: only a swap carrying RAVN's fee is batched. Batching approve + swap alone needs a
-      // sendCalls that can say "this wallet can't batch" and fall back to two steps; a hand-written one
-      // that just rejects would fail every such token sell on a wallet without atomic batches.
-      if (feeTx && batchFee && handlers.sendCalls) {
-        // Atomic, so neither the fee nor the swap's approval outlives a swap that reverted.
-        const batchApproval = await neededApproval(approval);
-        const reset = batchApproval?.reset && { ...batchApproval.reset, chainId: batchApproval.chainId };
-        const approvals = batchApproval ? [...(reset ? [reset] : []), batchApproval] : [];
+      const needed = await neededApproval(approval);
+      const reset = needed?.reset && { ...needed.reset, chainId: needed.chainId };
+      const approvals: TxLike[] = needed ? [...(reset ? [reset] : []), needed] : [];
+      // One confirmation, atomic, so neither the fee nor the swap's approval outlives a swap that
+      // reverted: with a fee that may ride in it, or (batchApprovals: a sendCalls that can say "can't
+      // batch") an approval alone where RAVN's `batch` allows. A hand-written sendCalls that just
+      // rejects would fail every such token sell on a wallet without atomic batches.
+      const batch = !handlers.sendCalls
+        ? undefined
+        : feeTx && batchFee
+          ? [...approvals, transaction, feeTx]
+          : handlers.batchApprovals && execution.batch === true && approvals.length
+            ? [...approvals, transaction]
+            : undefined;
+      let hashes: string[] | undefined;
+      if (batch) {
         checkpoint();
         depositWindow();
-        const hashes = await handlers.sendCalls([...approvals, transaction, feeTx]);
-        // The wallet resolved, so something may be out: from here an error carries what's known.
-        sent = true;
+        hashes = await sendBatch(batch);
+      }
+      if (hashes) {
         // Fewer hashes back than calls: the last one carried the rest.
-        const carrier = (i: number) => hashes[Math.min(i, hashes.length - 1)];
-        if (!carrier(0)) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
+        const carrier = (i: number) => hashes![Math.min(i, hashes!.length - 1)];
         txHash = carrier(approvals.length);
-        feeTxHash = carrier(approvals.length + 1);
         if (reset) report("reset_sent", { resetTxHash: carrier(0) });
-        if (batchApproval) report("approval_sent", { approvalTxHash: carrier(approvals.length - 1) });
+        if (needed) report("approval_sent", { approvalTxHash: carrier(approvals.length - 1) });
         report("swap_sent", { txHash, statusRef: execution.statusRef ?? txHash, statusTxHash: proof(txHash) });
-        report("fee_sent", { feeTxHash, statusTxHash: proof(txHash, feeTxHash) });
+        if (batch!.length > approvals.length + 1) {
+          feeTxHash = carrier(approvals.length + 1);
+          report("fee_sent", { feeTxHash, statusTxHash: proof(txHash, feeTxHash) });
+        }
       } else {
-        await maybeSendApproval(approval);
+        if (!transaction.serialized && handlers.preflight) {
+          checkpoint();
+          await orAbort(handlers.preflight([...approvals, transaction]), stop.signal);
+        }
+        await sendApproval(needed);
         checkpoint();
         depositWindow();
-        txHash = await handlers.sendTransaction(transaction);
+        // A Solana swap goes to sendSolanaTransaction when given (older integrations: sendTransaction).
+        const serialized = transaction.serialized;
+        txHash = await sendSwap(() =>
+          serialized && handlers.sendSolanaTransaction ? handlers.sendSolanaTransaction(serialized) : handlers.sendTransaction(transaction)
+        );
         sent = true;
         report("swap_sent", { txHash, statusRef: execution.statusRef ?? txHash, statusTxHash: proof(txHash) });
         if (feeTx) ({ feeTxHash, feeError } = await sendFeeAfter(txHash, transaction.chainId, feeTx, (f) => proof(txHash, f)));
@@ -701,17 +787,15 @@ export async function executeAndTrack(
       let feeTxHash: string | undefined;
       let feeError: unknown;
       checkpoint();
-      if (feeTx && execution.batch && handlers.sendCalls) {
-        const hashes = await handlers.sendCalls(calls);
-        sent = true;
+      const hashes = feeTx && execution.batch && handlers.sendCalls ? await sendBatch(calls) : undefined;
+      if (hashes) {
         // Fewer hashes back than calls: the last one carried the rest.
-        if (!hashes[0]) throw new Error("executeAndTrack: sendCalls returned no transaction hash");
         txHash = hashes[0];
         feeTxHash = hashes[Math.min(1, hashes.length - 1)];
         report("swap_sent", { txHash, statusRef });
         report("fee_sent", { feeTxHash, statusTxHash: evmHash(feeTxHash) });
       } else {
-        txHash = await handlers.sendTransaction(depositTx);
+        txHash = await sendSwap(() => handlers.sendTransaction(depositTx));
         sent = true;
         report("swap_sent", { txHash, statusRef });
         if (feeTx) ({ feeTxHash, feeError } = await sendFeeAfter(txHash, depositTx.chainId, feeTx, evmHash));
@@ -743,7 +827,7 @@ export async function executeAndTrack(
     if (!handlers[handler]) return unsent(`no ${handler} handler was provided`);
     checkpoint();
     // Called as a method: a class-instance wallet needs its `this`.
-    const txHash = await handlers[handler]!(payload);
+    const txHash = await sendSwap(() => handlers[handler]!(payload));
     sent = true;
     report("swap_sent", { txHash, statusRef });
     return { execution, quoteToken, txHash, statusRef, finalStatus: await pollStatus(statusRef) };
@@ -752,11 +836,13 @@ export async function executeAndTrack(
   try {
     return await run();
   } catch (err) {
+    // A handler that can't say whether it sent (SentUnclearError): as if it had.
+    if (sentUnclear(err)) partial.sentUnclear = true;
     if (stopCode) {
       const why = stopCode === "ABORTED" ? "aborted" : `no terminal status within maxWaitMs (${maxWaitMs} ms)`;
       throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, stopCode, { ...partial }, stop.signal.reason);
     }
-    if (!sent) throw err;
+    if (!sent && !partial.sentUnclear) throw err;
     // String(): a wallet's Error can carry a message that isn't one, and this catch must never throw.
     const why = String(err instanceof Error ? err.message : err).replace(/^executeAndTrack: /, "");
     throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, "FAILED", { ...partial }, err);

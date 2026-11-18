@@ -3,6 +3,51 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.28
+
+Optional wallet add-ons: ready-made `executeAndTrack` handlers with the checks RAVN's own app makes.
+Nothing changes for handlers you write yourself, except a Solana swap when you also pass
+`sendSolanaTransaction` (below).
+
+### Added
+
+- `@ravnexchange/sdk/viem` (`viemHandlers`): handlers for a viem wallet client (wagmi's
+  `getWalletClient` too). No viem import at runtime. It switches the wallet to the swap's chain and
+  reads it back; sends every transaction with a gas limit (RAVN's, else 1.5× an estimate tried 3
+  times, refusing with nothing sent if it never estimates); skips an approval the allowance already
+  covers; refuses before an approval when the wallet can't also pay the swap's gas ("needs about X
+  more ETH"); and puts an approval and the swap in one wallet confirmation (EIP-5792) where the wallet
+  and RAVN's `batch` allow it and the batch simulates cleanly, else sends them one by one.
+- `@ravnexchange/sdk/solana` (`solanaHandlers`, `simulateOrThrow`, `confirmSolanaBroadcast`):
+  simulates each transaction before the wallet sees it, and re-sends a broadcast one every 2 s until
+  it lands at `confirmed` (up to 2 minutes), calling it expired only on proof from the finalized
+  chain. Pass `VersionedTransaction` from your app's own `@solana/web3.js` (1.87+ or 3.x): the add-on
+  never loads it, so your bundle carries one copy, and installing this version never changes yours.
+- `@ravnexchange/sdk/bitcoin` (`satsConnectHandlers`, `unisatHandlers`): `sendBitcoinPsbt` for
+  Xverse (sats-connect) and Unisat (or a wallet with its signPsbt and pushPsbt). No dependencies.
+- `batchApprovals` handler flag: `sendCalls` may resolve `null` ("this wallet can't batch these,
+  nothing was sent"), and the calls then go one by one. With it, an approval rides in the swap's
+  confirmation even with no fee, where RAVN's `batch` allows. Off by default.
+- `preflight(txs)` handler: called with the transactions about to go out one by one (approvals, then
+  the swap) before the first is sent; reject to stop with nothing sent.
+- `SentUnclearError`: a handler rejecting with it (the wallet took the swap but never said how it
+  ended) gets an `ExecuteAndTrackError` (`FAILED`) with every hash in `partial`, the swap's too when
+  the error names it, and `partial.sentUnclear`, instead of its own error as if nothing was sent.
+- Each add-on is its own import (`@ravnexchange/sdk/viem`, `/solana`, `/bitcoin`). Plain Node ESM
+  without a bundler imports `@ravnexchange/sdk/dist/viem.js` (`solana.js`, `bitcoin.js`) instead.
+
+### Changed
+
+- A Solana swap (a TRANSACTION without `submit`) goes to `sendSolanaTransaction` when you pass one,
+  instead of `sendTransaction` as `{ serialized }`. Without it, nothing changes.
+
+### Upgrading
+
+- Nothing to do. If you pass `sendSolanaTransaction` (for `sendDeposit`), it now also sends Solana
+  swaps: it signs and sends a base64 transaction either way.
+- `sendCalls`' type now allows `null`: code that calls a handler object's `sendCalls` itself, typed
+  as `ExecuteAndTrackHandlers`, must handle it.
+
 ## @ravnexchange/sdk 0.4.26
 
 `executeAndTrack` stops a swap before money is lost: after a failed approval, and before a deposit
