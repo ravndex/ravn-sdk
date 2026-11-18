@@ -1,11 +1,11 @@
 {
   "name": "@ravnexchange/sdk",
-  "version": "0.4.26",
+  "version": "0.4.28",
   "description": "Typed client for the RAVN integrator API (/api/v1): quote, execute, submit-signature, status.",
   "keywords": ["ravn", "cross-chain", "swap", "swap-api", "dex-aggregator", "bitcoin", "native-btc", "solana", "evm", "crypto", "defi", "typescript", "sdk", "api-client"],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": ["dist", "viem", "solana", "bitcoin"],
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/ravndex/ravn-sdk.git", "directory": "core" },
   "homepage": "https://ravn.exchange",
@@ -14,6 +14,12 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {},
+  "peerDependencies": {
+    "@solana/web3.js": "^1.87.0"
+  },
+  "peerDependenciesMeta": {
+    "@solana/web3.js": { "optional": true }
+  },
   "devDependencies": {
     "typescript": "^5.7.0"
   }

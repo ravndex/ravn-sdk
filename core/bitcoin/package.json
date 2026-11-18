@@ -1,0 +1,4 @@
+{
+  "main": "../dist/bitcoin.js",
+  "types": "../dist/bitcoin.d.ts"
+}
