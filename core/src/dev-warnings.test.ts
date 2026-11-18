@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
 import type { RavnClientConfig } from "./client";
 import { resetUntrackedWarning, startDevWarnings, TRACK_WITHIN_MS, warnFeeNotSent } from "./dev-warnings";
-import { executeAndTrack } from "./execute-and-track";
+import { executeAndTrack, SentUnclearError } from "./execute-and-track";
 import type { ExecuteAndTrackHandlers } from "./execute-and-track";
 import type { ExecutionDTO } from "./types";
 
@@ -330,6 +330,13 @@ describe("development warnings: a swap built and never tracked", () => {
     await d.getStatus(unsent.quoteToken, "dep-1");
     await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
     expect(warnings()).toEqual([]);
+  });
+
+  it("a wallet that can't say whether the swap went out: the caller's to track, as if it had", async () => {
+    const unclear = wallet({ sendTransaction: vi.fn(async () => Promise.reject(new SentUnclearError("lost track of the broadcast"))) });
+    await expect(executeAndTrack(client({ execute: [plain] }), { quoteToken: "q" }, unclear)).rejects.toMatchObject({ code: "FAILED", partial: { sentUnclear: true } });
+    await vi.advanceTimersByTimeAsync(TRACK_WITHIN_MS);
+    expect(warnings()).toEqual([expect.stringMatching(/nothing has tracked it/)]);
   });
 
   it("stopped once the swap was out: the caller's to track from partial", async () => {

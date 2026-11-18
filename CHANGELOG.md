@@ -3,7 +3,7 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.4.26
+## @ravnexchange/sdk 0.4.29
 
 Warnings in the console while you build, for three mistakes RAVN's server can't see from its side. Each one
 can cost you the fee your share is paid from, and none of them throws, so they were easy to miss. Quiet when
@@ -24,7 +24,7 @@ can cost you the fee your share is paid from, and none of them throws, so they w
   made no `getStatus`, `submitSignature` or `submitTransaction` call for its quoteToken. Said once per process.
   Ignore it if you track swaps on your server or with another client. A swap `executeAndTrack` is tracking is
   never warned on, however long the wallet takes, nor one it never sent (declined, stopped, or only its approval
-  out); one it hands back unfinished (polling off, a deposit it didn't send, a stop after the swap went out) is
+  out); one it hands back unfinished (polling off, a deposit it didn't send, a stop after the swap went out, or a wallet that can't say whether it did) is
   yours to track from then.
 - `RavnClientConfig.devWarnings`: `false` turns the warnings off, `true` keeps them on in production and tests too.
 
@@ -34,6 +34,75 @@ can cost you the fee your share is paid from, and none of them throws, so they w
   throws into a swap (not even a `console.warn` that throws), and the timers behind them never keep a Node, Bun or
   Deno process alive. A server that doesn't set `NODE_ENV=production` will print them; set it, or pass
   `devWarnings: false`.
+
+## @ravnexchange/sdk 0.4.28
+
+Optional wallet add-ons: ready-made `executeAndTrack` handlers with the checks RAVN's own app makes.
+Nothing changes for handlers you write yourself, except a Solana swap when you also pass
+`sendSolanaTransaction` (below).
+
+### Added
+
+- `@ravnexchange/sdk/viem` (`viemHandlers`): handlers for a viem wallet client (wagmi's
+  `getWalletClient` too). No viem import at runtime. It switches the wallet to the swap's chain and
+  reads it back; sends every transaction with a gas limit (RAVN's, else 1.5× an estimate tried 3
+  times, refusing with nothing sent if it never estimates); skips an approval the allowance already
+  covers; refuses before an approval when the wallet can't also pay the swap's gas ("needs about X
+  more ETH"); and puts an approval and the swap in one wallet confirmation (EIP-5792) where the wallet
+  and RAVN's `batch` allow it and the batch simulates cleanly, else sends them one by one.
+- `@ravnexchange/sdk/solana` (`solanaHandlers`, `simulateOrThrow`, `confirmSolanaBroadcast`):
+  simulates each transaction before the wallet sees it, and re-sends a broadcast one every 2 s until
+  it lands at `confirmed` (up to 2 minutes), calling it expired only on proof from the finalized
+  chain. Pass `VersionedTransaction` from your app's own `@solana/web3.js` (1.87+ or 3.x): the add-on
+  never loads it, so your bundle carries one copy, and installing this version never changes yours.
+- `@ravnexchange/sdk/bitcoin` (`satsConnectHandlers`, `unisatHandlers`): `sendBitcoinPsbt` for
+  Xverse (sats-connect) and Unisat (or a wallet with its signPsbt and pushPsbt). No dependencies.
+- `batchApprovals` handler flag: `sendCalls` may resolve `null` ("this wallet can't batch these,
+  nothing was sent"), and the calls then go one by one. With it, an approval rides in the swap's
+  confirmation even with no fee, where RAVN's `batch` allows. Off by default.
+- `preflight(txs)` handler: called with the transactions about to go out one by one (approvals, then
+  the swap) before the first is sent; reject to stop with nothing sent.
+- `SentUnclearError`: a handler rejecting with it (the wallet took the swap but never said how it
+  ended) gets an `ExecuteAndTrackError` (`FAILED`) with every hash in `partial`, the swap's too when
+  the error names it, and `partial.sentUnclear`, instead of its own error as if nothing was sent.
+- Each add-on is its own import (`@ravnexchange/sdk/viem`, `/solana`, `/bitcoin`). Plain Node ESM
+  without a bundler imports `@ravnexchange/sdk/dist/viem.js` (`solana.js`, `bitcoin.js`) instead.
+
+### Changed
+
+- A Solana swap (a TRANSACTION without `submit`) goes to `sendSolanaTransaction` when you pass one,
+  instead of `sendTransaction` as `{ serialized }`. Without it, nothing changes.
+
+### Upgrading
+
+- Nothing to do. If you pass `sendSolanaTransaction` (for `sendDeposit`), it now also sends Solana
+  swaps: it signs and sends a base64 transaction either way.
+- `sendCalls`' type now allows `null`: code that calls a handler object's `sendCalls` itself, typed
+  as `ExecuteAndTrackHandlers`, must handle it.
+
+## @ravnexchange/sdk 0.4.26
+
+`executeAndTrack` stops a swap before money is lost: after a failed approval, and before a deposit
+too close to its deadline.
+
+### Changed
+
+- An approval whose receipt says it failed stops the swap: it rejects with an `ExecuteAndTrackError`
+  (`FAILED`, the approval's hash in `partial.approvalTxHash`) instead of sending a swap that would
+  fail and cost gas. A failed `approval.reset` stops it too (its hash in `partial.resetTxHash`; no
+  approval is sent). On a signed order, nothing is signed. A receipt that doesn't say (`null`, no
+  status) goes on as before.
+- With `sendDeposit`, a deposit due by `deposit.expiresAt` isn't sent with under 2 minutes of it
+  left, or with an `expiresAt` it can't read: it rejects before anything is sent, where it used to
+  be sent, or come back as `depositNotSent` for you to send.
+- A Hinkal deposit, with or without `sendDeposit`, isn't sent after 8 minutes of its 10-minute
+  window.
+- An `ExecuteAndTrackError`'s message starts with "executeAndTrack:" once, not twice.
+
+### Upgrading
+
+- Your handlers are called as before. With `sendDeposit`, a deposit under 2 minutes from its
+  deadline now rejects: send nothing, and get a fresh quote.
 
 ## @ravnexchange/sdk 0.4.25
 

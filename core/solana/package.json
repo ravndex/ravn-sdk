@@ -1,0 +1,4 @@
+{
+  "main": "../dist/solana.js",
+  "types": "../dist/solana.d.ts"
+}

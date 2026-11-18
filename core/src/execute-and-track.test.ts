@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RavnClient } from "./client";
-import { depositFeePayment, executeAndTrack, ExecuteAndTrackError } from "./execute-and-track";
+import { depositFeePayment, executeAndTrack, ExecuteAndTrackError, SentUnclearError } from "./execute-and-track";
 import type { ExecuteAndTrackHandlers, ExecuteAndTrackProgress } from "./execute-and-track";
 import { RavnApiError } from "./types";
 import type { ExecutionDTO } from "./types";
@@ -1584,4 +1584,383 @@ describe("executeAndTrack: review fixes, round 5", () => {
     expect(result.statusRef).toBe("cow-uid");
     expect(submitSpy).toHaveBeenCalledWith({ quoteToken: "qt-exec", signature: "0xsig", approvalSignature: "0xsig" });
   });
+});
+
+// A swap stops before money is lost, as RAVN's app stops it.
+describe("executeAndTrack: a failed approval stops the swap", () => {
+  const [APPROVAL, RESET, SWAP] = ["e", "0", "a"].map((c) => `0x${c.repeat(64)}`);
+  const approval = { to: "0xUSDC", data: "0xapprove", value: "0", chainId: 8453 };
+  const reset = { to: "0xUSDC", data: "0xreset", value: "0" };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453 };
+  const handlersWith = (approvalReceipt: unknown) => ({
+    sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? APPROVAL : tx.data === "0xreset" ? RESET : SWAP)),
+    waitForReceipt: vi.fn(async (hash: string) => (hash === SWAP ? receipt(hash) : (approvalReceipt as ReturnType<typeof receipt>))),
+    signTypedData: vi.fn(async () => "0xsig" as const),
+  });
+  const run = (execution: unknown, handlers: ExecuteAndTrackHandlers) => {
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], "submit-signature": [{ statusRef: "cow-uid" }], status: [{ status: "success", venue: "x" }] }) });
+    const getStatus = vi.spyOn(client, "getStatus");
+    return { getStatus, result: executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 }) };
+  };
+
+  it.each([
+    ["viem", { status: "reverted", transactionHash: APPROVAL }],
+    ["ethers", { status: 0, hash: APPROVAL }],
+    ["web3.js (bigint)", { status: 0n, transactionHash: APPROVAL }],
+    ["web3.js (boolean)", { status: false, transactionHash: APPROVAL }],
+    ["a raw RPC receipt", { status: "0x0", transactionHash: APPROVAL }],
+  ])("never sends the swap after an approval that failed on-chain (%s), and says so with its hash", async (_, failed) => {
+    const handlers = handlersWith(failed);
+    const { result, getStatus } = run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction }, handlers);
+    const failure = await result.catch((e) => e);
+    expect(failure).toBeInstanceOf(ExecuteAndTrackError);
+    expect(failure.code).toBe("FAILED");
+    expect(failure.message).toMatch(/approval failed on-chain, so the swap wasn't sent/);
+    expect(failure.message).toBe("executeAndTrack: the approval failed on-chain, so the swap wasn't sent: request a fresh quote");
+    expect(failure.partial.approvalTxHash).toBe(APPROVAL);
+    expect(handlers.sendTransaction).toHaveBeenCalledOnce();
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps every hash when the wallet rejects with an Error that has no message", async () => {
+    const handlers = {
+      ...handlersWith(receipt(APPROVAL)),
+      sendTransaction: vi.fn(async (tx: { data?: string }) => {
+        if (tx.data === "0xapprove") return APPROVAL;
+        throw Object.assign(new Error(), { message: undefined });
+      }),
+    };
+    const failure = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction }, handlers).result.catch((e) => e);
+    expect(failure).toBeInstanceOf(ExecuteAndTrackError);
+    expect(failure.code).toBe("FAILED");
+    expect(failure.partial.approvalTxHash).toBe(APPROVAL);
+  });
+
+  it("never sends the approval after its reset (approve to 0) failed", async () => {
+    const handlers = handlersWith({ status: "reverted", transactionHash: RESET });
+    const failure = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval: { ...approval, reset }, transaction }, handlers).result.catch((e) => e);
+    expect(failure).toBeInstanceOf(ExecuteAndTrackError);
+    expect(failure.message).toMatch(/reset \(approve to 0\) failed on-chain/);
+    expect(failure.partial.resetTxHash).toBe(RESET);
+    expect(handlers.sendTransaction).toHaveBeenCalledOnce();
+  });
+
+  it("signs no order after its approval failed: it would be taken and never fill", async () => {
+    const handlers = handlersWith({ status: "reverted", transactionHash: APPROVAL });
+    const execution = { executionType: "SIGNATURE", quoteToken: "qt-exec", approval, typedData: { primaryType: "Order" } };
+    const failure = await run(execution, handlers).result.catch((e) => e);
+    expect(failure).toBeInstanceOf(ExecuteAndTrackError);
+    expect(failure.partial.approvalTxHash).toBe(APPROVAL);
+    expect(handlers.signTypedData).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no receipt (ethers with 0 confirmations)", null],
+    ["a receipt with no status", { transactionHash: APPROVAL }],
+  ])("goes on as before when the receipt doesn't say the approval failed: %s", async (_, unclear) => {
+    const handlers = handlersWith(unclear);
+    const r = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction }, handlers).result;
+    expect(r).toMatchObject({ approvalTxHash: APPROVAL, txHash: SWAP });
+  });
+});
+
+// Not batched: a hand-written sendCalls that rejects on a wallet without atomic batches (Rabby,
+// Phantom, HyperEVM) would fail every such token sell, with no way to say "can't batch, use steps".
+describe("executeAndTrack: approve and swap without a fee stay two steps", () => {
+  const [APPROVAL, SWAP] = ["e", "a"].map((c) => `0x${c.repeat(64)}`);
+  const approval = { to: "0xUSDC", data: "0xapprove", value: "0", chainId: 8453 };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453 };
+
+  it("never calls sendCalls for an approval and a swap with no fee, even where batch is true", async () => {
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => (tx.data === "0xapprove" ? APPROVAL : SWAP)),
+      waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+      sendCalls: vi.fn(async () => {
+        throw new Error("this wallet can't send atomic batches");
+      }),
+    };
+    const execution = { executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, calls: [approval, transaction], batch: true };
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success", venue: "kyberswap" }] }) });
+    const r = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(handlers.waitForReceipt).toHaveBeenCalledWith(APPROVAL, 8453);
+    expect(r).toMatchObject({ approvalTxHash: APPROVAL, txHash: SWAP });
+  });
+});
+
+describe("executeAndTrack: a deposit too close to its deadline isn't sent", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const DEPOSIT_ADDRESS = `0x${"de".repeat(20)}`;
+  const coinDeposit = { to: DEPOSIT_ADDRESS, data: "0x", value: "995000", chainId: 8453 };
+  // A Houdini order: its deposit must arrive by deposit.expiresAt.
+  const houdini = (expiresAt: string) => ({
+    executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "houdini-order",
+    deposit: { address: DEPOSIT_ADDRESS, amount: "995000", chainId: 8453, expiresAt },
+    calls: [coinDeposit], batch: false,
+  });
+  const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
+  const handlersFor = () => ({
+    sendTransaction: vi.fn(async () => `0x${"d".repeat(64)}`),
+    waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+    sendCalls: vi.fn(async () => [`0x${"d".repeat(64)}`]),
+    sendBitcoinPsbt: vi.fn(async () => "btc-txid"),
+    sendSolanaTransaction: vi.fn(async () => "sol-sig"),
+  });
+  const run = (execution: unknown, handlers: ExecuteAndTrackHandlers, options = {}) => {
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success", venue: "houdini" }] }) });
+    return executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true, ...options });
+  };
+
+  it.each([
+    ["an EVM deposit", (e: string) => houdini(e)],
+    ["a Bitcoin PSBT", (e: string) => ({ ...houdini(e), deposit: { ...houdini(e).deposit, chainId: -1, psbt: "cHNidP8=" }, calls: undefined })],
+    ["a Solana transaction", (e: string) => ({ ...houdini(e), deposit: { ...houdini(e).deposit, chainId: -2, transaction: "AQID" }, calls: undefined })],
+  ])("sends nothing with under 2 minutes left: %s", async (_, build) => {
+    const handlers = handlersFor();
+    const failure = await run(build(inMinutes(1.5)), handlers).catch((e) => e);
+    // Nothing went out, so the error comes as it is, not an ExecuteAndTrackError.
+    expect(failure).not.toBeInstanceOf(ExecuteAndTrackError);
+    expect(failure.message).toMatch(/deposit window closes in under 2 minutes, so the deposit wasn't sent: request a fresh quote/);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(handlers.sendBitcoinPsbt).not.toHaveBeenCalled();
+    expect(handlers.sendSolanaTransaction).not.toHaveBeenCalled();
+  });
+
+  // Rift's deposit deadline carries microseconds (2026-10-09T04:04:54.068567Z). Node reads it; an
+  // engine that reads only milliseconds (stood in for here) must not refuse every Rift deposit.
+  it("reads a deadline with microseconds on an engine that reads only milliseconds", async () => {
+    const parse = Date.parse;
+    vi.spyOn(Date, "parse").mockImplementation((s: string) => (/\.\d{4,}/.test(s) ? NaN : parse(s)));
+    const handlers = handlersFor();
+    const rift = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString().replace("Z", "567Z");
+    expect(rift).toMatch(/\.\d{6}Z$/);
+    expect((await run(houdini(rift), handlers)).txHash).toBe(`0x${"d".repeat(64)}`);
+    // Trimmed only past the milliseconds: under 2 minutes is still refused.
+    await expect(run(houdini(new Date(Date.now() + 60_000).toISOString().replace("Z", "567Z")), handlers)).rejects.toThrow(/under 2 minutes/);
+  });
+
+  it.each([
+    ["null", null],
+    ["a number", Date.now() + 10 * 60_000],
+    ["an empty string", ""],
+  ])("refuses a deadline that isn't a date string: %s", async (_, expiresAt) => {
+    const handlers = handlersFor();
+    await expect(run({ ...houdini(""), deposit: { ...houdini("").deposit, expiresAt } }, handlers)).rejects.toThrow(/under 2 minutes/);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses a deadline it can't read rather than guess", async () => {
+    const handlers = handlersFor();
+    await expect(run(houdini("soon"), handlers)).rejects.toThrow(/under 2 minutes/);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("sends a deposit with more time left, and one with no deadline, as before", async () => {
+    const handlers = handlersFor();
+    expect((await run(houdini(inMinutes(5)), handlers)).txHash).toBe(`0x${"d".repeat(64)}`);
+    const { expiresAt: _, ...noDeadline } = houdini(inMinutes(5)).deposit;
+    expect((await run({ ...houdini(inMinutes(5)), deposit: noDeadline }, handlers)).txHash).toBe(`0x${"d".repeat(64)}`);
+    expect(handlers.sendTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it("without sendDeposit, hands the deposit back unsent as before, whatever its deadline", async () => {
+    const handlers = handlersFor();
+    const r = await run(houdini(inMinutes(1)), handlers, { sendDeposit: undefined });
+    expect(r.txHash).toBeUndefined();
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeAndTrack: wallet add-on hooks", () => {
+  const [APPROVAL, SWAP, FEE] = ["e", "a", "f"].map((c) => `0x${c.repeat(64)}`);
+  const approval = { to: "0xUSDC", data: "0xapprove", value: "0", chainId: 8453 };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453 };
+  const tokenFee = { amount: "500", address: "0xRavnFee", chainId: 8453, transaction: { to: "0xUSDC", data: "0xfeetransfer", value: "0", chainId: 8453 } };
+  const run = (execution: unknown, handlers: ExecuteAndTrackHandlers) => {
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success", venue: "kyberswap" }] }) });
+    return executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
+  };
+  const steps = (extra: Partial<ExecuteAndTrackHandlers> = {}) => {
+    const order: string[] = [];
+    const handlers = {
+      sendTransaction: vi.fn(async (tx: { data?: string }) => {
+        order.push(`send:${tx.data}`);
+        return tx.data === "0xapprove" ? APPROVAL : tx.data === "0xswap" ? SWAP : FEE;
+      }),
+      waitForReceipt: vi.fn(async (hash: string) => {
+        order.push(`wait:${hash}`);
+        return receipt(hash);
+      }),
+      preflight: vi.fn(async (txs: { data?: string }[]) => void order.push(`preflight:${txs.map((t) => t.data).join(",")}`)),
+      ...extra,
+    };
+    return { order, handlers };
+  };
+
+  it("with batchApprovals, an approval and the swap go in one confirmation where RAVN's batch allows", async () => {
+    const { handlers } = steps({ batchApprovals: true, sendCalls: vi.fn(async () => [SWAP]) });
+    const r = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, batch: true }, handlers);
+    expect(handlers.sendCalls).toHaveBeenCalledWith([approval, transaction]);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.preflight).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ approvalTxHash: SWAP, txHash: SWAP, feeTxHash: undefined });
+  });
+
+  it("a sendCalls that declines (null): the gas check, the approval confirmed, then the swap", async () => {
+    const { order, handlers } = steps({ batchApprovals: true, sendCalls: vi.fn(async () => null) });
+    const r = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, batch: true }, handlers);
+    expect(order).toEqual(["preflight:0xapprove,0xswap", "send:0xapprove", `wait:${APPROVAL}`, "send:0xswap"]);
+    expect(r).toMatchObject({ approvalTxHash: APPROVAL, txHash: SWAP });
+  });
+
+  it("never batches an approval where RAVN says no (batch false or absent), even with batchApprovals", async () => {
+    for (const batch of [false, undefined]) {
+      const { handlers } = steps({ batchApprovals: true, sendCalls: vi.fn(async () => [SWAP]) });
+      await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, batch }, handlers);
+      expect(handlers.sendCalls).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a declined fee batch goes one by one, the fee after the swap's receipt", async () => {
+    const { order, handlers } = steps({ batchApprovals: true, sendCalls: vi.fn(async () => null) });
+    const r = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, fee: tokenFee, batch: true }, handlers);
+    expect(handlers.sendCalls).toHaveBeenCalledWith([approval, transaction, tokenFee.transaction]);
+    expect(order).toEqual(["preflight:0xapprove,0xswap", "send:0xapprove", `wait:${APPROVAL}`, "send:0xswap", `wait:${SWAP}`, "send:0xfeetransfer", `wait:${FEE}`]);
+    expect(r).toMatchObject({ txHash: SWAP, feeTxHash: FEE, statusTxHash: FEE });
+  });
+
+  it("a declined deposit batch goes one by one too", async () => {
+    const DEPOSIT = `0x${"de".repeat(20)}`;
+    const depositTx = { to: DEPOSIT, data: "0x", value: "995000", chainId: 8453 };
+    const coinFee = { amount: "5000", address: "0xRavnFee", chainId: 8453, transaction: { to: "0xWETH", data: "0xfeetransfer", value: "0", chainId: 8453 } };
+    const execution = { executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "near-ref", deposit: { address: DEPOSIT, amount: "995000", chainId: 8453 }, fee: coinFee, calls: [depositTx, coinFee.transaction], batch: true };
+    const { handlers } = steps({ batchApprovals: true, sendCalls: vi.fn(async () => null) });
+    vi.mocked(handlers.sendTransaction).mockImplementation(async (tx: { data?: string }) => (tx.data === "0x" ? SWAP : FEE));
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success", venue: "near_intents" }] }) });
+    const r = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true });
+    expect(handlers.sendCalls).toHaveBeenCalledOnce();
+    expect(r).toMatchObject({ txHash: SWAP, feeTxHash: FEE });
+  });
+
+  it("a null from a sendCalls without batchApprovals is never read as 'nothing sent'", async () => {
+    const { handlers } = steps({ sendCalls: vi.fn(async () => null) });
+    const error = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, fee: tokenFee, batch: true }, handlers).catch((e) => e);
+    expect(error).toBeInstanceOf(ExecuteAndTrackError);
+    expect(error.code).toBe("FAILED");
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("a preflight refusal stops the swap with nothing sent", async () => {
+    const refusal = new Error("This wallet needs about 0.0001 more ETH");
+    const { handlers } = steps({ preflight: vi.fn(async () => Promise.reject(refusal)) });
+    await expect(run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction }, handlers)).rejects.toBe(refusal);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("preflight sees the swap alone when the allowance is already there", async () => {
+    const { order, handlers } = steps({ hasAllowance: vi.fn(async () => true) });
+    await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction }, handlers);
+    expect(order).toEqual(["preflight:0xswap", "send:0xswap"]);
+  });
+
+  it("a Solana swap goes to sendSolanaTransaction when given, else to sendTransaction as before", async () => {
+    const execution = { executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" } };
+    const { handlers } = steps({ sendSolanaTransaction: vi.fn(async () => "5igSig") });
+    const r = await run(execution, handlers);
+    expect(handlers.sendSolanaTransaction).toHaveBeenCalledWith("AQID");
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.preflight).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ txHash: "5igSig", statusRef: "5igSig" });
+
+    const old = steps();
+    await run(execution, old.handlers);
+    expect(old.handlers.sendTransaction).toHaveBeenCalledWith({ chainId: -2, serialized: "AQID" });
+  });
+
+  it("a handler that can't say whether it sent (SentUnclearError) is tracked as sent, with its hash", async () => {
+    const onProgress = vi.fn();
+    const unclear = new SentUnclearError("lost track of it", "5igSig");
+    const { handlers } = steps({ sendSolanaTransaction: vi.fn(async () => Promise.reject(unclear)) });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" } }], status: [{ status: "success" }] }) });
+    const error = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, onProgress }).catch((e) => e);
+    expect(error).toBeInstanceOf(ExecuteAndTrackError);
+    expect(error).toMatchObject({ code: "FAILED", cause: unclear, partial: { txHash: "5igSig", statusRef: "5igSig", quoteToken: "qt-exec", sentUnclear: true } });
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: "swap_sent" }));
+
+    // A copy of the class from another SDK version: read by its flag.
+    const batchUnclear = Object.assign(new Error("may still go through"), { sentUnclear: true });
+    const b = steps({ batchApprovals: true, sendCalls: vi.fn(async () => Promise.reject(batchUnclear)) });
+    const e2 = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, batch: true }, b.handlers).catch((e) => e);
+    // No hash, but sentUnclear: never read as "no swap went out".
+    expect(e2).toMatchObject({ code: "FAILED", partial: { quoteToken: "qt-exec", sentUnclear: true } });
+    expect(e2.partial.txHash).toBeUndefined();
+  });
+
+  it("a SentUnclearError naming the swap's hash on a two-hop route keeps it as the fee's proof (statusTxHash), as a sent one does", async () => {
+    const HOP1 = `0x${"1".repeat(64)}`;
+    const { handlers } = steps({ sendTransaction: vi.fn(async () => Promise.reject(new SentUnclearError("lost track of it", HOP1))) });
+    const twoHop = { executionType: "TRANSACTION", quoteToken: "qt-exec", statusRef: "compose-ref", transaction };
+    const error = await run(twoHop, handlers).catch((e) => e);
+    expect(error).toMatchObject({ code: "FAILED", partial: { txHash: HOP1, statusRef: "compose-ref", statusTxHash: HOP1, sentUnclear: true } });
+    // Without its own statusRef the hash is the ref, never a fee proof (as when sent).
+    const single = steps({ sendTransaction: vi.fn(async () => Promise.reject(new SentUnclearError("lost track of it", HOP1))) });
+    const e2 = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction }, single.handlers).catch((e) => e);
+    expect(e2.partial).toMatchObject({ txHash: HOP1, statusRef: HOP1 });
+    expect(e2.partial.statusTxHash).toBeUndefined();
+  });
+
+  it("sets sentUnclear on an aborted run too", async () => {
+    const controller = new AbortController();
+    const unclear = new SentUnclearError("lost track of it");
+    const { handlers } = steps({
+      sendSolanaTransaction: vi.fn(async () => {
+        controller.abort(new Error("user left"));
+        throw unclear;
+      }),
+    });
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [{ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction: { chainId: -2, serialized: "AQID" } }], status: [{ status: "success" }] }) });
+    const error = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, signal: controller.signal }).catch((e) => e);
+    expect(error).toMatchObject({ code: "ABORTED", partial: { sentUnclear: true } });
+  });
+
+  it("any other rejection before a send still comes as it is (nothing sent)", async () => {
+    const cancel = Object.assign(new Error("User rejected the request."), { code: 4001 });
+    const { handlers } = steps({ batchApprovals: true, sendCalls: vi.fn(async () => Promise.reject(cancel)) });
+    await expect(run({ executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, batch: true }, handlers)).rejects.toBe(cancel);
+  });
+});
+
+// A JS sendCalls that sent the batch but returned nothing must never be read as "declined": the swap
+// would go out a second time, one by one.
+describe("executeAndTrack: only a strict null from sendCalls means nothing was sent", () => {
+  const approval = { to: "0xUSDC", data: "0xapprove", value: "0", chainId: 8453 };
+  const transaction = { to: "0xRouter", data: "0xswap", value: "0", chainId: 8453 };
+  const tokenFee = { amount: "500", address: "0xRavnFee", chainId: 8453, transaction: { to: "0xUSDC", data: "0xfeetransfer", value: "0", chainId: 8453 } };
+  const DEPOSIT = `0x${"de".repeat(20)}`;
+  const depositTx = { to: DEPOSIT, data: "0x", value: "995000", chainId: 8453 };
+  const executions = {
+    transaction: { executionType: "TRANSACTION", quoteToken: "qt-exec", approval, transaction, fee: tokenFee, batch: true },
+    deposit: { executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "near-ref", deposit: { address: DEPOSIT, amount: "995000", chainId: 8453 }, fee: tokenFee, calls: [depositTx, tokenFee.transaction], batch: true },
+  };
+
+  for (const [site, execution] of Object.entries(executions)) {
+    for (const batchApprovals of [true, false]) {
+      for (const answer of [undefined, [], [""], "0xabc"]) {
+        it(`${site}: ${JSON.stringify(answer) ?? "undefined"}${batchApprovals ? " with batchApprovals" : ""} fails, sending nothing one by one`, async () => {
+          const handlers = {
+            sendTransaction: vi.fn(async () => `0x${"a".repeat(64)}`),
+            waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+            sendCalls: vi.fn(async () => answer as never),
+            batchApprovals,
+          };
+          const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution], status: [{ status: "success" }] }) });
+          const error = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0, sendDeposit: true }).catch((e) => e);
+          expect(error).toBeInstanceOf(ExecuteAndTrackError);
+          expect(error.code).toBe("FAILED");
+          expect(handlers.sendTransaction).not.toHaveBeenCalled();
+        });
+      }
+    }
+  }
 });

@@ -41,6 +41,14 @@ export function checkBitcoinPsbt(
   if (networkFee > minVbytes * MAX_SATS_PER_VBYTE) fail("The Bitcoin network fee is absurdly high", { networkFee: networkFee.toString() });
 }
 
+/** The inputs `address` signs: every one of them, each checked to spend `address`'s own coins. */
+export function psbtInputsOf(psbtBase64: string, address: string): number[] {
+  const script = hex(outputScript(address));
+  const { inputs } = parsePsbt(psbtBase64);
+  if (!inputs.length || inputs.some((i) => i.script !== script)) fail("The Bitcoin PSBT spends coins that aren't this wallet's");
+  return inputs.map((_, n) => n);
+}
+
 // Far above any rate the network has needed (RAVN builds at mempool.space's half-hour rate).
 const MAX_SATS_PER_VBYTE = 1_000n;
 
