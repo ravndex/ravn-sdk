@@ -1897,6 +1897,19 @@ describe("executeAndTrack: wallet add-on hooks", () => {
     expect(e2.partial.txHash).toBeUndefined();
   });
 
+  it("a SentUnclearError naming the swap's hash on a two-hop route keeps it as the fee's proof (statusTxHash), as a sent one does", async () => {
+    const HOP1 = `0x${"1".repeat(64)}`;
+    const { handlers } = steps({ sendTransaction: vi.fn(async () => Promise.reject(new SentUnclearError("lost track of it", HOP1))) });
+    const twoHop = { executionType: "TRANSACTION", quoteToken: "qt-exec", statusRef: "compose-ref", transaction };
+    const error = await run(twoHop, handlers).catch((e) => e);
+    expect(error).toMatchObject({ code: "FAILED", partial: { txHash: HOP1, statusRef: "compose-ref", statusTxHash: HOP1, sentUnclear: true } });
+    // Without its own statusRef the hash is the ref, never a fee proof (as when sent).
+    const single = steps({ sendTransaction: vi.fn(async () => Promise.reject(new SentUnclearError("lost track of it", HOP1))) });
+    const e2 = await run({ executionType: "TRANSACTION", quoteToken: "qt-exec", transaction }, single.handlers).catch((e) => e);
+    expect(e2.partial).toMatchObject({ txHash: HOP1, statusRef: HOP1 });
+    expect(e2.partial.statusTxHash).toBeUndefined();
+  });
+
   it("sets sentUnclear on an aborted run too", async () => {
     const controller = new AbortController();
     const unclear = new SentUnclearError("lost track of it");

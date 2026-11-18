@@ -484,12 +484,16 @@ export async function executeAndTrack(
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
 
     // Sends the swap (or deposit). A handler that can't say whether it went out (SentUnclearError)
-    // names its hash when it has one: that hash is the swap's, kept for tracking.
+    // names its hash when it has one: that hash is the swap's, kept for tracking, and on a TRANSACTION
+    // with its own statusRef (a two-hop route) the fee's proof too, as when it's sent.
     const sendSwap = async <T>(send: () => Promise<T>): Promise<T> => {
       try {
         return await send();
       } catch (err) {
-        if (sentUnclear(err) && typeof err.txHash === "string") report("swap_sent", { txHash: err.txHash, statusRef: execution.statusRef ?? err.txHash });
+        if (sentUnclear(err) && typeof err.txHash === "string") {
+          const proves = execution.executionType === "TRANSACTION" && execution.statusRef && EVM_TX_HASH.test(err.txHash);
+          report("swap_sent", { txHash: err.txHash, statusRef: execution.statusRef ?? err.txHash, ...(proves ? { statusTxHash: err.txHash } : {}) });
+        }
         throw err;
       }
     };
