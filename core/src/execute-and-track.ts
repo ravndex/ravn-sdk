@@ -1,5 +1,6 @@
 import type { RavnClient } from "./client";
 import type { SwapIntent } from "./guard";
+import { noteBuilt, noteTracked, warnFeeNotSent } from "./dev-warnings";
 import { RavnApiError } from "./types";
 import type { ApprovalDTO, DepositFeeDTO, ExecuteParams, ExecutionDTO, StatusDTO } from "./types";
 import { isPollingTerminal } from "./polling";
@@ -435,7 +436,16 @@ export async function executeAndTrack(
     // limit is repeated. A BUILD_FAILED wants a fresh quote either way.
     const execute = (call: ExecuteParams, key: string | undefined = globalThis.crypto?.randomUUID?.()) =>
       withRetries(
-        () => orAbort(client.execute({ ...call, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent }), stop.signal),
+        () =>
+          orAbort(
+            // Promise.resolve: a JS stand-in client may hand back the value itself.
+            Promise.resolve(client.execute({ ...call, ...(key ? { idempotencyKey: key } : {}) }, { intent: options.intent })).then((answer) => {
+              // Answered after a stop: never sent, so never the caller's to track.
+              if (stop.signal.aborted && answer) noteTracked(client, answer.quoteToken);
+              return answer;
+            }),
+            stop.signal
+          ),
         key ? answerLost : rateLimited,
         key ? EXECUTE_ATTEMPTS : MAX_ATTEMPTS
       );
@@ -482,6 +492,8 @@ export async function executeAndTrack(
     };
     const { quoteToken } = execution;
     Object.assign(partial, { execution, quoteToken, statusRef: execution.statusRef });
+    // Tracked from here, by this call or by its caller once handed back (see the end): not "never tracked".
+    noteTracked(client, quoteToken);
 
     // Sends the swap (or deposit). A handler that can't say whether it went out (SentUnclearError)
     // names its hash when it has one: that hash is the swap's, kept for tracking, and on a TRANSACTION
@@ -702,6 +714,8 @@ export async function executeAndTrack(
         feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
       }
       partial.feeError = feeError;
+      // Sent, its hash on the polls: RAVN proves it there even when its receipt wasn't seen.
+      if (!feeTxHash || statusTxHash !== feeTxHash) warnFeeNotSent(client, execution, feeError);
       return {
         execution, quoteToken, resetTxHash: partial.resetTxHash, approvalTxHash: partial.approvalTxHash, txHash, statusRef, statusTxHash, feeTxHash, feeError,
         finalStatus: await pollStatus(statusRef, statusTxHash, !!feeTxHash && !!statusTxHash),
@@ -747,6 +761,7 @@ export async function executeAndTrack(
       try {
         return { ...base, feePayment: depositFeePayment(execution) };
       } catch (feeError) {
+        warnFeeNotSent(client, execution, feeError);
         return { ...base, feeError };
       }
     };
@@ -806,6 +821,8 @@ export async function executeAndTrack(
         feeError ??= new Error(`executeAndTrack: ${feeTxHash} is not an on-chain transaction hash, so RAVN can't prove the fee`);
       }
       partial.feeError = feeError;
+      // Sent, its hash on the polls: RAVN proves it there even when its receipt wasn't seen.
+      if (!feeTxHash || statusTxHash !== feeTxHash) warnFeeNotSent(client, execution, feeError);
       return {
         execution, quoteToken, txHash, statusRef, statusTxHash, feeTxHash, feeError,
         finalStatus: await pollStatus(statusRef, statusTxHash, !!statusTxHash),
@@ -834,10 +851,16 @@ export async function executeAndTrack(
   };
 
   try {
-    return await run();
+    const result = await run();
+    // Handed back unfinished (polling off, a deposit not sent from here): the caller's to track now.
+    if (!result.finalStatus) noteBuilt(client, result.execution);
+    return result;
   } catch (err) {
     // A handler that can't say whether it sent (SentUnclearError): as if it had.
     if (sentUnclear(err)) partial.sentUnclear = true;
+    // Stopped once the swap itself was (or may have been) out: the caller's to track from `partial`.
+    // Nothing out (or only an approval), nothing to track.
+    if (partial.execution && (partial.txHash || partial.signedTransaction || partial.signature || partial.sentUnclear)) noteBuilt(client, partial.execution);
     if (stopCode) {
       const why = stopCode === "ABORTED" ? "aborted" : `no terminal status within maxWaitMs (${maxWaitMs} ms)`;
       throw new ExecuteAndTrackError(`executeAndTrack: ${why}`, stopCode, { ...partial }, stop.signal.reason);

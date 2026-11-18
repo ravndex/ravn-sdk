@@ -1,3 +1,4 @@
+import { noteBuilt, noteStatus, noteTracked, startDevWarnings } from "./dev-warnings";
 import { checkRecovery, verifyExecution } from "./guard";
 import type { GuardOptions, SwapIntent } from "./guard";
 import { RavnApiError, UnsafeExecutionError } from "./types";
@@ -36,6 +37,14 @@ export interface RavnClientConfig {
    * user's wallet but the wallet's own preview.
    */
   guard?: false | GuardOptions;
+  /**
+   * Console warnings while you build, for what RAVN's server can't see: RAVN's fee not sent beside a
+   * swap (executeAndTrack's `feeError`, or no `txHash` on any getStatus poll in the 10 minutes after
+   * such a swap succeeded), and a swap execute() built that nothing tracked within 10 minutes. On
+   * unless process.env.NODE_ENV is "production" or "test". `false` turns them off; `true` keeps them
+   * on everywhere. A warning never throws into a swap.
+   */
+  devWarnings?: boolean;
 }
 
 /** Quotes remembered for execute()'s check: plenty for any one user's session. */
@@ -67,7 +76,7 @@ function envelopeData<T>(body: Envelope<T>, ok: boolean, status?: number): T {
 const DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1";
 
 /** This package's version, as in its package.json (client.test.ts fails when they differ). */
-export const SDK_VERSION = "0.4.28";
+export const SDK_VERSION = "0.4.29";
 
 export class RavnClient {
   private readonly apiKey?: string;
@@ -89,6 +98,7 @@ export class RavnClient {
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     this.fetchImpl = config.fetch ?? globalThis.fetch;
     this.guard = config.guard ?? {};
+    startDevWarnings(this, config.devWarnings);
   }
 
   private remember(params: GetQuoteParams, quote: QuoteDTO): QuoteDTO {
@@ -268,6 +278,7 @@ export class RavnClient {
     if (this.guard !== false && intent) {
       await verifyExecution(execution, params.destinationAddress ? { ...intent, destinationAddress: params.destinationAddress } : intent, this.guard, this.fetchImpl);
     }
+    noteBuilt(this, execution);
     return execution;
   }
 
@@ -285,6 +296,8 @@ export class RavnClient {
 
   /** POST /v1/submit-signature: for SIGNATURE-type executions only. Returns the ref to poll getStatus with. */
   submitSignature(params: SubmitSignatureParams): Promise<{ statusRef: string }> {
+    // params?.: a call with no params still fails as a rejected promise, never a throw.
+    noteTracked(this, params?.quoteToken);
     return this.request<{ statusRef: string }>("/submit-signature", {
       method: "POST",
       body: JSON.stringify(params),
@@ -295,6 +308,8 @@ export class RavnClient {
    * (broadcastViaRavn quotes). RAVN checks the signed transaction, then sends it; refused, nothing
    * is sent. Returns the Solana signature; poll getStatus with the execution's statusRef. */
   submitTransaction(params: SubmitTransactionParams): Promise<{ txHash: string }> {
+    // params?.: a call with no params still fails as a rejected promise, never a throw.
+    noteTracked(this, params?.quoteToken);
     return this.request<{ txHash: string }>("/submit-transaction", {
       method: "POST",
       body: JSON.stringify(params),
@@ -306,12 +321,15 @@ export class RavnClient {
    * a 2-hop quoteToken in a query string can exceed header limits and fail with 431. `txHash`:
    * a two-hop route's hop-1 transaction, or the fee payment a DEPOSIT's `fee.transaction` asked
    * for; it's how RAVN proves the fee your share is paid from. `signal` aborts the request. */
-  getStatus(quoteToken: string, ref: string, txHash?: string, options: { signal?: AbortSignal } = {}): Promise<StatusDTO> {
-    return this.request<StatusDTO>("/status", {
+  async getStatus(quoteToken: string, ref: string, txHash?: string, options: { signal?: AbortSignal } = {}): Promise<StatusDTO> {
+    noteTracked(this, quoteToken, txHash);
+    const status = await this.request<StatusDTO>("/status", {
       method: "POST",
       body: JSON.stringify({ quoteToken, ref, ...(txHash ? { txHash } : {}) }),
       signal: options.signal,
     });
+    noteStatus(this, quoteToken, status);
+    return status;
   }
 
   /** GET /v1/tokens: RAVN's listed token registry for one chain. Not a per-pair routability guarantee. */

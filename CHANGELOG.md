@@ -3,6 +3,38 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.29
+
+Warnings in the console while you build, for three mistakes RAVN's server can't see from its side. Each one
+can cost you the fee your share is paid from, and none of them throws, so they were easy to miss. Quiet when
+`process.env.NODE_ENV` is `"production"` or `"test"` (a production build, a jest or vitest run).
+
+### Added
+
+- **RAVN's fee wasn't sent** by `executeAndTrack`: the wallet's receipt for the swap came back empty or failed,
+  your user declined the fee's own transaction, or the fee went in a batch the wallet named by an id rather than
+  an on-chain hash. Said the moment it happens, with the reason. The swap still runs; `feeError` in the result is
+  the same thing, as before. Not said when the fee went out and only its receipt wasn't seen: its hash rides on
+  the status polls, which is how RAVN proves it.
+- **A fee transaction never reported**: a swap whose fee is a transaction of its own (`execution.fee.transaction`)
+  succeeded, and in the 10 minutes after, no status poll for it carried a `txHash`. RAVN keeps such a swap open for
+  a poll that brings the fee's hash, so a `useRavnStatus` given `txHash` once the fee confirms is fine. For
+  integrations that send swaps themselves rather than through `executeAndTrack`.
+- **A swap built and never tracked**: `execute()` answered with a swap, and in the next 10 minutes this client
+  made no `getStatus`, `submitSignature` or `submitTransaction` call for its quoteToken. Said once per process.
+  Ignore it if you track swaps on your server or with another client. A swap `executeAndTrack` is tracking is
+  never warned on, however long the wallet takes, nor one it never sent (declined, stopped, or only its approval
+  out); one it hands back unfinished (polling off, a deposit it didn't send, a stop after the swap went out, or a wallet that can't say whether it did) is
+  yours to track from then.
+- `RavnClientConfig.devWarnings`: `false` turns the warnings off, `true` keeps them on in production and tests too.
+
+### Upgrading
+
+- Nothing to change. Nothing is sent anywhere: the warnings are `console.warn` on your side only, a warning never
+  throws into a swap (not even a `console.warn` that throws), and the timers behind them never keep a Node, Bun or
+  Deno process alive. A server that doesn't set `NODE_ENV=production` will print them; set it, or pass
+  `devWarnings: false`.
+
 ## @ravnexchange/sdk 0.4.28
 
 Optional wallet add-ons: ready-made `executeAndTrack` handlers with the checks RAVN's own app makes.
