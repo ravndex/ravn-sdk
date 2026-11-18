@@ -1727,6 +1727,29 @@ describe("executeAndTrack: a deposit too close to its deadline isn't sent", () =
     expect(handlers.sendSolanaTransaction).not.toHaveBeenCalled();
   });
 
+  // Rift's deposit deadline carries microseconds (2026-10-09T04:04:54.068567Z). Node reads it; an
+  // engine that reads only milliseconds (stood in for here) must not refuse every Rift deposit.
+  it("reads a deadline with microseconds on an engine that reads only milliseconds", async () => {
+    const parse = Date.parse;
+    vi.spyOn(Date, "parse").mockImplementation((s: string) => (/\.\d{4,}/.test(s) ? NaN : parse(s)));
+    const handlers = handlersFor();
+    const rift = new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString().replace("Z", "567Z");
+    expect(rift).toMatch(/\.\d{6}Z$/);
+    expect((await run(houdini(rift), handlers)).txHash).toBe(`0x${"d".repeat(64)}`);
+    // Trimmed only past the milliseconds: under 2 minutes is still refused.
+    await expect(run(houdini(new Date(Date.now() + 60_000).toISOString().replace("Z", "567Z")), handlers)).rejects.toThrow(/under 2 minutes/);
+  });
+
+  it.each([
+    ["null", null],
+    ["a number", Date.now() + 10 * 60_000],
+    ["an empty string", ""],
+  ])("refuses a deadline that isn't a date string: %s", async (_, expiresAt) => {
+    const handlers = handlersFor();
+    await expect(run({ ...houdini(""), deposit: { ...houdini("").deposit, expiresAt } }, handlers)).rejects.toThrow(/under 2 minutes/);
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+  });
+
   it("refuses a deadline it can't read rather than guess", async () => {
     const handlers = handlersFor();
     await expect(run(houdini("soon"), handlers)).rejects.toThrow(/under 2 minutes/);

@@ -673,7 +673,9 @@ export async function executeAndTrack(
     // 2 minutes left, or it lands at an expired order. One it can't read is refused, not guessed.
     // ponytail: read on this device's clock (the API sends no window to count from): a clock over 2
     // minutes fast refuses a deposit still on time, one that slow lets a late one go, as before.
-    if (deposit.expiresAt !== undefined && !(Date.parse(deposit.expiresAt) - Date.now() >= DEPOSIT_MARGIN_MS)) {
+    // Read to the millisecond: Rift sends microseconds, which an engine may not read (React Native's).
+    const closesAt = typeof deposit.expiresAt === "string" ? Date.parse(deposit.expiresAt.replace(/(\.\d{3})\d+/, "$1")) : NaN;
+    if (deposit.expiresAt !== undefined && !(closesAt - Date.now() >= DEPOSIT_MARGIN_MS)) {
       throw new Error("executeAndTrack: the venue's deposit window closes in under 2 minutes, so the deposit wasn't sent: request a fresh quote");
     }
 
