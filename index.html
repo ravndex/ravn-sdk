@@ -1,11 +1,9 @@
 <!--
   RAVN widget playground, served via GitHub Pages from this repo's root.
 
-  This is deliberately not a config-knob playground like some widgets ship: RAVN's widget page
-  (src/app/widget/v1/page.tsx in the private app) doesn't yet read the `config` object the bridge
-  sends at handshake, so there's no theme/mode/variant to toggle here. What this page actually
-  demonstrates is real: connect a wallet, watch @ravnexchange/widget-connector bridge it into the
-  live widget iframe, and copy the exact code that does it.
+  This page shows the wallet bridge only, with the widget unthemed: connect a wallet, watch
+  @ravnexchange/widget-connector bridge it into the live widget iframe, and copy the exact code
+  that does it. Theme knobs live in RAVN's own playground, app.ravn.exchange/widget/playground.
 
   The iframe's ?origin= must equal wherever this page is actually served from: the widget's
   bridge only accepts postMessage from that exact origin, enforced by the browser itself, not by
@@ -101,11 +99,13 @@
       <button id="copy">Copy embed code</button>
       <div id="status">Not connected.</div>
       <pre id="fallback-code" hidden></pre>
-      <h2 style="font-size: 15px; margin-top: 28px">What's configurable today</h2>
+      <h2 style="font-size: 15px; margin-top: 28px">What's configurable</h2>
       <p style="color: #a3a19c; font-size: 13.5px">
-        Just the wallet bridge. There's no theme, token allowlist, or layout mode to toggle yet;
-        the widget always renders RAVN's standard swap card. If you need those, that's a feature
-        request against the widget itself, not something this SDK repo can add.
+        The theme (colours, light, dark or auto, corner radius, font), a starting pair and your
+        integrator key, all in the bridge's <code>config</code>. <code>bridge.updateConfig()</code>
+        changes the theme live, for example from your site's own light/dark toggle. Try themes in
+        the <a href="https://app.ravn.exchange/widget/playground">widget playground</a>. There's no
+        token allowlist or layout mode.
       </p>
     </div>
 
