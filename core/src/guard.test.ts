@@ -884,6 +884,67 @@ function psbt(inputs: { value: bigint; owner: string; extra?: number[] }[], outp
   return Buffer.from(bytes).toString("base64");
 }
 
+// Layerswap from Bitcoin: its PSBT pays Layerswap's pinned Taproot wallet with the swap's memo beside it.
+describe("checkExecution: Layerswap's Bitcoin PSBT (TRANSACTION, posted back through RAVN)", () => {
+  const LAYERSWAP = [0x51, 0x20, ...Buffer.from("f9ba507bc8114718a0e16d70a22059162f24a7996ac4d1db1f26330c91c761de", "hex")];
+  const memo = (text: string) => [0x6a, text.length, ...Buffer.from(text)];
+  // psbt() with raw output scripts: Taproot and OP_RETURN outputs are not p2wpkh.
+  const raw = (outs: { value: bigint; script: number[] }[], owner = BTC_USER) => {
+    const tx = [2, 0, 0, 0, 1, ...new Array(32).fill(1), 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, outs.length];
+    for (const o of outs) tx.push(...le(o.value, 8), o.script.length, ...o.script);
+    tx.push(0, 0, 0, 0);
+    const utxo = [...le(600_000n, 8), 22, ...p2wpkh(owner)];
+    const bytes = [0x70, 0x73, 0x62, 0x74, 0xff, 1, 0, ...(tx.length < 0xfd ? [tx.length] : [0xfd, tx.length & 0xff, tx.length >> 8]), ...tx, 0, 1, 1, utxo.length, ...utxo, 0, ...outs.map(() => 0)];
+    return Buffer.from(bytes).toString("base64");
+  };
+  const intent: SwapIntent = { inputChainId: -1, inputToken: "native", inputAmount: "200000", userAddress: BTC_USER };
+  const tx = (b64: string, over: Record<string, unknown> = {}): ExecutionDTO =>
+    ({ executionType: "TRANSACTION", quoteToken: "qt", statusRef: "swap", transaction: { chainId: -1, psbt: b64 }, submit: { url: "/api/v1/submit-transaction" }, ...over }) as ExecutionDTO;
+  // 199,600 to Layerswap and 400 to RAVN: the 200,000 quoted.
+  const good = [
+    { value: 199_600n, script: LAYERSWAP },
+    { value: 0n, script: memo("184e439;") },
+    { value: 400n, script: p2wpkh(BTC_FEE) },
+    { value: 399_000n, script: p2wpkh(BTC_USER) },
+  ];
+
+  it("accepts the payment to Layerswap, its memo, RAVN's fee and change", () => {
+    expect(() => checkExecution(tx(raw(good)), intent)).not.toThrow();
+    // RAVN takes no fee on it: the payment alone is the amount.
+    expect(() => checkExecution(tx(raw([{ value: 200_000n, script: LAYERSWAP }, good[1], { value: 399_400n, script: p2wpkh(BTC_USER) }])), intent)).not.toThrow();
+  });
+
+  it("refuses another wallet, a second or missing or odd memo, a paid memo, other amounts, and a shape RAVN wouldn't send", () => {
+    const swap = (i: number, o: { value: bigint; script: number[] }) => good.map((g, k) => (k === i ? o : g));
+    refuses(tx(raw(swap(0, { value: 199_600n, script: p2wpkh(BTC_DEPOSIT) }))), intent, /neither Layerswap/);
+    refuses(tx(raw([...good, { value: 0n, script: memo("1;") }].map((o, k) => (k === 3 ? { ...o, value: 399_000n } : o)))), intent, /one payment to Layerswap with its memo/);
+    refuses(tx(raw(good.filter((_, k) => k !== 1))), intent, /one payment to Layerswap with its memo/);
+    refuses(tx(raw(swap(1, { value: 0n, script: memo("hello;") }))), intent, /other than a Layerswap memo/);
+    refuses(tx(raw(swap(1, { value: 1n, script: memo("184e439;") }))), intent, /other than a Layerswap memo/);
+    refuses(tx(raw(swap(0, { value: 199_599n, script: LAYERSWAP }))), intent, /exactly the swap's amount/);
+    refuses(tx(raw(swap(2, { value: 2_401n, script: p2wpkh(BTC_FEE) }))), intent, /more than the fee/);
+    refuses(tx(raw(good, "bc1qhne88dzltx85lhvc56888hslfxntrjxdrvh3y8")), intent, /aren't the sender's/);
+    refuses(tx(raw(good), { submit: undefined }), intent, /without RAVN sending it/);
+    refuses(tx(raw(good), { fee: { amount: "400", address: BTC_FEE, chainId: -1 } }), intent, /separate fee/);
+    refuses(tx(raw(good), { transaction: { chainId: -2, psbt: raw(good) } }), intent, /chain/);
+  });
+
+  it("accepts the PSBT RAVN's own builder makes (199,000 to Layerswap, its memo, 1,000 to RAVN, change), and nothing else", () => {
+    // ravn-mvp's prepareBtcSend with Layerswap's memo for sequence 25486393, built 2026-11-19.
+    const built =
+      "cHNidP8BAK8CAAAAAaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqAQAAAAD/////BFgJAwAAAAAAIlEg+bpQe8gRRxig4W1woiBZFi8kp5lqxNHbHyYzDJHHYd4AAAAAAAAAAApqCDE4NGU0Mzk76AMAAAAAAAAWABTJwmpKv9QyaQkQ92truWVe7jElCYsWBgAAAAAAFgAUkoA0HAMMwu8/DSlEV8tXeEV4YRsAAAAAAAEBH8AnCQAAAAAAFgAUkoA0HAMMwu8/DSlEV8tXeEV4YRsAAAAAAA==";
+    expect(() => checkExecution(tx(built), intent)).not.toThrow();
+    refuses(tx(built), { ...intent, inputAmount: "200001" }, /exactly the swap's amount/);
+    refuses(tx(built), { ...intent, userAddress: BTC_FEE }, /neither Layerswap|aren't the sender's/);
+  });
+
+  it("takes a newer Layerswap wallet only from allowContracts", () => {
+    const moved = good.map((o, k) => (k === 0 ? { ...o, script: p2wpkh(BTC_DEPOSIT) } : o));
+    refuses(tx(raw(moved)), intent, /neither Layerswap/);
+    expect(() => checkExecution(tx(raw(moved)), intent, { allowContracts: { [-1]: [BTC_DEPOSIT] } })).not.toThrow();
+  });
+});
+
 describe("checkExecution: Bitcoin PSBTs", () => {
   const intent: SwapIntent = { inputChainId: -1, inputToken: "native", inputAmount: "200000", userAddress: BTC_USER };
   const deposit = (b64: string): ExecutionDTO => ({

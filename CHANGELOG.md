@@ -3,6 +3,27 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.31
+
+Layerswap from Bitcoin: RAVN builds the payment as a PSBT carrying Layerswap's memo, your user's wallet
+signs it, and RAVN sends it. RAVN offers this route only to 0.4.31+ (older versions refuse it before
+anything is signed).
+
+### Added
+
+- `signBitcoinPsbt` in `executeAndTrack`'s handlers: sign (don't broadcast) a Bitcoin TRANSACTION's
+  `transaction.psbt` and return it signed (PSBT base64, or the signed transaction hex); executeAndTrack
+  posts it to `submitTransaction`. Without it, such an execution is refused, never broadcast.
+- The check (`checkExecution`) for that PSBT: one payment to Layerswap's pinned Bitcoin wallet, one
+  zero-value OP_RETURN carrying a Layerswap memo, at most the quote's fee cap to RAVN's fee wallet,
+  the rest back to the sender from the sender's own coins; payment and fee are exactly the quoted
+  amount. A newer Layerswap wallet only through `allowContracts[-1]`.
+
+### Upgrading
+
+- Nothing to change unless you quote from Bitcoin with `broadcastViaRavn: true`: then pass
+  `signBitcoinPsbt` from a native SegWit (bc1q…) wallet.
+
 ## @ravnexchange/sdk 0.4.30
 
 Ink (Kraken's chain, id 57073). 0.3.0–0.4.29 refuse Ink executions with "This SDK version doesn't know

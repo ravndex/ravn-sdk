@@ -1,7 +1,7 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
 import { CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
-import { checkBitcoinPsbt } from "./guard-bitcoin";
+import { checkBitcoinPsbt, checkLayerswapBitcoinPsbt } from "./guard-bitcoin";
 import { base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
 /**
@@ -891,7 +891,23 @@ function checkCalls(ctx: Ctx, calls: Call[], expected: Call[]) {
 function checkNonEvm(ctx: Ctx, execution: ExecutionDTO, intent: SwapIntent) {
   const solana = ctx.chainId === SOLANA_CHAIN_ID;
   if (execution.executionType === "TRANSACTION") {
+    // Layerswap from Bitcoin: its PSBT, signed here and sent by RAVN (submit), never broadcast as is.
+    if (!solana && execution.transaction.psbt) {
+      if (!execution.submit || execution.transaction.serialized) fail("A Bitcoin transaction came back without RAVN sending it");
+      if (execution.approval || execution.fee || execution.calls?.length) fail("EVM transactions or a separate fee came back for a Bitcoin transaction");
+      sameChain(ctx, execution.transaction.chainId, "The Bitcoin transaction");
+      checkLayerswapBitcoinPsbt(execution.transaction.psbt, {
+        amount: ctx.amount,
+        feeAmount: ctx.feeCap,
+        userAddress: intent.userAddress,
+        feeWallet: RAVN_FEE_WALLETS.bitcoin,
+        // A newer Layerswap wallet you checked yourself (allowContracts[-1]).
+        layerswap: [...ctx.known],
+      });
+      return;
+    }
     if (!solana || !execution.transaction.serialized) fail("Only a Solana transaction can come back for this chain");
+    if (execution.transaction.psbt) fail("A Bitcoin PSBT came back for a Solana swap");
     if (execution.approval || execution.fee?.transaction || execution.calls?.length) fail("EVM transactions came back for a Solana swap");
     const feeAmount = execution.fee ? checkFeeTerms(ctx, execution.fee, RAVN_FEE_WALLETS.solana) : ctx.feeCap;
     checkSolanaTransaction(execution.transaction.serialized, { ...intent, feeCap: feeAmount });

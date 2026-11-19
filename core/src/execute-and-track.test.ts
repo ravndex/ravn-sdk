@@ -540,6 +540,43 @@ describe("executeAndTrack: TRANSACTION with submit", () => {
   });
 });
 
+describe("executeAndTrack: Layerswap's Bitcoin PSBT, posted back through RAVN", () => {
+  const execution = {
+    executionType: "TRANSACTION", quoteToken: "qt-exec", statusRef: "ls-swap-id",
+    transaction: { chainId: -1, psbt: "cHNidP8BAA==" },
+    submit: { url: "/api/v1/submit-transaction" },
+  };
+
+  it("signs the PSBT only, never broadcasts it, posts it back and polls the swap", async () => {
+    const fetchImpl = scriptedFetch({
+      execute: [execution],
+      "submit-transaction": [{ txHash: "ab".repeat(32) }],
+      status: [{ status: "success", venue: "layerswap" }],
+    });
+    const client = new RavnClient({ guard: false, fetch: fetchImpl });
+    const submitSpy = vi.spyOn(client, "submitTransaction");
+    const handlers = {
+      sendTransaction: vi.fn(async () => "never"),
+      waitForReceipt: vi.fn(async (hash: string) => receipt(hash)),
+      sendBitcoinPsbt: vi.fn(async () => "never"),
+      signSolanaTransaction: vi.fn(async () => "never"),
+      signBitcoinPsbt: vi.fn(async (psbt: string) => `signed:${psbt}`),
+    };
+    const result = await executeAndTrack(client, baseParams, handlers, { pollIntervalMs: 0 });
+    expect(handlers.signBitcoinPsbt).toHaveBeenCalledWith("cHNidP8BAA==");
+    expect([handlers.sendTransaction, handlers.sendBitcoinPsbt, handlers.signSolanaTransaction].every((h) => h.mock.calls.length === 0)).toBe(true);
+    expect(submitSpy).toHaveBeenCalledWith({ quoteToken: "qt-exec", signedTransaction: "signed:cHNidP8BAA==" });
+    expect(result).toMatchObject({ txHash: "ab".repeat(32), statusRef: "ls-swap-id", finalStatus: { status: "success" } });
+  });
+
+  it("refuses rather than broadcasting when it has no Bitcoin signer, even with one that sends", async () => {
+    const client = new RavnClient({ guard: false, fetch: scriptedFetch({ execute: [execution] }) });
+    const handlers = { sendTransaction: vi.fn(async () => "never"), waitForReceipt: vi.fn(async (hash: string) => receipt(hash)), sendBitcoinPsbt: vi.fn(async () => "never") };
+    await expect(executeAndTrack(client, baseParams, handlers)).rejects.toThrow(/signBitcoinPsbt/);
+    expect(handlers.sendBitcoinPsbt).not.toHaveBeenCalled();
+  });
+});
+
 // RAVN's fee beside a route that has none of its own (Eco, Layerswap, Mayan plain MCTP): sent, and
 // its hash reported, or no fee is owed to the integrator.
 describe("executeAndTrack: TRANSACTION with fee", () => {
