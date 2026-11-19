@@ -79,7 +79,8 @@ export interface ExecuteAndTrackHandlers {
   signSolanaTransaction?(serialized: string): Promise<string>;
   /**
    * Sign (don't broadcast) a Bitcoin TRANSACTION's PSBT (`transaction.psbt`, base64: Layerswap from
-   * Bitcoin, broadcastViaRavn quotes) with the paying wallet, every input, and return it signed: the
+   * Bitcoin, on quotes with broadcastViaRavn and signBitcoinPsbt: true) with the paying wallet, every
+   * input, and return it signed: the
    * PSBT (base64, finalized or not) or the signed transaction (hex). RAVN sends it only if it is
    * exactly the transaction it built. Its inputs are all `userAddress`'s (psbtInputsOf lists them for
    * a wallet that asks which to sign).

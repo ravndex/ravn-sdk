@@ -145,6 +145,11 @@ export interface GetQuoteParams {
    * transaction first: a TRANSACTION execution carrying `submit` must go through
    * submitTransaction. executeAndTrack does this when given signSolanaTransaction. */
   broadcastViaRavn?: boolean;
+  /** Set, with broadcastViaRavn, when your app signs a Bitcoin PSBT RAVN builds (executeAndTrack's
+   * signBitcoinPsbt handler, or your own signer posting it back through submitTransaction). From a
+   * bc1q wallet it adds routes paid in one transaction RAVN builds (Layerswap from Bitcoin). Leave it
+   * unset if you don't sign PSBTs: those routes would otherwise win and fail at execute. */
+  signBitcoinPsbt?: boolean;
   /** End the swap with a call into a contract on the output chain (a vault, perps or privacy-pool
    * deposit) instead of paying outputToken to destinationAddress. Only a contract and function RAVN
    * has registered on your key; Relay and Across only. See ContractCall and the API's `call`. */
