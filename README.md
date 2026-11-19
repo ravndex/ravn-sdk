@@ -77,13 +77,31 @@ version, for quick manual testing only; don't embed that one in production.
   enforced entirely at the application layer (the `?origin=` parameter plus the bridge's
   origin+source checks on every message), not by browser framing headers.
 
+### Theme, and following your page's light/dark mode
+
+Pass `config` when you create the bridge, and call `updateConfig` when your page's theme changes:
+
+```ts
+const bridge = createRavnWidgetBridge({ iframe, widgetOrigin, getWallet, config: { apiKey, appearance: "dark" } });
+
+// later, from your own light/dark toggle
+bridge.updateConfig({ appearance: "light" });
+```
+
+`updateConfig` merges into the config you already gave (a `light` or `dark` colour object is replaced
+whole), and the running widget re-applies its theme without reloading. Only the theme changes live:
+`apiKey` and the starting pair (`sellChain`, `sellToken`, `buyChain`, `buyToken`, `amount`) are read
+once, when the widget starts. A reloaded iframe starts with the merged config. A field set to
+`undefined` is cleared, except `apiKey`, which an update can replace but never clear. A widget that
+doesn't know this message ignores it. `RavnWidgetConfig` lists every field the widget reads.
+
 ## Examples
 
 Runnable, verified-working code for each package in [`examples/`](./examples): a Node script, a Python script, a React hooks snippet, and a plain-HTML widget embed.
 
 ## Playground
 
-[ravndex.github.io/ravn-sdk](https://ravndex.github.io/ravn-sdk/) is a live version of the widget embed: connect a wallet, watch it bridge into the real widget iframe, copy the working code. It's not a config-knob playground (there's no theme/mode/variant to toggle yet; see `src/app/widget/v1/page.tsx` in the private app for what would need to change first); what's here is real and verified working, not a mockup.
+[ravndex.github.io/ravn-sdk](https://ravndex.github.io/ravn-sdk/) is a live version of the widget embed: connect a wallet, watch it bridge into the real widget iframe, copy the working code. It's not a config-knob playground (it embeds the widget unthemed); what's here is real and verified working, not a mockup.
 
 ## API reference
 

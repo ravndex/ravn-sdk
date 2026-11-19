@@ -3,8 +3,10 @@ import {
   isTrustedBridgeMessage,
   makeEnvelope,
   warnOnVersionMismatch,
+  BridgeConfigPayload,
   BridgeEnvelope,
   BridgeInitPayload,
+  RavnWidgetConfig,
   SolanaWalletPushType,
   SolanaWalletState,
   WalletPushType,
@@ -23,8 +25,8 @@ export interface CreateRavnWidgetBridgeOptions {
   getWallet: () => RavnWallet | null;
   /** Called on every solana:* request. Independent of getWallet: return null while no Solana wallet is connected. */
   getSolanaWallet?: () => RavnSolanaWallet | null;
-  /** Non-wallet config sent once at handshake: theme, allowed tokens, integrator API key, etc. */
-  config?: Record<string, unknown>;
+  /** Non-wallet config sent at handshake: theme, starting pair, integrator API key. Change it later with updateConfig. */
+  config?: RavnWidgetConfig;
 }
 
 export interface RavnWidgetBridge {
@@ -32,6 +34,15 @@ export interface RavnWidgetBridge {
   updateWallet(wallet: Pick<WalletState, "address" | "chainId"> | null): void;
   /** Call whenever the host's own Solana wallet state changes. Independent of updateWallet. */
   updateSolanaWallet(wallet: Pick<SolanaWalletState, "address"> | null): void;
+  /**
+   * Merges `config` into the current config (shallowly: a `light` or `dark` object replaces the
+   * old one whole) and sends the result to the running widget, which re-applies its theme. Only
+   * the theme changes live; apiKey and the starting pair are read once, at handshake. A reloaded
+   * iframe's handshake gets the merged config. A field set to undefined is cleared, except apiKey:
+   * an update can replace it but never clear it. Throws, keeping the old config, on a value
+   * postMessage can't send, such as a function.
+   */
+  updateConfig(config: RavnWidgetConfig): void;
   /** Removes the message listener. Call on unmount. */
   destroy(): void;
 }
@@ -44,7 +55,10 @@ export interface RavnWidgetBridge {
  * responds to its initial "bridge:ready" handshake.
  */
 export function createRavnWidgetBridge(options: CreateRavnWidgetBridgeOptions): RavnWidgetBridge {
-  const { iframe, widgetOrigin, getWallet, getSolanaWallet, config } = options;
+  const { iframe, widgetOrigin, getWallet, getSolanaWallet } = options;
+  // Merged, not replaced, by updateConfig: a theme-only update must not drop the apiKey a reloaded
+  // iframe's handshake needs, or its swaps would go unattributed and unpaid.
+  let config = options.config;
   let lastWallet: WalletState | null = null;
   let lastSolanaWallet: SolanaWalletState | null = null;
   // Guards against the same action envelope being dispatched twice while the first dispatch is
@@ -135,6 +149,17 @@ export function createRavnWidgetBridge(options: CreateRavnWidgetBridgeOptions): 
           : "solana:accountChanged";
 
       post(pushType, lastSolanaWallet, generateId());
+    },
+    updateConfig(next) {
+      const merged: RavnWidgetConfig = { ...config, ...next };
+      // A host passing { apiKey: props.apiKey, ... } before its key loads must not drop it.
+      if (typeof merged.apiKey !== "string" || !merged.apiKey.trim()) merged.apiKey = config?.apiKey;
+      // Checked, then posted, then stored: a value postMessage can't clone (a function) throws to
+      // the caller here, and stored it would break every later handshake, apiKey included.
+      if (typeof structuredClone === "function") structuredClone(merged);
+      const payload: BridgeConfigPayload = { config: merged };
+      post("bridge:config", payload, generateId());
+      config = merged;
     },
     destroy() {
       window.removeEventListener("message", onMessage);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRavnWidgetBridge, RavnWallet } from "./bridge";
-import { makeEnvelope } from "./protocol";
+import { BridgeConfigPayload, BridgeEnvelope, BridgeInitPayload, isBridgeEnvelope, makeEnvelope } from "./protocol";
 
 const WIDGET_ORIGIN = "https://widget.ravn.exchange";
 
@@ -18,7 +18,10 @@ function fakeIframe() {
   });
 
   const iframe = {
-    contentWindow: { postMessage: (message: unknown, targetOrigin: string) => posted.push({ message, targetOrigin }) },
+    // Clones like the real postMessage, which throws DataCloneError on a function.
+    contentWindow: {
+      postMessage: (message: unknown, targetOrigin: string) => posted.push({ message: structuredClone(message), targetOrigin }),
+    },
   } as unknown as HTMLIFrameElement;
 
   return {
@@ -112,5 +115,77 @@ describe("createRavnWidgetBridge", () => {
     resolveSend({ txHash: "0xhash" });
     await Promise.all([first, second]);
     expect(posted).toHaveLength(1);
+  });
+
+  it("updateConfig() posts a bridge:config envelope to the widget's origin", () => {
+    const { iframe, posted } = fakeIframe();
+    const bridge = createRavnWidgetBridge({ iframe, widgetOrigin: WIDGET_ORIGIN, getWallet: () => null });
+
+    bridge.updateConfig({ appearance: "light", primaryColor: "#D46F06" });
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0].targetOrigin).toBe(WIDGET_ORIGIN);
+    const message = posted[0].message as BridgeEnvelope<BridgeConfigPayload>;
+    expect(isBridgeEnvelope(message)).toBe(true);
+    expect(message.type).toBe("bridge:config");
+    expect(message.payload).toEqual({ config: { appearance: "light", primaryColor: "#D46F06" } });
+  });
+
+  it("a later bridge:ready gets the updated config, keeping the apiKey and pair a theme update left out", () => {
+    const { iframe, posted, simulate } = fakeIframe();
+    // A plain Record<string, unknown> still fits both config slots (npm run typecheck covers this file).
+    const initial: Record<string, unknown> = { apiKey: "key", sellChain: "ethereum", light: { background: "#FFFFFF" } };
+    const bridge = createRavnWidgetBridge({ iframe, widgetOrigin: WIDGET_ORIGIN, getWallet: () => null, config: initial });
+
+    bridge.updateConfig({ appearance: "light", light: { primaryColor: "#000000" } });
+    simulate(makeEnvelope("bridge:ready", {}, "r1"));
+
+    const merged = { apiKey: "key", sellChain: "ethereum", appearance: "light", light: { primaryColor: "#000000" } };
+    expect((posted[0].message as BridgeEnvelope<BridgeConfigPayload>).payload.config).toEqual(merged);
+    const init = posted[1].message as BridgeEnvelope<BridgeInitPayload>;
+    expect(init.type).toBe("bridge:init");
+    expect(init.id).toBe("r1");
+    expect(init.payload.config).toEqual(merged);
+    expect(initial).toEqual({ apiKey: "key", sellChain: "ethereum", light: { background: "#FFFFFF" } }); // not mutated
+
+    // Type-level only, never called: known fields are still checked.
+    void (() => {
+      bridge.updateConfig(initial);
+      // @ts-expect-error appearance is "dark" | "light" | "auto"
+      bridge.updateConfig({ appearance: "dim" });
+    });
+  });
+
+  it("an update can replace apiKey but never clear it", () => {
+    const { iframe, posted } = fakeIframe();
+    const bridge = createRavnWidgetBridge({ iframe, widgetOrigin: WIDGET_ORIGIN, getWallet: () => null, config: { apiKey: "key" } });
+
+    bridge.updateConfig({ apiKey: undefined }); // a host prop that hasn't loaded yet
+    bridge.updateConfig({ apiKey: " " });
+    bridge.updateConfig({ apiKey: "key2" });
+    bridge.updateConfig({ apiKey: undefined });
+
+    const keys = posted.map((p) => (p.message as BridgeEnvelope<BridgeConfigPayload>).payload.config.apiKey);
+    expect(keys).toEqual(["key", "key", "key2", "key2"]);
+  });
+
+  it("a value postMessage can't send throws and leaves the config as it was, even before the iframe loads", () => {
+    const { iframe, posted, simulate } = fakeIframe();
+    const bridge = createRavnWidgetBridge({ iframe, widgetOrigin: WIDGET_ORIGIN, getWallet: () => null, config: { apiKey: "key" } });
+    const frame = iframe as unknown as { contentWindow: unknown };
+    const contentWindow = frame.contentWindow;
+
+    frame.contentWindow = null; // not loaded yet: nothing is posted, so only the check can catch it
+    expect(() => bridge.updateConfig({ onChange: () => {} })).toThrow();
+    frame.contentWindow = contentWindow;
+
+    bridge.updateConfig({ appearance: "light" });
+    simulate(makeEnvelope("bridge:ready", {}, "r1"));
+
+    const configs = posted.map((p) => (p.message as BridgeEnvelope<BridgeConfigPayload | BridgeInitPayload>).payload.config);
+    expect(configs).toEqual([
+      { apiKey: "key", appearance: "light" },
+      { apiKey: "key", appearance: "light" },
+    ]);
   });
 });

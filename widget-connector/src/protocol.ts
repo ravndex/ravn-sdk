@@ -79,6 +79,60 @@ export interface BridgeInitPayload {
   config?: Record<string, unknown>;
 }
 
+// ---- Config -----------------------------------------------------------------
+
+/** Colours the widget reads, as CSS colours such as "#F7931A". */
+export interface RavnWidgetColors {
+  /** The Swap button and highlights. */
+  primaryColor?: string;
+  /** The secondary accent: tab underline, the winning route's badge. */
+  secondaryColor?: string;
+  /** The page behind the card. */
+  background?: string;
+  /** The card; inputs and menus get a recessed shade of it. */
+  cardBackground?: string;
+  textPrimary?: string;
+  textSecondary?: string;
+  success?: string;
+  error?: string;
+}
+
+/**
+ * The config the widget reads, sent in bridge:init and bridge:config. Every field is optional,
+ * and the widget ignores keys it doesn't know, so any `Record<string, unknown>` still fits.
+ */
+export interface RavnWidgetConfig extends RavnWidgetColors {
+  /** "auto" follows the visitor's device setting. The widget's default is "dark". */
+  appearance?: "dark" | "light" | "auto";
+  /** Colours used only in light mode, over the flat colour fields. */
+  light?: RavnWidgetColors;
+  /** Colours used only in dark mode, over the flat colour fields. */
+  dark?: RavnWidgetColors;
+  /** In px: cards, inputs and chips. */
+  borderRadius?: number;
+  /** In px: the Swap button; 999 makes it a pill. */
+  buttonRadius?: number;
+  fontFamily?: string;
+  /** The starting sell chain, as a chain name such as "ethereum". Read once, at bridge:init. */
+  sellChain?: string;
+  /** The starting sell token, as a symbol or address. Read once, at bridge:init. */
+  sellToken?: string;
+  /** The starting buy chain. Read once, at bridge:init. */
+  buyChain?: string;
+  /** The starting buy token, as a symbol or address. Read once, at bridge:init. */
+  buyToken?: string;
+  /** The starting sell amount, in whole tokens. Read once, at bridge:init. */
+  amount?: string | number;
+  /** Your public integrator key, never a secret (rvn_sk_) one. Read once, at bridge:init. */
+  apiKey?: string;
+  [key: string]: unknown;
+}
+
+/** Parent -> widget, fire-and-forget: the widget re-applies its theme from `config`. */
+export interface BridgeConfigPayload {
+  config: RavnWidgetConfig;
+}
+
 // ---- Parent -> widget state pushes (fire-and-forget) -------------------------
 
 export interface WalletState {
