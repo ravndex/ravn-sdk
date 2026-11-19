@@ -101,7 +101,7 @@ Runnable, verified-working code for each package in [`examples/`](./examples): a
 
 ## Playground
 
-[ravndex.github.io/ravn-sdk](https://ravndex.github.io/ravn-sdk/) is a live version of the widget embed: connect a wallet, watch it bridge into the real widget iframe, copy the working code. It's not a config-knob playground (it embeds the widget unthemed); what's here is real and verified working, not a mockup.
+[ravndex.github.io/ravn-sdk](https://ravndex.github.io/ravn-sdk/) is a live version of the widget embed: connect a wallet, watch it bridge into the real widget iframe, copy the working code. It shows the bridge with the widget unthemed; try themes in RAVN's [widget playground](https://app.ravn.exchange/widget/playground). What's here is real and verified working, not a mockup.
 
 ## API reference
 
