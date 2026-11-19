@@ -50,6 +50,12 @@ const ALL = [ETHEREUM, OPTIMISM, BNB, UNICHAIN, POLYGON, MONAD, ZKSYNC, WORLD_CH
 const NOT_ZKSYNC = ALL.filter((c) => c !== ZKSYNC);
 // Outside ALL: most family entries' venues don't serve it, so each that does names it on purpose.
 const ELYSIUM = 99901;
+// Kraken's Ink (OP Stack), outside ALL too. Added 2026-11-19, each with code there: 0x's AllowanceHolder,
+// Relay's five, Layerswap's depository and Nordstern's guard byte-identical to Base's (Relay's depository and
+// v3.2 proxy but for the chain id and its signing domain, each owned as on Base); Across's SpokePool from
+// its /api/chains, its periphery as on Base but for the chain id; OKX's pair from its /swap and
+// /supported/chain, the approval contract byte-identical to OKX's on HyperEVM, both owned as on Base.
+const INK = 57073;
 
 const PERMIT2_CANONICAL = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const COW_CHAINS = [ETHEREUM, ARBITRUM, BASE, POLYGON, LINEA, AVALANCHE, BNB];
@@ -169,7 +175,7 @@ export const TARGET_ONLY: ReadonlySet<string> = new Set([
 // chains, but TARGET_ONLY's as targets only. Permit2 and CoW's vault relayer are spenders only
 // (signatureGatedSpenders): a transaction to Permit2 could grant an allowance to anyone.
 const ENTRIES: [readonly number[], readonly string[], string][] = [
-  [[...NOT_ZKSYNC, ELYSIUM], ["0x0000000000001fF3684f28c67538d4D072C22734"], "0x AllowanceHolder"],
+  [[...NOT_ZKSYNC, ELYSIUM, INK], ["0x0000000000001fF3684f28c67538d4D072C22734"], "0x AllowanceHolder"],
   [[ROBINHOOD, ETHEREUM, ARBITRUM, BASE, OPTIMISM, POLYGON, BNB, AVALANCHE, LINEA, UNICHAIN, HYPEREVM, MONAD, ARC, ELYSIUM], ["0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"], "KyberSwap"],
   [[ETHEREUM, POLYGON, ARBITRUM, BASE, BNB, OPTIMISM, ROBINHOOD], ["0xBeb0009ACa35087ce7cCF11637E24dd1Aad3bf2A", "0xbbbbbBB520d69a9775E85b458C58c648259FAD5F"], "Bebop"],
   // Relay: depository, then v3's approval proxy and router, then v3.2's (Relay's /chains, the ones
@@ -179,7 +185,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   // Elysium's too (2026-11-09, before Relay's API listed it): routers byte-identical to Base's, the
   // depository owned and allocated as on Base, HyperEVM and Arbitrum, the v3.2 proxy owned as there.
   [
-    [...ALL.filter((c) => c !== LINEA), ELYSIUM],
+    [...ALL.filter((c) => c !== LINEA), ELYSIUM, INK],
     [
       "0x4cd00e387622c35bddb9b4c962c136462338bc31",
       "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be",
@@ -200,14 +206,14 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
     ],
     "Relay (Linea)",
   ],
-  [NOT_ZKSYNC.filter((c) => c !== ARC), ["0x97CCDBea4632140639aD5eA9b944aa034eb15fD4"], "Across periphery"],
+  [[...NOT_ZKSYNC.filter((c) => c !== ARC), INK], ["0x97CCDBea4632140639aD5eA9b944aa034eb15fD4"], "Across periphery"],
   // Arc's is its own deployment: no code at 0x97CC… there; Across's Arc swap routes go through this one.
   [[ARC], ["0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c"], "Across periphery (Arc)"],
   [[ZKSYNC], ["0x7c99ced6d8011af8a52488884f7ba2c61b0fa57d"], "Across periphery (zkSync)"],
   // Not on Arc: no code there and Mayan doesn't serve it (a plain CREATE address its deployer could still fill).
   [NOT_ZKSYNC.filter((c) => c !== ARC), ["0x337685fdaB40D39bd02028545a4FfA7D287cC3E2"], "Mayan forwarder"],
   [NOT_ZKSYNC, ["0xEC000769a73b70e16f361a442292500b3BCf4A85"], "Eco portal"],
-  [ALL, ["0xe226e4825cb215abafad98fdd400583eab6a594f"], "Layerswap depository"],
+  [[...ALL, INK], ["0xe226e4825cb215abafad98fdd400583eab6a594f"], "Layerswap depository"],
   [[...NOT_ZKSYNC, ELYSIUM], ["0x20f6ee51340adeed01a59b0e65cb3703f3dc860c"], "Fly Trade"],
   [[ZKSYNC], ["0xc5b20203b6807e742853c96ce7dcfb1e7b201c0a"], "Fly Trade (zkSync)"],
   [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
@@ -236,6 +242,7 @@ const ACROSS_SPOKE_POOL: Record<number, string> = {
   [ARBITRUM]: "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A",
   [AVALANCHE]: "0xFE9D541c92E4e90437C7152A00244886dE37a658",
   [LINEA]: "0x7E63A5f1a8F0B4d0934B2f2327DAED3F6bb2ee75",
+  [INK]: "0xeF684C38F94F48775959ECf2012D7E864ffb9dd4",
 };
 
 // Nordstern's guard contract, per chain (as RAVN's adapter pins it).
@@ -254,6 +261,7 @@ const NORDSTERN: Record<number, string> = {
   [HYPEREVM]: "0x2fF506ed9729580EF8Bf04429614beB1baE5F76D",
   [MONAD]: "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d",
   [ELYSIUM]: "0x6af335771d1DdF7dD1501eCC89e978455Fe5c6Dd",
+  [INK]: "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d",
 };
 
 // OKX's DEX router (tx.to) and token-approval contract, per chain (OKX's /swap, 2026-10-21).
@@ -273,6 +281,7 @@ const OKX: Record<number, [string, string]> = {
   [AVALANCHE]: ["0xab96dcfa7a7d669d9bf5918fab8641479973dd0a", "0x40aA958dd87FC8305b97f2BA922CDdCa374bcD7f"],
   [LINEA]: ["0xdfcb0cecc10e78f3f3749f3f3d3ee4047b2c9829", "0x57df6092665eb6058DE53939612413ff4B09114E"],
   [ELYSIUM]: ["0x91Ab9c4B07f479D48b60AEFE8F7E31B3760C88c1", "0xA32f4EC37de04ACcBB6303bC6f8C7056ed1cfefA"],
+  [INK]: ["0x8f98a825ac89501afe33299ddb561829a24c0cc4", "0xd72f9Af181A0eB1B8550a00124ECdb71Bb758C89"],
 };
 
 // THORChain's router, per chain (inbound_addresses). The vault it pays is in the calldata.
@@ -302,7 +311,7 @@ export function separateSpender(chainId: number, router: string): string | undef
 }
 
 function build(): Record<number, readonly string[]> {
-  const out: Record<number, Set<string>> = Object.fromEntries([...ALL, ELYSIUM].map((c) => [c, new Set<string>()]));
+  const out: Record<number, Set<string>> = Object.fromEntries([...ALL, ELYSIUM, INK].map((c) => [c, new Set<string>()]));
   const add = (c: number, ...addresses: string[]) => addresses.forEach((a) => out[c]?.add(a.toLowerCase()));
   for (const [chains, addresses] of ENTRIES) for (const c of chains) add(c, ...addresses);
   for (const [c, a] of Object.entries(ACROSS_SPOKE_POOL)) add(Number(c), a);

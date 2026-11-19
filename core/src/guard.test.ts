@@ -242,6 +242,54 @@ describe("checkExecution: EVM transactions", () => {
     refuses(elsewhere.execution, elsewhere.intent, /isn't a payment to RAVN's fee wallet/);
   });
 
+  // Each with code on Ink (2026-11-19): see guard-contracts' INK. No whole-family entry reaches it by default.
+  it("accepts exactly the venue contracts RAVN routes through on Ink", () => {
+    expect([...KNOWN_CONTRACTS[57073]].sort()).toEqual(
+      [
+        "0x0000000000001fF3684f28c67538d4D072C22734", // 0x AllowanceHolder
+        "0x4cd00e387622c35bddb9b4c962c136462338bc31", // Relay depository
+        "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", // Relay approval proxy (v3)
+        "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", // Relay router (v3), a target only
+        "0x5567954cd026cebfe486062cb75848e0f1c12e58", // Relay approval proxy (v3.2)
+        "0x0729e2a4716d9f7dd17858d5d504426d228697f7", // Relay router (v3.2), a target only
+        "0xeF684C38F94F48775959ECf2012D7E864ffb9dd4", // Across SpokePool
+        "0x97CCDBea4632140639aD5eA9b944aa034eb15fD4", // Across periphery
+        "0xe226e4825cb215abafad98fdd400583eab6a594f", // Layerswap depository
+        "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d", // Nordstern's guard
+        "0x8f98a825ac89501afe33299ddb561829a24c0cc4", // OKX router
+        "0xd72f9Af181A0eB1B8550a00124ECdb71Bb758C89", // OKX approvals
+      ].map((a) => a.toLowerCase()).sort()
+    );
+    expect(separateSpender(57073, "0x8f98a825ac89501afe33299ddb561829a24c0cc4")).toBe("0xd72f9af181a0eb1b8550a00124ecdb71bb758c89");
+    // Not inherited: KyberSwap and Mayan don't serve Ink.
+    expect(KNOWN_CONTRACTS[57073]).not.toContain("0x6131b5fae19ea4f9d964eac0408e4408b66337b5");
+    expect(KNOWN_CONTRACTS[57073]).not.toContain("0x337685fdab40d39bd02028545a4ffa7d287cc3e2");
+  });
+
+  it("passes Base's 0x, Relay and Nordstern swaps moved to Ink, where the same contracts run", () => {
+    for (const name of ["8453 token->native 0x_swap", "8453 native->token relay", "8453 token->native nordstern"]) {
+      const { execution, intent } = JSON.parse(JSON.stringify(fixture(name)).replaceAll('hainId":8453', 'hainId":57073')) as ReturnType<typeof fixture>;
+      expect(() => checkExecution(execution, intent), name).not.toThrow();
+    }
+    // KyberSwap's router has no place on Ink.
+    const kyber = JSON.parse(JSON.stringify(fixture("8453 native->token kyberswap")).replaceAll('hainId":8453', 'hainId":57073')) as ReturnType<typeof fixture>;
+    expect(() => checkExecution(kyber.execution, kyber.intent)).toThrow(UnsafeExecutionError);
+  });
+
+  it("passes an OKX swap on Ink through its own pair, and refuses Arc's pair there", () => {
+    const onInk = (router: string, approvals: string) =>
+      JSON.parse(
+        JSON.stringify(fixture("5042 token->token okx"))
+          .replaceAll('hainId":5042', 'hainId":57073')
+          .replace(/(0x)?4e3bcce28caf98a143fd8bd9e4875ccab3e7bbe0/gi, (_m, p) => (p ? router : router.slice(2).toLowerCase()))
+          .replace(/(0x)?2b9899bc46bf0ee094225995f4bd496d42f261af/gi, (_m, p) => (p ? approvals : approvals.slice(2).toLowerCase()))
+      ) as ReturnType<typeof fixture>;
+    const ok = onInk("0x8f98a825ac89501afe33299ddb561829a24c0cc4", "0xd72f9Af181A0eB1B8550a00124ECdb71Bb758C89");
+    expect(() => checkExecution(ok.execution, ok.intent)).not.toThrow();
+    const arcPair = onInk("0x4E3bcCE28cAf98A143Fd8BD9e4875ccAb3E7bBE0", "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af");
+    expect(() => checkExecution(arcPair.execution, arcPair.intent)).toThrow(UnsafeExecutionError);
+  });
+
   // Every address the check accepts on Arc, each with code there and named by the venue's own API or a
   // real Arc build (2026-10-21). A new chain inherits whole-family entries, so this pins Arc's exactly.
   it("accepts exactly Arc's verified venue contracts there", () => {

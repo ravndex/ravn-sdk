@@ -3,6 +3,22 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.30
+
+Ink (Kraken's chain, id 57073). 0.3.0–0.4.29 refuse Ink executions with "This SDK version doesn't know
+chain 57073"; this release knows the venue contracts RAVN routes through there.
+
+### Added
+
+- Ink in the check (`checkExecution`): 0x AllowanceHolder, Relay's depository, approval proxies and
+  routers (the routers as transaction targets only, as everywhere), Across's SpokePool and periphery,
+  Layerswap's depository, Nordstern's guard, and OKX's router and approval contract, each with code on
+  Ink. Nothing else is accepted there, including contracts other venues use on every other chain.
+
+### Upgrading
+
+- Nothing to change. Update before you offer Ink to your users.
+
 ## @ravnexchange/widget-connector 0.1.5
 
 The widget can follow your page's light/dark toggle without reloading.
