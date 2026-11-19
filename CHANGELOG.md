@@ -11,6 +11,11 @@ to npm (see `.github/workflows/publish-sdk.yml`).
   RAVN builds (executeAndTrack's `signBitcoinPsbt` handler). RAVN offers Layerswap from Bitcoin only on
   quotes that set it, so an app on 0.4.31+ that never wired the handler isn't handed a route it can't sign.
 
+### Upgrading
+
+- Already passing `signBitcoinPsbt` to executeAndTrack (0.4.31)? Also set `signBitcoinPsbt: true` on getQuote,
+  or RAVN stops offering you Layerswap from Bitcoin. Otherwise nothing to change.
+
 ## @ravnexchange/sdk 0.4.31
 
 Layerswap from Bitcoin: RAVN builds the payment as a PSBT carrying Layerswap's memo, your user's wallet

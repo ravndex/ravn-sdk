@@ -1513,7 +1513,7 @@
                     "type": "boolean"
                   },
                   "signBitcoinPsbt": {
-                    "description": "Set, with broadcastViaRavn, if your app signs a Bitcoin PSBT that RAVN builds and posts it back instead of paying an address: from a bc1q wallet, routes that need the payment and its memo in one transaction RAVN builds may then win. /v1/execute returns them as a TRANSACTION with `transaction.psbt` and `submit`: sign every input and POST { quoteToken, signedTransaction } to `submit.url` within 30 minutes. Needs @ravnexchange/sdk 0.4.31+ (its executeAndTrack handler of the same name), which checks the PSBT before your user signs.",
+                    "description": "Set, with broadcastViaRavn, if your app signs a Bitcoin PSBT that RAVN builds and posts it back instead of paying an address: from a bc1q wallet, routes that need the payment and its memo in one transaction RAVN builds may then win. /v1/execute returns them as a TRANSACTION with `transaction.psbt` and `submit`: sign every input and POST { quoteToken, signedTransaction } to `submit.url` within 30 minutes. Needs @ravnexchange/sdk 0.4.31+ (its executeAndTrack handler of the same name; typed on getQuote from 0.4.32), which checks the PSBT before your user signs.",
                     "type": "boolean"
                   },
                   "call": {
