@@ -3,6 +3,20 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.33
+
+### Added
+
+- `@ravnexchange/sdk/bitcoin`: `satsConnectHandlers` and `unisatHandlers` now also return `signBitcoinPsbt`
+  for Layerswap from Bitcoin. It signs every input of the PSBT and never broadcasts; RAVN sends it. sats-connect
+  returns its signed PSBT as is, and Unisat's signed PSBT is converted from hex to base64.
+
+### Upgrading
+
+- Using these helpers? Spread them into executeAndTrack's handlers and set `signBitcoinPsbt: true` (with
+  `broadcastViaRavn: true`) on getQuote; there's no handler to write. Already wrote your own `signBitcoinPsbt`?
+  Put it after the spread so yours still wins, or drop it.
+
 ## @ravnexchange/sdk 0.4.32
 
 ### Added
