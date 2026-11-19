@@ -3,6 +3,14 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.32
+
+### Added
+
+- `GetQuoteParams.signBitcoinPsbt`: set it, with `broadcastViaRavn`, when your app signs the Bitcoin PSBTs
+  RAVN builds (executeAndTrack's `signBitcoinPsbt` handler). RAVN offers Layerswap from Bitcoin only on
+  quotes that set it, so an app on 0.4.31+ that never wired the handler isn't handed a route it can't sign.
+
 ## @ravnexchange/sdk 0.4.31
 
 Layerswap from Bitcoin: RAVN builds the payment as a PSBT carrying Layerswap's memo, your user's wallet
