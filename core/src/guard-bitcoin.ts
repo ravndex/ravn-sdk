@@ -18,9 +18,7 @@ export function checkBitcoinPsbt(
 
   let deposited = 0n;
   let feePaid = 0n;
-  let out = 0n;
   for (const o of outputs) {
-    out += o.value;
     if (o.script === depositScript) deposited += o.value;
     else if (o.script === feeScript) feePaid += o.value;
     else if (o.script !== userScript) fail("The Bitcoin transaction pays an address that is neither the deposit, RAVN's fee nor the sender");
@@ -28,6 +26,67 @@ export function checkBitcoinPsbt(
   if (deposited !== BigInt(ctx.deposit.amount)) fail("The Bitcoin transaction doesn't pay the deposit exactly its amount", { paid: deposited.toString() });
   if (feePaid > ctx.feeAmount) fail("The Bitcoin transaction pays RAVN more than the fee", { paid: feePaid.toString() });
 
+  checkSpends(inputs, outputs, userScript);
+}
+
+/**
+ * The wallet every Layerswap swap from Bitcoin pays, matched only by the OP_RETURN memo in the same
+ * transaction (a payment without it isn't refunded automatically). Pinned: a PSBT paying any other is
+ * refused, until a `allowContracts[-1]` entry you checked adds it.
+ */
+export const LAYERSWAP_BITCOIN = "bc1plxa9q77gz9r33g8pd4c2ygzezchjffuedtzdrkclyceseyw8v80qasmquf";
+
+/**
+ * Checks Layerswap's Bitcoin payment (a TRANSACTION's `transaction.psbt`, as RAVN builds it): exactly
+ * one output to Layerswap's pinned wallet, exactly one zero-value OP_RETURN carrying a Layerswap memo (a
+ * hex number and `;`), at most `feeAmount` to RAVN's fee wallet, and everything else back to the
+ * sender, from the sender's own coins, signed over every output, at a sane network fee. The payment and
+ * RAVN's fee together are exactly the swap's amount: what the quote said the user pays.
+ */
+export function checkLayerswapBitcoinPsbt(
+  psbtBase64: string,
+  ctx: { amount: bigint; feeAmount: bigint; userAddress: string; feeWallet: string; layerswap?: string[] }
+): void {
+  const { inputs, outputs } = parsePsbt(psbtBase64);
+  const wallets = new Set([LAYERSWAP_BITCOIN, ...(ctx.layerswap ?? [])].map((a) => hex(outputScript(a))));
+  const userScript = hex(outputScript(ctx.userAddress));
+  const feeScript = hex(outputScript(ctx.feeWallet));
+  if (wallets.has(userScript)) fail("The Layerswap wallet is the sender's own");
+  let paid = 0n;
+  let payments = 0;
+  let memos = 0;
+  let feePaid = 0n;
+  for (const o of outputs) {
+    if (wallets.has(o.script)) {
+      paid += o.value;
+      payments++;
+    } else if (o.script.startsWith("6a")) {
+      // OP_RETURN, one push of the memo: <len 2..17> then ASCII hex digits and a ';'.
+      const len = parseInt(o.script.slice(2, 4), 16);
+      const memo = o.script.slice(4);
+      const text = memo.length === len * 2 ? String.fromCharCode(...(memo.match(/../g) ?? []).map((h) => parseInt(h, 16))) : "";
+      if (o.value !== 0n || !/^[0-9a-f]{1,16};$/.test(text)) fail("The Bitcoin transaction carries something other than a Layerswap memo");
+      memos++;
+    } else if (o.script === feeScript) feePaid += o.value;
+    else if (o.script !== userScript) fail("The Bitcoin transaction pays an address that is neither Layerswap, RAVN's fee nor the sender");
+  }
+  if (payments !== 1 || memos !== 1) fail("The Bitcoin transaction isn't one payment to Layerswap with its memo");
+  if (feePaid > ctx.feeAmount) fail("The Bitcoin transaction pays RAVN more than the fee", { paid: feePaid.toString() });
+  if (paid + feePaid !== ctx.amount) fail("The Bitcoin transaction doesn't pay Layerswap and RAVN exactly the swap's amount", { paid: (paid + feePaid).toString() });
+  checkSpends(inputs, outputs, userScript);
+}
+
+/** The inputs `address` signs: every one of them, each checked to spend `address`'s own coins. */
+export function psbtInputsOf(psbtBase64: string, address: string): number[] {
+  const script = hex(outputScript(address));
+  const { inputs } = parsePsbt(psbtBase64);
+  if (!inputs.length || inputs.some((i) => i.script !== script)) fail("The Bitcoin PSBT spends coins that aren't this wallet's");
+  return inputs.map((_, n) => n);
+}
+
+/** Every input is the sender's own coin, and the network fee (inputs less outputs) is sane. */
+function checkSpends(inputs: { value?: bigint; script?: string }[], outputs: Output[], userScript: string): void {
+  const out = outputs.reduce((sum, o) => sum + o.value, 0n);
   let into = 0n;
   for (const i of inputs) {
     if (i.value === undefined || i.script === undefined) fail("A Bitcoin input doesn't say what it spends, so its network fee can't be checked");
@@ -39,14 +98,6 @@ export function checkBitcoinPsbt(
   // The smallest the transaction could be: inputs at taproot's 57.5 vB, outputs at 31 vB.
   const minVbytes = BigInt(Math.ceil(10 + inputs.length * 57.5 + outputs.length * 31));
   if (networkFee > minVbytes * MAX_SATS_PER_VBYTE) fail("The Bitcoin network fee is absurdly high", { networkFee: networkFee.toString() });
-}
-
-/** The inputs `address` signs: every one of them, each checked to spend `address`'s own coins. */
-export function psbtInputsOf(psbtBase64: string, address: string): number[] {
-  const script = hex(outputScript(address));
-  const { inputs } = parsePsbt(psbtBase64);
-  if (!inputs.length || inputs.some((i) => i.script !== script)) fail("The Bitcoin PSBT spends coins that aren't this wallet's");
-  return inputs.map((_, n) => n);
 }
 
 // Far above any rate the network has needed (RAVN builds at mempool.space's half-hour rate).

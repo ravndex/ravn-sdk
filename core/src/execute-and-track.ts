@@ -78,6 +78,14 @@ export interface ExecuteAndTrackHandlers {
    */
   signSolanaTransaction?(serialized: string): Promise<string>;
   /**
+   * Sign (don't broadcast) a Bitcoin TRANSACTION's PSBT (`transaction.psbt`, base64: Layerswap from
+   * Bitcoin, broadcastViaRavn quotes) with the paying wallet, every input, and return it signed: the
+   * PSBT (base64, finalized or not) or the signed transaction (hex). RAVN sends it only if it is
+   * exactly the transaction it built. Its inputs are all `userAddress`'s (psbtInputsOf lists them for
+   * a wallet that asks which to sign).
+   */
+  signBitcoinPsbt?(psbt: string): Promise<string>;
+  /**
    * With `sendDeposit`: sign a Bitcoin DEPOSIT's ready-made PSBT (`deposit.psbt`, base64: the
    * deposit, RAVN's fee as a second output, change back to the sender), finalize and broadcast it,
    * and return its txid. Reject only when nothing was broadcast: a rejection loses its hash, and
@@ -606,15 +614,19 @@ export async function executeAndTrack(
     if (execution.executionType === "TRANSACTION" && execution.submit) {
       // Never broadcast this one ourselves: a payment Layerswap can't match sits at Layerswap, and
       // RAVN's check before sending is what catches it.
-      if (!handlers.signSolanaTransaction) {
-        throw new Error("executeAndTrack: this execution must be submitted through RAVN and requires signSolanaTransaction, none was provided");
+      const psbt = execution.transaction.psbt;
+      if (psbt ? !handlers.signBitcoinPsbt : !handlers.signSolanaTransaction) {
+        throw new Error(
+          `executeAndTrack: this execution must be submitted through RAVN and requires ${psbt ? "signBitcoinPsbt" : "signSolanaTransaction"}, none was provided`
+        );
       }
-      if (!execution.transaction.serialized) {
+      if (!psbt && !execution.transaction.serialized) {
         throw new Error("executeAndTrack: TRANSACTION execution with submit is missing transaction.serialized");
       }
-      const serialized = execution.transaction.serialized;
       checkpoint();
-      const signedTransaction = await handlers.signSolanaTransaction(serialized);
+      const signedTransaction = psbt
+        ? await handlers.signBitcoinPsbt!(psbt)
+        : await handlers.signSolanaTransaction!(execution.transaction.serialized!);
       checkpoint();
       // From here RAVN may have sent it, even on a failed call. A retry with the same signed
       // transaction never sends it twice, so retrying is how to find out; a failure that names

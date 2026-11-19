@@ -76,7 +76,7 @@ function envelopeData<T>(body: Envelope<T>, ok: boolean, status?: number): T {
 const DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1";
 
 /** This package's version, as in its package.json (client.test.ts fails when they differ). */
-export const SDK_VERSION = "0.4.30";
+export const SDK_VERSION = "0.4.31";
 
 export class RavnClient {
   private readonly apiKey?: string;
@@ -306,7 +306,7 @@ export class RavnClient {
 
   /** POST /v1/submit-transaction: only for a TRANSACTION execution carrying `submit`
    * (broadcastViaRavn quotes). RAVN checks the signed transaction, then sends it; refused, nothing
-   * is sent. Returns the Solana signature; poll getStatus with the execution's statusRef. */
+   * is sent. Returns the Solana signature or Bitcoin txid; poll getStatus with the execution's statusRef. */
   submitTransaction(params: SubmitTransactionParams): Promise<{ txHash: string }> {
     // params?.: a call with no params still fails as a rejected promise, never a throw.
     noteTracked(this, params?.quoteToken);
