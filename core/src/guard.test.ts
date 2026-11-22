@@ -14,7 +14,8 @@ import type { ExecutionDTO } from "./types";
 // two (2026-10-25): Route's own builds in /v1/execute's shape, as Route isn't in RAVN's race yet.
 // Metric's three (2026-10-25): RAVN's own builds for it (full calldata, which the check reads deep).
 // Relay's three "v3.2" (2026-11-09): Relay's own builds through its v3.2 contracts, in /v1/execute's shape.
-// Fynd's six (2026-11-06): RAVN's own builds, from a local server with Fynd switched on.
+// Fynd's six (2026-11-06): RAVN's own builds, from a local server with Fynd switched on; their router moved to
+// the one Fynd redeployed on 16 Nov (2026-11-22), whose calls are the same (it isn't named in the calldata).
 // FlowRouter's three (2026-11-09): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign.
 // Khalani's one (2026-11-13): Khalani's own build of a real, unfunded order, in /v1/execute's shape, as Khalani
 // isn't in RAVN's race yet.
@@ -311,7 +312,7 @@ describe("checkExecution: EVM transactions", () => {
         "0x2B9899bC46Bf0eE094225995f4bD496d42f261Af", // OKX approvals
         "0x5fA58e4E89c85B8d678Ade970bD6afD4311aF17E", // Garden USDC
         "0x89b6612A2121BFBd1c2Dc593504AbE4e5d5E9296", // Garden cirBTC
-        "0x72C452506a551C7fe069f1F66Beb671AC58909E9", // Fynd router
+        "0x52A1BC20F2B78461D7a03c32f6c7388D4587980f", // Fynd router
       ].map((a) => a.toLowerCase()).sort()
     );
   });
@@ -439,7 +440,7 @@ describe("checkExecution: Metric's router", () => {
 
 describe("checkExecution: Fynd's router", () => {
   type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
-  const BASE_ROUTER = "0xaba5b53b03eafad1c5fc8bd5fc765fc85bb3de67";
+  const BASE_ROUTER = "0xd374c00614f95492d816b5957e3797ce3f0c445c";
   const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
   const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
   const tampered = (name: string, edit: (data: string) => string, value?: string) => {
@@ -456,17 +457,33 @@ describe("checkExecution: Fynd's router", () => {
 
   it("knows one router per chain, on Fynd's eight chains only", () => {
     const routers: Record<number, string> = {
-      1: "0x1644d2477f809cc2c71bccfd6dc9497e3f83210d",
+      1: "0xe41c726421007e133a59365432fe886a73b45126",
       8453: BASE_ROUTER,
-      42161: "0x924f147c50ea59f5180a26031a8b65b2aa1e81cd",
-      56: "0x7f3d12bbafb8955e51b3ab9588b34c8ad95bda4e",
-      137: "0xbd4e6011f03355c2a377fd9af939322a7d0a1bc1",
-      130: "0xcba5574597ad00ea250fd106dab4fc7461949635",
-      4663: "0x09215a470bd585e59eb3f4b612fbd2678131ff9e",
-      5042: "0x72c452506a551c7fe069f1f66beb671ac58909e9",
+      42161: "0x1b82e8c16ce8e17535c9b6b8ad107f61b0b192b5",
+      56: "0xee7ece626064bda1c6afdb8a281afe44eabd3242",
+      137: "0x4db0b661dc706f7e09e54273028b22f61f8f94c2",
+      130: "0x556dff14e4a42259ebce4fa087323c1047e9a55a",
+      4663: "0x6f460540b03651d2ad0ec28f777e4a0480a756a5",
+      5042: "0x52a1bc20f2b78461d7a03c32f6c7388d4587980f",
     };
     for (const [chain, router] of Object.entries(routers)) {
       expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(router)), chain).toEqual([chain]);
+    }
+  });
+
+  it("refuses the routers Fynd replaced on 16 Nov", () => {
+    const { execution, intent } = fixture(TOKEN);
+    const e = execution as Tx;
+    const old = "0xaba5b53b03eafad1c5fc8bd5fc765fc85bb3de67";
+    e.transaction.to = old;
+    for (const c of e.calls!) if (c.to.toLowerCase() === BASE_ROUTER) c.to = old;
+    refuses(e, intent, /goes to a contract RAVN doesn.t route through/);
+    for (const replaced of [
+      "0x1644d2477f809cc2c71bccfd6dc9497e3f83210d", "0x924f147c50ea59f5180a26031a8b65b2aa1e81cd", "0x7f3d12bbafb8955e51b3ab9588b34c8ad95bda4e",
+      "0xbd4e6011f03355c2a377fd9af939322a7d0a1bc1", "0xcba5574597ad00ea250fd106dab4fc7461949635", "0x09215a470bd585e59eb3f4b612fbd2678131ff9e",
+      "0x72c452506a551c7fe069f1f66beb671ac58909e9", old,
+    ]) {
+      expect(Object.values(KNOWN_CONTRACTS).some((list) => list.includes(replaced)), replaced).toBe(false);
     }
   });
 

@@ -3,6 +3,18 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.34
+
+### Changed
+
+- The wallet check knows Fynd's new routers. Fynd replaced its router on every chain RAVN routes it on, on 16 Nov 2026,
+  with no notice, and its API now builds every swap to the new one. 0.4.15–0.4.33 refuse those swaps, so RAVN
+  offers Fynd only to 0.4.34+. The old routers are refused.
+
+### Upgrading
+
+- Nothing to change: upgrade to get Fynd's routes back.
+
 ## @ravnexchange/sdk 0.4.33
 
 ### Added
