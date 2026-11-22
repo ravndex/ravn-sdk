@@ -26,8 +26,9 @@
  * chain spec (chainflip-backend berghain.rs `eth_vault_address` / `arb_vault_address`) and its deployed
  * Vault.sol. Note the same Arbitrum address is Chainflip's BSC Vault: a BNB-origin Chainflip swap would
  * need its own entry here, and is refused until it has one. Paxos Labs' Transit station (Ethereum, Arbitrum,
- * Robinhood) added 2026-11-22 from its verified source on Sourcify (TransitStation.sol) and its quote API's
- * `transaction.to`, the same address on all three.
+ * Robinhood) added 2026-11-22 from its quote API's `transaction.to`, the same address on all three: verified on
+ * Sourcify on Ethereum and Arbitrum (TransitStation.sol); Robinhood's bytecode is the same but for its immutables
+ * (LayerZero endpoint and endpoint id).
  */
 
 const ETHEREUM = 1;

@@ -648,11 +648,42 @@ describe("checkExecution: Transit's station", () => {
     }
   });
 
-  it("refuses the station where Transit doesn't run (Base)", () => {
+  it("refuses the station where Transit doesn't run (Base): its approval, and the order itself", () => {
     const { execution, intent } = fixture(NAME);
     const e = execution as Tx;
     for (const c of [e.transaction, e.approval!, ...e.calls!]) c.chainId = 8453;
-    refuses(e, { ...intent, inputChainId: 8453 }, /RAVN doesn't route through/);
+    refuses(e, { ...intent, inputChainId: 8453 }, /The approval names a spender RAVN doesn't route through/);
+    const bare = { ...e, approval: undefined, calls: e.calls!.filter((c) => c.to.toLowerCase() === STATION) } as Tx;
+    refuses(bare, { ...intent, inputChainId: 8453 }, /The swap goes to a contract RAVN doesn't route through/);
+  });
+
+  it("refuses submitOrderWithPermit, and passes a message fee of exactly the cap", () => {
+    let t = tampered((d) => "0x8432dc32" + d.slice(10));
+    refuses(t.e, t.intent, /call to Transit isn't submitOrder/);
+    t = tampered((d) => d, "5000000000000000");
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+  });
+
+  it("passes RAVN's fee beside the order as every integrator's Transit swap carries it, and refuses more than the swap", () => {
+    // The intent is the order plus RAVN's fee (5 bp of 10,000.5 USDG), paid to RAVN's wallet in USDG beside it.
+    const withFee = (fee: bigint) => {
+      const { execution, intent } = fixture(NAME);
+      const e = execution as Tx;
+      const usdg = intent.inputToken;
+      const transaction = {
+        to: usdg,
+        data: "0xa9059cbb" + word("0x12d2425fD88c693EDB4dE004E0c747879B7D6933") + word(fee) + "3f79be6a1d3673891446b1a28f32b858",
+        value: "0",
+        chainId: 42161,
+      };
+      e.fee = { amount: fee.toString(), address: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933", chainId: 42161, transaction } as Tx["fee"];
+      e.calls = [...e.calls!, transaction];
+      return { e, intent: { ...intent, inputAmount: (10_000_000_000n + 5_000_000n).toString() } };
+    };
+    let t = withFee(5_000_000n);
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+    t = withFee(5_000_001n);
+    expect(() => checkExecution(t.e, t.intent)).toThrow();
   });
 });
 
