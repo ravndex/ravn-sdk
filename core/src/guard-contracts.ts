@@ -135,6 +135,35 @@ export const KHALANI_DEPOSITS: Record<number, string> = {
 };
 
 /**
+ * Circle's CCTP v2 TokenMessengerV2: one address on every EVM chain (its proxy's localMessageTransmitter read
+ * on each, 2026-10-21 and 2026-11-20). RAVN's CCTP venue burns USDC through it only from the chains whose
+ * standard transfer lands in seconds (RAVN's src/lib/cctp.ts CCTP_VENUE_SOURCES), so it's known only there.
+ * The guard reads every field of the burn: token, amount, destination chain and recipient, caller, finality,
+ * fee limit and Circle's delivery request.
+ */
+export const CCTP_TOKEN_MESSENGER = "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d";
+export const CCTP_SOURCE_CHAINS: readonly number[] = [POLYGON, AVALANCHE, HYPEREVM, MONAD];
+
+/** Circle's CCTP domain for each chain RAVN delivers to (developers.circle.com supported-chains table; Solana is -2 here). */
+export const CCTP_DOMAINS: Record<number, number> = {
+  [ETHEREUM]: 0,
+  [AVALANCHE]: 1,
+  [OPTIMISM]: 2,
+  [ARBITRUM]: 3,
+  [-2]: 5,
+  [BASE]: 6,
+  [POLYGON]: 7,
+  [UNICHAIN]: 10,
+  [WORLD_CHAIN]: 14,
+  [MONAD]: 15,
+  [HYPEREVM]: 19,
+  [ARC]: 26,
+};
+
+/** Solana's USDC mint: a CCTP mint into Solana goes to the recipient's token account for it. */
+export const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+/**
  * Chainflip's Vault per chain. An EVM-origin Chainflip swap is one call to it: `xSwapNative` carrying the
  * coin, or `xSwapToken` pulling the token its approval names. The Vault takes the funds and emits the swap
  * for Chainflip's validators to witness; it holds nothing of the user's afterwards. The guard reads the
@@ -224,6 +253,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
   ...Object.entries(KHALANI_DEPOSITS).map(([chain, deposit]): [readonly number[], readonly string[], string] => [[Number(chain)], [deposit], "Khalani deposit"]),
   ...Object.entries(CHAINFLIP_VAULTS).map(([chain, vault]): [readonly number[], readonly string[], string] => [[Number(chain)], [vault], "Chainflip Vault"]),
+  [CCTP_SOURCE_CHAINS, [CCTP_TOKEN_MESSENGER], "Circle CCTP TokenMessengerV2"],
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).

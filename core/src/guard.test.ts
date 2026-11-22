@@ -1470,3 +1470,118 @@ describe("checkExecution: Chainflip's vault swap", () => {
     refuses(t.e, t.intent, /runs past the end of the call/);
   });
 });
+
+describe("checkExecution: Circle's CCTP burn", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  // RAVN's two delivered canary burns (2026-11-20), as RAVN's CCTP venue builds them.
+  const BURNS = JSON.parse(readFileSync(new URL("./guard-cctp.fixtures.json", import.meta.url), "utf8")) as Record<"evm" | "sol", { from: string; data: string }>;
+  const MESSENGER = "0x28b5a0e9c621a5badaa536219b3a228c8168cf5d";
+  const POLYGON_USDC = "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359";
+  const EVM_DEST = "0x7584014c7731ec9178fd007f200fc91692a73bae"; // the Relay deposit address it minted to
+  const SOL_DEST = "9wCMkhXUzW291dNMHPAchvrYa8NP7F7vvF463sD1KcoF"; // owner of the USDC account it minted to
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const build = (kind: "evm" | "sol", edit: (data: string) => string = (d) => d, intentEdit: Partial<SwapIntent> = {}) => {
+    const amount = kind === "evm" ? 1_000_000n : 2_000_000n;
+    const data = edit(BURNS[kind].data);
+    const execution = {
+      executionType: "TRANSACTION",
+      quoteToken: "qt",
+      approval: { to: POLYGON_USDC, data: `0x095ea7b3${word(MESSENGER)}${word(amount)}`, value: "0", chainId: 137, spender: MESSENGER, amount: amount.toString() },
+      transaction: { to: MESSENGER, data, value: "0", chainId: 137 },
+    } as unknown as Tx;
+    const intent: SwapIntent = {
+      inputChainId: 137,
+      inputToken: POLYGON_USDC,
+      inputAmount: amount.toString(),
+      userAddress: BURNS[kind].from,
+      destinationAddress: kind === "evm" ? EVM_DEST : SOL_DEST,
+      outputChainId: kind === "evm" ? 8453 : -2,
+      ...intentEdit,
+    };
+    return { e: execution, intent };
+  };
+
+  it("passes both delivered canary burns, and knows TokenMessengerV2 only on the four source chains", () => {
+    for (const kind of ["evm", "sol"] as const) {
+      const { e, intent } = build(kind);
+      expect(() => checkExecution(e, intent)).not.toThrow();
+    }
+    const chains = Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(MESSENGER));
+    expect(chains.sort()).toEqual(["137", "143", "43114", "999"]);
+  });
+
+  it("refuses it from a chain RAVN's venue doesn't burn on", () => {
+    const { e, intent } = build("evm");
+    e.transaction.chainId = 8453;
+    e.approval!.chainId = 8453;
+    refuses(e, { ...intent, inputChainId: 8453, inputToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" }, /contract RAVN doesn't route through|token other than/);
+  });
+
+  it("holds the burn to the swap's token and amount", () => {
+    let t = build("evm", (d) => setWord(d, 0, word(1_000_001n)));
+    refuses(t.e, t.intent, /burn takes more than the swap's amount/);
+    t = build("evm", (d) => setWord(d, 0, word(0n)));
+    refuses(t.e, t.intent, /burn takes more than the swap's amount/);
+    t = build("evm", (d) => setWord(d, 3, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+  });
+
+  it("holds it to the swap's destination chain, and refuses without one", () => {
+    let t = build("evm", (d) => setWord(d, 1, word(3n)));
+    refuses(t.e, t.intent, /delivers to a chain other than the swap's/);
+    t = build("evm", undefined, { outputChainId: undefined });
+    refuses(t.e, t.intent, /without the swap's output chain/);
+    t = build("evm", undefined, { outputChainId: 137 });
+    refuses(t.e, t.intent, /isn't one a CCTP burn delivers to/);
+    t = build("evm", undefined, { outputChainId: 56 });
+    refuses(t.e, t.intent, /isn't one a CCTP burn delivers to/);
+  });
+
+  it("refuses a mint to anyone but the destination (on Solana, its own USDC account)", () => {
+    let t = build("evm", (d) => setWord(d, 2, word(ATTACKER)));
+    refuses(t.e, t.intent, /mints to an address other than the swap's destination/);
+    t = build("evm", undefined, { destinationAddress: ATTACKER });
+    refuses(t.e, t.intent, /mints to an address other than the swap's destination/);
+    // The owner's own key instead of its USDC account: Circle would mint to a non-token account.
+    t = build("sol", (d) => setWord(d, 2, Array.from(base58Decode32(SOL_DEST)!, (b) => b.toString(16).padStart(2, "0")).join("")));
+    refuses(t.e, t.intent, /account other than the destination's USDC account/);
+    t = build("sol", undefined, { destinationAddress: "So11111111111111111111111111111111111111112" });
+    refuses(t.e, t.intent, /account other than the destination's USDC account/);
+  });
+
+  it("refuses a named caller, a fast transfer, or a fee limit over a quarter of the burn", () => {
+    let t = build("evm", (d) => setWord(d, 4, word(ATTACKER)));
+    refuses(t.e, t.intent, /names a caller/);
+    t = build("evm", (d) => setWord(d, 6, word(1000n)));
+    refuses(t.e, t.intent, /isn't a standard transfer/);
+    t = build("evm", (d) => setWord(d, 5, word(250_001n)));
+    refuses(t.e, t.intent, /lets Circle keep too much/);
+    t = build("evm", (d) => setWord(d, 5, word(250_000n)));
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+  });
+
+  it("refuses any hook data but Circle's delivery request for this destination", () => {
+    // Version 1 frame (Circle ignored it in RAVN's canary): byte 27 of the hook is the version.
+    const hookAt = (d: string) => 10 + 64 * 9; // hook bytes start after the 8 head words and its length word
+    let t = build("evm", (d) => d.slice(0, hookAt(d) + 54) + "01" + d.slice(hookAt(d) + 56));
+    refuses(t.e, t.intent, /hook data isn't Circle's delivery request/);
+    // The Solana account-creation form naming another owner than the destination.
+    t = build("sol", (d) => d.slice(0, hookAt(d) + 66) + "00".repeat(32) + d.slice(hookAt(d) + 130));
+    refuses(t.e, t.intent, /hook data isn't Circle's delivery request for the destination/);
+    // The Solana form into an EVM destination.
+    const evm = build("evm");
+    const sol = BURNS.sol.data;
+    t = build("evm", (d) => d.slice(0, 10 + 64 * 8) + sol.slice(10 + 64 * 8));
+    refuses(t.e, { ...evm.intent }, /hook data isn't Circle's delivery request|account other than/);
+  });
+
+  it("refuses any other call to TokenMessengerV2, and a coin sent with it", () => {
+    for (const sel of ["0x8e0250ee", "0xdeadbeef", "0xa9059cbb"]) {
+      const t = build("evm", (d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /isn't a burn RAVN builds/);
+    }
+    const t = build("evm");
+    t.e.transaction.value = "1";
+    refuses(t.e, t.intent, /sends value|native coin/);
+  });
+});

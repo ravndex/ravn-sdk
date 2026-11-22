@@ -3,6 +3,22 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.35
+
+### Added
+
+- The wallet check knows Circle's CCTP burn, for RAVN's CCTP venue (USDC to USDC from Polygon, Avalanche, HyperEVM and
+  Monad). It holds every field of the burn: the swap's USDC within its amount, the destination chain the swap quoted,
+  the destination wallet (into Solana, that wallet's USDC account), no named caller, standard finality, Circle's fee
+  limit at most a quarter of the burn and 5 USDC, and Circle's delivery request as the only hook data. RAVN offers its
+  CCTP routes only to 0.4.35+.
+- `SwapIntent.outputChainId`: the chain the swap delivers on. `RavnClient` remembers it for every quote it fetches; pass
+  it yourself when you call `checkExecution` directly. A CCTP burn without it is refused.
+
+### Upgrading
+
+- Nothing to change if you use `RavnClient`. If you call `checkExecution` yourself, add `outputChainId`.
+
 ## @ravnexchange/sdk 0.4.34
 
 ### Changed

@@ -76,7 +76,7 @@ function envelopeData<T>(body: Envelope<T>, ok: boolean, status?: number): T {
 const DEFAULT_BASE_URL = "https://app.ravn.exchange/api/v1";
 
 /** This package's version, as in its package.json (client.test.ts fails when they differ). */
-export const SDK_VERSION = "0.4.34";
+export const SDK_VERSION = "0.4.35";
 
 export class RavnClient {
   private readonly apiKey?: string;
@@ -108,6 +108,8 @@ export class RavnClient {
       inputAmount: params.inputAmount,
       userAddress: params.userAddress,
       ...(params.destinationAddress ? { destinationAddress: params.destinationAddress } : {}),
+      // What a CCTP burn's destination domain is held to (guard.ts); every quote names it.
+      outputChainId: params.outputChainId,
       ...(params.sandbox ? { sandbox: true } : {}),
     };
     const key = JSON.stringify(intent);
