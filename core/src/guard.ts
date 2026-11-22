@@ -1,8 +1,8 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CCTP_DOMAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt, checkLayerswapBitcoinPsbt } from "./guard-bitcoin";
-import { base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
+import { associatedTokenAddress, base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
 /**
  * What your user asked to swap, from your own code, never from RAVN's answer: the guard holds
@@ -18,6 +18,11 @@ export interface SwapIntent {
   /** The wallet that signs: change, refunds and order owners must be it. */
   userAddress: string;
   destinationAddress?: string;
+  /**
+   * The chain the swap delivers on. Needed only where the execution itself names the destination chain (a
+   * Circle CCTP burn names its destination domain): without it such a swap is refused, never guessed.
+   */
+  outputChainId?: number;
   /** The quote was asked for with `sandbox: true`: only then is an execution marked sandbox left unchecked. */
   sandbox?: boolean;
 }
@@ -74,7 +79,18 @@ const SEL = {
   cfSwapNative: "0xdd687345",
   /** Chainflip xSwapToken(uint32 dstChain, bytes dstAddress, uint32 dstToken, address srcToken, uint256 amount, bytes cfParameters). */
   cfSwapToken: "0x04fc7da0",
+  /** Circle TokenMessengerV2 depositForBurnWithHook(amount, destinationDomain, mintRecipient, burnToken, destinationCaller, maxFee, minFinalityThreshold, hookData). */
+  cctpBurnWithHook: "0x779b432d",
 };
+
+// Circle's Forwarding Service request ("cctp-forward" in 24 bytes, uint32 version 0, uint32 length): the only hook
+// data a RAVN CCTP burn carries. Length 0 everywhere; into Solana also length 33 = flag 1 (create the recipient's
+// USDC account) + the owner's 32 bytes, which Circle checks the account against before creating it.
+const CCTP_FORWARD = `${Array.from("cctp-forward", (c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("").padEnd(48, "0")}0000000000000000`;
+// The standard finality RAVN's burns use (Circle's 2000: free, and its attestation never expires).
+const CCTP_STANDARD_FINALITY = 2000n;
+const SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const hex32 = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
 // What a read-only (EIP-712-mode) Hinkal session's personal_sign reads. Normal mode adds
 // HINKAL_NORMAL_MODE, and its session key can move the user's Hinkal funds.
@@ -186,6 +202,8 @@ interface Ctx {
   destination: string;
   /** The destination as the integrator gave it: Bitcoin and Solana addresses are case-sensitive. */
   destinationRaw: string;
+  /** SwapIntent.outputChainId, when given. */
+  outputChainId?: number;
   known: Set<string>;
   /** Permit2 and CoW's vault relayer: may be approved beyond the amount (see signatureGatedSpenders). */
   gated: Set<string>;
@@ -224,6 +242,7 @@ function context(intent: SwapIntent, options: GuardOptions): Ctx {
     user: lower(intent.userAddress),
     destination: lower(intent.destinationAddress ?? intent.userAddress),
     destinationRaw: intent.destinationAddress ?? intent.userAddress,
+    ...(typeof intent.outputChainId === "number" ? { outputChainId: intent.outputChainId } : {}),
     known,
     gated: signatureGatedSpenders(chainId),
   };
@@ -484,6 +503,43 @@ function classifyEvmCall(
     if (wordUint(data, payload) < 10n * 32n) fail("The Khalani deposit's terms are cut short");
     if (wordAddress(data, payload + 1 + 3) !== ctx.destination) fail("The Khalani deposit pays out to an address other than the swap's destination", { to: wordAddress(data, payload + 1 + 3) });
     if (wordAddress(data, payload + 1 + 4) !== ctx.user) fail("The Khalani deposit refunds an address other than the wallet that signs", { to: wordAddress(data, payload + 1 + 4) });
+  } else if (to === lower(CCTP_TOKEN_MESSENGER) && CCTP_SOURCE_CHAINS.includes(ctx.chainId)) {
+    // Circle's CCTP burn, its only call RAVN routes through: TokenMessengerV2 pulls `amount` of the swap's USDC
+    // and burns it; Circle mints the same amount, less at most `maxFee`, to `mintRecipient` on the destination
+    // domain. Nothing else can redirect it once burned, so every field is held: the swap's token within its
+    // amount, the swap's destination chain and wallet (into Solana, that wallet's USDC account), no named
+    // caller (anyone, the user included, can finish the mint), standard finality, a bounded fee, and Circle's
+    // delivery request as the only hook data.
+    if (sel !== SEL.cctpBurnWithHook) fail("The call to Circle's TokenMessenger isn't a burn RAVN builds", { selector: sel });
+    if (ctx.native) fail("A CCTP burn was built for a coin sell");
+    if (value !== 0n) fail("The CCTP burn sends value", { value: value.toString() });
+    pulled = wordUint(data, 0);
+    if (pulled === 0n || pulled > ctx.amount) fail("The burn takes more than the swap's amount", { amount: pulled.toString() });
+    if (wordAddress(data, 3) !== ctx.token) fail("The burn is of a token other than the one being swapped", { token: wordAddress(data, 3) });
+    if (ctx.outputChainId === undefined) fail("A CCTP burn can't be checked without the swap's output chain: update the code that calls the check");
+    const domain = CCTP_DOMAINS[ctx.outputChainId];
+    if (domain === undefined || ctx.outputChainId === ctx.chainId) fail("The swap's output chain isn't one a CCTP burn delivers to", { chainId: ctx.outputChainId });
+    if (wordUint(data, 1) !== BigInt(domain)) fail("The burn delivers to a chain other than the swap's", { domain: wordUint(data, 1).toString() });
+    if (wordUint(data, 4) !== 0n) fail("The burn names a caller: only it could finish the mint");
+    if (wordUint(data, 6) !== CCTP_STANDARD_FINALITY) fail("The burn isn't a standard transfer", { finality: wordUint(data, 6).toString() });
+    // Circle spends the whole limit it's given, so a wide one is the user's loss: at most a quarter of the burn, and 5 USDC.
+    const maxFee = wordUint(data, 5);
+    if (maxFee * 4n > pulled || maxFee > 5_000_000n) fail("The burn lets Circle keep too much", { maxFee: maxFee.toString() });
+    const recipient = word(data, 2);
+    const hook = wordBytes(data, 7);
+    if (ctx.outputChainId === SOLANA_CHAIN_ID) {
+      const owner = base58Decode32(ctx.destinationRaw);
+      if (!owner || base58(owner) !== ctx.destinationRaw) fail("The swap's Solana destination isn't a Solana address", { destination: ctx.destinationRaw });
+      const account = associatedTokenAddress(ctx.destinationRaw, SOLANA_USDC_MINT, SPL_TOKEN_PROGRAM);
+      const accountBytes = account ? base58Decode32(account) : undefined;
+      if (!accountBytes || recipient !== hex32(accountBytes)) fail("The burn mints to an account other than the destination's USDC account", { recipient });
+      if (hook !== CCTP_FORWARD && hook !== `${CCTP_FORWARD.slice(0, 56)}0000002101${hex32(owner)}`) {
+        fail("The burn's hook data isn't Circle's delivery request for the destination", { hookBytes: (hook.length / 2).toString() });
+      }
+    } else {
+      if (recipient !== ctx.destination.slice(2).padStart(64, "0")) fail("The burn mints to an address other than the swap's destination", { recipient });
+      if (hook !== CCTP_FORWARD) fail("The burn's hook data isn't Circle's delivery request", { hookBytes: (hook.length / 2).toString() });
+    }
   } else if (to === lower(CHAINFLIP_VAULTS[ctx.chainId])) {
     // Chainflip's Vault, its only calls RAVN routes through: xSwapNative hands it the coin being sold, or
     // xSwapToken pulls the token its approval names. The Vault takes the funds and emits the swap for

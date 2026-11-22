@@ -108,6 +108,8 @@ export class RavnClient {
       inputAmount: params.inputAmount,
       userAddress: params.userAddress,
       ...(params.destinationAddress ? { destinationAddress: params.destinationAddress } : {}),
+      // What a CCTP burn's destination domain is held to (guard.ts); every quote names it.
+      outputChainId: params.outputChainId,
       ...(params.sandbox ? { sandbox: true } : {}),
     };
     const key = JSON.stringify(intent);
