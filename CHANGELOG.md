@@ -3,6 +3,23 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.34
+
+Paxos Labs' Transit: USDG between Ethereum, Arbitrum and Robinhood Chain. 0.4.33 and older refuse its swaps: "The
+approval names a spender RAVN doesn't route through" (and its order sends ETH, LayerZero's message fee, on a token
+sale, which they also refuse).
+
+### Added
+
+- Transit's station in the check (`checkExecution`), with its `submitOrder` read: the token and amount it takes (the
+  swap's, within its amount), the receiver (the swap's destination), no fee inside the order (RAVN's goes beside
+  it), and the coin it sends held to a message fee (at most 0.005 ETH). Any other call to the station is refused.
+- "transit" in the generated types' venue lists.
+
+### Upgrading
+
+- Nothing to change.
+
 ## @ravnexchange/sdk 0.4.33
 
 ### Added

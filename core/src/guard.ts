@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt, checkLayerswapBitcoinPsbt } from "./guard-bitcoin";
 import { base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -47,6 +47,10 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const BITCOIN_CHAIN_ID = -1;
 const SOLANA_CHAIN_ID = -2;
 
+/** The most coin a Transit order may send: its LayerZero message fee, 0.00016–0.001 ETH measured 2026-11-22 (into
+ * Ethereum the dearest). 0.005 ETH leaves room for gas spikes and still caps what a tampered answer could spend. */
+const TRANSIT_MAX_MESSAGE_FEE = 5_000_000_000_000_000n;
+
 const SEL = {
   approve: "0x095ea7b3",
   transfer: "0xa9059cbb",
@@ -70,6 +74,8 @@ const SEL = {
   flowSwap: "0xd46cadbc",
   /** Khalani deposit(address token, uint256 amount, bytes payload, uint256 gas). */
   khalaniDeposit: "0xf3125a1f",
+  /** Transit submitOrder(((uint32,address,address),uint256,address,uint256,uint256,address,bytes32,uint256,bytes32) quote, bytes signature). */
+  transitSubmit: "0x3784896a",
   /** Chainflip xSwapNative(uint32 dstChain, bytes dstAddress, uint32 dstToken, bytes cfParameters), payable. */
   cfSwapNative: "0xdd687345",
   /** Chainflip xSwapToken(uint32 dstChain, bytes dstAddress, uint32 dstToken, address srcToken, uint256 amount, bytes cfParameters). */
@@ -484,6 +490,25 @@ function classifyEvmCall(
     if (wordUint(data, payload) < 10n * 32n) fail("The Khalani deposit's terms are cut short");
     if (wordAddress(data, payload + 1 + 3) !== ctx.destination) fail("The Khalani deposit pays out to an address other than the swap's destination", { to: wordAddress(data, payload + 1 + 3) });
     if (wordAddress(data, payload + 1 + 4) !== ctx.user) fail("The Khalani deposit refunds an address other than the wallet that signs", { to: wordAddress(data, payload + 1 + 4) });
+  } else if (to === lower(TRANSIT_STATION) && TRANSIT_CHAINS.includes(ctx.chainId)) {
+    // Transit's submitOrder, its only call RAVN routes through. The order (Transit's signed quote) is all static
+    // words at the head of the calldata: route (destination endpoint 0, offerAsset 1, wantAsset 2), offerAmount 3,
+    // receiver 4, protocolFee 5, integratorFee 6, integratorFeeReceiver 7, distributorCode 8, deadline 9, salt 10.
+    // The station pulls offerAmount of offerAsset from the sender, and Paxos Labs pays the receiver on the
+    // destination. A token only, the swap's, within its amount, paying the swap's destination, with no integrator
+    // fee in it (RAVN's goes beside). The coin it sends is LayerZero's message fee, not the swap's amount: capped
+    // on its own, and any excess goes back to the sender.
+    if (sel !== SEL.transitSubmit) fail("The call to Transit isn't submitOrder", { selector: sel });
+    if (ctx.native) fail("A Transit order was built for a coin sell");
+    if (data.length < 10 + 64 * 12) fail("The Transit order is cut short");
+    const token = wordAddress(data, 1);
+    pulled = wordUint(data, 3);
+    if (token !== ctx.token) fail("The Transit order takes a token other than the one being swapped", { token });
+    if (pulled === 0n || pulled > ctx.amount) fail("The Transit order takes more than the swap's amount", { amount: pulled.toString() });
+    if (wordAddress(data, 4) !== ctx.destination) fail("The Transit order pays an address other than the swap's destination", { to: wordAddress(data, 4) });
+    if (wordUint(data, 6) !== 0n) fail("The Transit order carries a fee of its own", { amount: wordUint(data, 6).toString() });
+    if (value > TRANSIT_MAX_MESSAGE_FEE) fail("The Transit order's message fee is more than any it costs", { value: value.toString() });
+    return { value: 0n, tokens: pulled };
   } else if (to === lower(CHAINFLIP_VAULTS[ctx.chainId])) {
     // Chainflip's Vault, its only calls RAVN routes through: xSwapNative hands it the coin being sold, or
     // xSwapToken pulls the token its approval names. The Vault takes the funds and emits the swap for
