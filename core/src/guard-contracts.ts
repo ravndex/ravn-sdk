@@ -19,7 +19,8 @@
  * Fly's there added 2026-11-12 once Fly listed Elysium: its builds there call the same address, whose
  * code is byte-for-byte its contract's on Base and HyperEVM, and they ran on Elysium paying what they quoted.
  * Fynd's routers added 2026-11-06 from Fynd's Router Registry, each matching its GET /v1/{chain}/info,
- * and RAVN's own builds for them. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
+ * and RAVN's own builds for them; moved 2026-11-22 to the routers Fynd redeployed on 16 Nov (the registry and
+ * GET /v1/{chain}/info name them), the old ones dropped. FlowRouter's router (Robinhood) added 2026-11-09 from its docs, its
  * GET /v1/health and RAVN's own builds for it. Khalani's deposit contracts (Ethereum, Arbitrum, Base, Polygon,
  * Robinhood) added 2026-11-13 from its orders' deposit steps, confirmed by Khalani. Chainflip's Vault
  * (Ethereum, Arbitrum) added 2026-11-16 from Chainflip's own `encodeVaultSwapData`, matching its mainnet
@@ -107,17 +108,18 @@ export const METRIC_ROUTER = "0x02201E6f13c41506c7Bb635d7543F98826229aB7";
 export const METRIC_WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
 
 /** Fynd's router (TychoRouter) per chain, from its Router Registry (Propeller Heads' deployment_registry.json,
- * 2026-11-06): every Fynd swap calls it and its approval names it. The guard reads the token and amount its
- * swap pulls. A successor comes with 30 days' public notice in the registry. */
+ * redeployed 2026-11-16, read 2026-11-22): every Fynd swap calls it and its approval names it. The guard reads the
+ * token and amount its swap pulls. Only the current router: a replaced one is refused. Fynd can replace one with
+ * no notice (16 Nov: every chain, the same day). */
 export const FYND_ROUTERS: Record<number, string> = {
-  [ETHEREUM]: "0x1644D2477f809cc2C71bCCFd6Dc9497E3F83210d",
-  [BASE]: "0xAbA5B53b03eAfaD1C5fc8BD5Fc765fC85Bb3de67",
-  [ARBITRUM]: "0x924F147c50eA59f5180a26031a8b65b2aA1e81Cd",
-  [BNB]: "0x7f3D12BBaFb8955E51B3ab9588b34c8ad95BDA4e",
-  [POLYGON]: "0xbd4e6011F03355C2A377Fd9Af939322A7d0A1bC1",
-  [UNICHAIN]: "0xCba5574597Ad00EA250Fd106DAB4Fc7461949635",
-  [ROBINHOOD]: "0x09215a470bD585E59EB3F4B612fBD2678131fF9e",
-  [ARC]: "0x72C452506a551C7fe069f1F66Beb671AC58909E9",
+  [ETHEREUM]: "0xe41c726421007e133a59365432fE886a73B45126",
+  [BASE]: "0xd374c00614f95492D816b5957E3797ce3f0c445C",
+  [ARBITRUM]: "0x1B82e8C16Ce8E17535C9B6b8AD107f61b0b192B5",
+  [BNB]: "0xEe7eCe626064BDA1c6aFDb8A281afe44Eabd3242",
+  [POLYGON]: "0x4dB0B661dc706f7e09e54273028B22f61f8F94C2",
+  [UNICHAIN]: "0x556dff14e4A42259ebCE4fa087323c1047e9a55A",
+  [ROBINHOOD]: "0x6F460540B03651d2Ad0ec28f777e4A0480A756a5",
+  [ARC]: "0x52A1BC20F2B78461D7a03c32f6c7388D4587980f",
 };
 
 /** FlowRouter's router (flowrouter.xyz), Robinhood Chain only: every FlowRouter swap calls it and its
@@ -141,6 +143,36 @@ export const KHALANI_DEPOSITS: Record<number, string> = {
  * the receiver and the integrator fee in the order, and caps the coin it sends (LayerZero's message fee). */
 export const TRANSIT_STATION = "0x49AAA987b1a7e9E4AE091dcD8332c39F322D7d28";
 export const TRANSIT_CHAINS: readonly number[] = [ETHEREUM, ARBITRUM, ROBINHOOD];
+
+/**
+ * Circle's CCTP v2 TokenMessengerV2: one address on every EVM chain (its proxy's localMessageTransmitter read
+ * on each, 2026-10-21 and 2026-11-20). RAVN's CCTP venue burns USDC through it only from the chains whose
+ * standard transfer lands in seconds (RAVN's src/lib/cctp.ts CCTP_VENUE_SOURCES), so it's known only there.
+ * The guard reads every field of the burn: token, amount, destination chain and recipient, caller, finality,
+ * fee limit and Circle's delivery request.
+ */
+export const CCTP_TOKEN_MESSENGER = "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d";
+export const CCTP_SOURCE_CHAINS: readonly number[] = [POLYGON, AVALANCHE, HYPEREVM, MONAD];
+
+/** Circle's CCTP domain for each chain RAVN delivers to (developers.circle.com supported-chains table; Solana is -2 here). */
+export const CCTP_DOMAINS: Record<number, number> = {
+  [ETHEREUM]: 0,
+  [AVALANCHE]: 1,
+  [OPTIMISM]: 2,
+  [ARBITRUM]: 3,
+  [-2]: 5,
+  [BASE]: 6,
+  [POLYGON]: 7,
+  [UNICHAIN]: 10,
+  [WORLD_CHAIN]: 14,
+  [MONAD]: 15,
+  [HYPEREVM]: 19,
+  [INK]: 21,
+  [ARC]: 26,
+};
+
+/** Solana's USDC mint: a CCTP mint into Solana goes to the recipient's token account for it. */
+export const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 /**
  * Chainflip's Vault per chain. An EVM-origin Chainflip swap is one call to it: `xSwapNative` carrying the
@@ -232,6 +264,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
   ...Object.entries(KHALANI_DEPOSITS).map(([chain, deposit]): [readonly number[], readonly string[], string] => [[Number(chain)], [deposit], "Khalani deposit"]),
   ...Object.entries(CHAINFLIP_VAULTS).map(([chain, vault]): [readonly number[], readonly string[], string] => [[Number(chain)], [vault], "Chainflip Vault"]),
+  [CCTP_SOURCE_CHAINS, [CCTP_TOKEN_MESSENGER], "Circle CCTP TokenMessengerV2"],
   [TRANSIT_CHAINS, [TRANSIT_STATION], "Transit station"],
 ];
 

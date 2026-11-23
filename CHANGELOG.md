@@ -3,9 +3,9 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.4.34
+## @ravnexchange/sdk 0.4.37
 
-Paxos Labs' Transit: USDG between Ethereum, Arbitrum and Robinhood Chain. 0.4.33 and older refuse its swaps: "The
+Paxos Labs' Transit: USDG between Ethereum, Arbitrum and Robinhood Chain. 0.4.36 and older refuse its swaps: "The
 approval names a spender RAVN doesn't route through" (and its order sends ETH, LayerZero's message fee, on a token
 sale, which they also refuse).
 
@@ -19,6 +19,42 @@ sale, which they also refuse).
 ### Upgrading
 
 - Nothing to change.
+
+## @ravnexchange/sdk 0.4.36
+
+### Added
+
+- The wallet check knows Ink as a destination of Circle's CCTP burn (CCTP domain 21), for RAVN's CCTP venue into Ink.
+  Every other check on the burn is unchanged. 0.4.35 refuses a burn into Ink ("isn't one a CCTP burn delivers to"), so
+  RAVN's API offers CCTP into Ink only to 0.4.36+.
+
+## @ravnexchange/sdk 0.4.35
+
+### Added
+
+- The wallet check knows Circle's CCTP burn, for RAVN's CCTP venue (USDC to USDC from Polygon, Avalanche, HyperEVM and
+  Monad). It holds every field of the burn: the swap's USDC within its amount, the destination chain the swap quoted,
+  the destination wallet (into Solana, that wallet's USDC account), no named caller, standard finality, Circle's fee
+  limit at most a quarter of the burn and 5 USDC, and Circle's delivery request as the only hook data. RAVN offers its
+  CCTP routes only to 0.4.35+.
+- `SwapIntent.outputChainId`: the chain the swap delivers on. `RavnClient` remembers it for every quote it fetches; pass
+  it yourself when you call `checkExecution` directly. A CCTP burn without it is refused.
+
+### Upgrading
+
+- Nothing to change if you use `RavnClient`. If you call `checkExecution` yourself, add `outputChainId`.
+
+## @ravnexchange/sdk 0.4.34
+
+### Changed
+
+- The wallet check knows Fynd's new routers. Fynd replaced its router on every chain RAVN routes it on, on 16 Nov 2026,
+  with no notice, and its API now builds every swap to the new one. 0.4.15–0.4.33 refuse those swaps, so RAVN
+  offers Fynd only to 0.4.34+. The old routers are refused.
+
+### Upgrading
+
+- Nothing to change: upgrade to get Fynd's routes back.
 
 ## @ravnexchange/sdk 0.4.33
 
