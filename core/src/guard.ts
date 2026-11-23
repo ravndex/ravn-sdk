@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { CCTP_DOMAINS, CCTP_FAST_SOURCE_CHAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CCTP_DOMAINS, CCTP_FAST_SOURCE_CHAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt, checkLayerswapBitcoinPsbt } from "./guard-bitcoin";
 import { associatedTokenAddress, base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -52,6 +52,10 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const BITCOIN_CHAIN_ID = -1;
 const SOLANA_CHAIN_ID = -2;
 
+/** The most coin a Transit order may send: its LayerZero message fee, 0.00016–0.001 ETH measured 2026-11-22 (into
+ * Ethereum the dearest). 0.005 ETH leaves room for gas spikes and still caps what a tampered answer could spend. */
+const TRANSIT_MAX_MESSAGE_FEE = 5_000_000_000_000_000n;
+
 const SEL = {
   approve: "0x095ea7b3",
   transfer: "0xa9059cbb",
@@ -75,6 +79,8 @@ const SEL = {
   flowSwap: "0xd46cadbc",
   /** Khalani deposit(address token, uint256 amount, bytes payload, uint256 gas). */
   khalaniDeposit: "0xf3125a1f",
+  /** Transit submitOrder(((uint32,address,address),uint256,address,uint256,uint256,address,bytes32,uint256,bytes32) quote, bytes signature). */
+  transitSubmit: "0x3784896a",
   /** Chainflip xSwapNative(uint32 dstChain, bytes dstAddress, uint32 dstToken, bytes cfParameters), payable. */
   cfSwapNative: "0xdd687345",
   /** Chainflip xSwapToken(uint32 dstChain, bytes dstAddress, uint32 dstToken, address srcToken, uint256 amount, bytes cfParameters). */
@@ -351,7 +357,7 @@ function checkChainflipTerms(terms: string, ctx: Ctx): void {
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani or Chainflip's Vault, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani, Transit or Chainflip's Vault, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -504,6 +510,25 @@ function classifyEvmCall(
     if (wordUint(data, payload) < 10n * 32n) fail("The Khalani deposit's terms are cut short");
     if (wordAddress(data, payload + 1 + 3) !== ctx.destination) fail("The Khalani deposit pays out to an address other than the swap's destination", { to: wordAddress(data, payload + 1 + 3) });
     if (wordAddress(data, payload + 1 + 4) !== ctx.user) fail("The Khalani deposit refunds an address other than the wallet that signs", { to: wordAddress(data, payload + 1 + 4) });
+  } else if (to === lower(TRANSIT_STATION) && TRANSIT_CHAINS.includes(ctx.chainId)) {
+    // Transit's submitOrder, its only call RAVN routes through. The order (Transit's signed quote) is all static
+    // words at the head of the calldata: route (destination endpoint 0, offerAsset 1, wantAsset 2), offerAmount 3,
+    // receiver 4, protocolFee 5, integratorFee 6, integratorFeeReceiver 7, distributorCode 8, deadline 9, salt 10.
+    // The station pulls offerAmount of offerAsset from the sender, and Paxos Labs pays the receiver on the
+    // destination. A token only, the swap's, within its amount, paying the swap's destination, with no integrator
+    // fee in it (RAVN's goes beside). The coin it sends is LayerZero's message fee, not the swap's amount: capped
+    // on its own, and any excess goes back to the sender.
+    if (sel !== SEL.transitSubmit) fail("The call to Transit isn't submitOrder", { selector: sel });
+    if (ctx.native) fail("A Transit order was built for a coin sell");
+    if (data.length < 10 + 64 * 12) fail("The Transit order is cut short");
+    const token = wordAddress(data, 1);
+    pulled = wordUint(data, 3);
+    if (token !== ctx.token) fail("The Transit order takes a token other than the one being swapped", { token });
+    if (pulled === 0n || pulled > ctx.amount) fail("The Transit order takes more than the swap's amount", { amount: pulled.toString() });
+    if (wordAddress(data, 4) !== ctx.destination) fail("The Transit order pays an address other than the swap's destination", { to: wordAddress(data, 4) });
+    if (wordUint(data, 6) !== 0n) fail("The Transit order carries a fee of its own", { amount: wordUint(data, 6).toString() });
+    if (value > TRANSIT_MAX_MESSAGE_FEE) fail("The Transit order's message fee is more than any it costs", { value: value.toString() });
+    return { value: 0n, tokens: pulled };
   } else if (to === lower(CCTP_TOKEN_MESSENGER) && CCTP_SOURCE_CHAINS.includes(ctx.chainId)) {
     // Circle's CCTP burn, its only call RAVN routes through: TokenMessengerV2 pulls `amount` of the swap's USDC
     // and burns it; Circle mints the same amount, less at most `maxFee`, to `mintRecipient` on the destination
@@ -824,7 +849,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Khalani's and Chainflip's Vault amounts are read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Khalani's, Transit's and Chainflip's Vault amounts are read; others aren't);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.
@@ -853,7 +878,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani or Chainflip's Vault: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani, Transit or Chainflip's Vault: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");

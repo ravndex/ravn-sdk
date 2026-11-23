@@ -79,7 +79,9 @@
           "metric",
           "fynd",
           "flowrouter",
-          "khalani"
+          "khalani",
+          "transit",
+          "cctp"
         ]
       },
       "ErrorCode": {
@@ -1443,7 +1445,9 @@
                         "metric",
                         "fynd",
                         "flowrouter",
-                        "khalani"
+                        "khalani",
+                        "transit",
+                        "cctp"
                       ]
                     }
                   },
@@ -1481,7 +1485,9 @@
                         "metric",
                         "fynd",
                         "flowrouter",
-                        "khalani"
+                        "khalani",
+                        "transit",
+                        "cctp"
                       ]
                     }
                   },
@@ -2968,7 +2974,9 @@
                         "metric",
                         "fynd",
                         "flowrouter",
-                        "khalani"
+                        "khalani",
+                        "transit",
+                        "cctp"
                       ]
                     }
                   },
@@ -3006,7 +3014,9 @@
                         "metric",
                         "fynd",
                         "flowrouter",
-                        "khalani"
+                        "khalani",
+                        "transit",
+                        "cctp"
                       ]
                     }
                   },

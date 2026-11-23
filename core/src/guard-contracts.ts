@@ -26,7 +26,10 @@
  * (Ethereum, Arbitrum) added 2026-11-16 from Chainflip's own `encodeVaultSwapData`, matching its mainnet
  * chain spec (chainflip-backend berghain.rs `eth_vault_address` / `arb_vault_address`) and its deployed
  * Vault.sol. Note the same Arbitrum address is Chainflip's BSC Vault: a BNB-origin Chainflip swap would
- * need its own entry here, and is refused until it has one.
+ * need its own entry here, and is refused until it has one. Paxos Labs' Transit station (Ethereum, Arbitrum,
+ * Robinhood) added 2026-11-22 from its quote API's `transaction.to`, the same address on all three: verified on
+ * Sourcify on Ethereum and Arbitrum (TransitStation.sol); Robinhood's bytecode is the same but for its immutables
+ * (LayerZero endpoint and endpoint id).
  */
 
 const ETHEREUM = 1;
@@ -133,6 +136,13 @@ export const KHALANI_DEPOSITS: Record<number, string> = {
   [POLYGON]: "0x57F1DE920c6F9b749EDB729b43b0FF1878AbeF97",
   [ROBINHOOD]: "0xbC60926963dC61F21B10801F90E5BF177279866D",
 };
+
+/** Paxos Labs' Transit station: the same contract on Ethereum, Arbitrum and Robinhood Chain. Every Transit order
+ * is one submitOrder call to it, which its approval names: it pulls the order's amount of USDG from the sender,
+ * and Paxos Labs pays the receiver the order names on the destination. The guard reads the token, the amount,
+ * the receiver and the integrator fee in the order, and caps the coin it sends (LayerZero's message fee). */
+export const TRANSIT_STATION = "0x49AAA987b1a7e9E4AE091dcD8332c39F322D7d28";
+export const TRANSIT_CHAINS: readonly number[] = [ETHEREUM, ARBITRUM, ROBINHOOD];
 
 /**
  * Circle's CCTP v2 TokenMessengerV2: one address on every EVM chain (its proxy's localMessageTransmitter read
@@ -258,6 +268,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   ...Object.entries(KHALANI_DEPOSITS).map(([chain, deposit]): [readonly number[], readonly string[], string] => [[Number(chain)], [deposit], "Khalani deposit"]),
   ...Object.entries(CHAINFLIP_VAULTS).map(([chain, vault]): [readonly number[], readonly string[], string] => [[Number(chain)], [vault], "Chainflip Vault"]),
   [CCTP_SOURCE_CHAINS, [CCTP_TOKEN_MESSENGER], "Circle CCTP TokenMessengerV2"],
+  [TRANSIT_CHAINS, [TRANSIT_STATION], "Transit station"],
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).

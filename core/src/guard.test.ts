@@ -19,6 +19,8 @@ import type { ExecutionDTO } from "./types";
 // FlowRouter's three (2026-11-09): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign.
 // Khalani's one (2026-11-13): Khalani's own build of a real, unfunded order, in /v1/execute's shape, as Khalani
 // isn't in RAVN's race yet.
+// Transit's one (2026-11-22): RAVN's own build (its Transit adapter) of a real, unfunded order from Transit's
+// quote API, in /v1/execute's shape, as Transit isn't in RAVN's race yet.
 const FIXTURES = JSON.parse(readFileSync(new URL("./guard.fixtures.json", import.meta.url), "utf8")) as {
   name: string;
   intent: SwapIntent;
@@ -610,6 +612,96 @@ describe("checkExecution: Khalani's deposit", () => {
       t = tampered((d) => sel + d.slice(10));
       refuses(t.e, t.intent, /call to Khalani isn't a deposit/);
     }
+  });
+});
+
+describe("checkExecution: Transit's station", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const STATION = "0x49aaa987b1a7e9e4ae091dcd8332c39f322d7d28";
+  const NAME = "42161->4663 usdg transit (RAVN's own build)";
+  // Word i after the selector: the order's route (0–2), offerAmount 3, receiver 4, integratorFee 6.
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tampered = (edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(NAME);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    const call = e.calls!.find((c) => c.to.toLowerCase() === STATION)!;
+    call.data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = call.value = value;
+    return { e, intent };
+  };
+
+  it("passes RAVN's own build, message fee included, and knows the station on Ethereum, Arbitrum and Robinhood only", () => {
+    const { execution, intent } = fixture(NAME);
+    expect(BigInt((execution as Tx).transaction.value!)).toBeGreaterThan(0n);
+    expect(() => checkExecution(execution, intent)).not.toThrow();
+    const chains = Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(STATION));
+    expect(chains.sort()).toEqual(["1", "42161", "4663"]);
+  });
+
+  it("holds the order to the token and amount being swapped", () => {
+    let t = tampered((d) => setWord(d, 3, word(10_000_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered((d) => setWord(d, 3, word(0n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered((d) => setWord(d, 1, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+  });
+
+  it("refuses an order paying anyone but the destination, or carrying a fee of its own", () => {
+    let t = tampered((d) => setWord(d, 4, word(ATTACKER)));
+    refuses(t.e, t.intent, /pays an address other than the swap's destination/);
+    t = tampered((d) => setWord(d, 6, word(1n)));
+    refuses(t.e, t.intent, /carries a fee of its own/);
+  });
+
+  it("caps the coin it sends at a message fee, and refuses any other call to the station", () => {
+    let t = tampered((d) => d, "5000000000000001");
+    refuses(t.e, t.intent, /message fee is more than any it costs/);
+    t = tampered((d) => d.slice(0, 10 + 64 * 5));
+    refuses(t.e, t.intent, /cut short/);
+    for (const sel of ["0xdeadbeef", "0xa9059cbb", "0x00000000"]) {
+      t = tampered((d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to Transit isn't submitOrder/);
+    }
+  });
+
+  it("refuses the station where Transit doesn't run (Base): its approval, and the order itself", () => {
+    const { execution, intent } = fixture(NAME);
+    const e = execution as Tx;
+    for (const c of [e.transaction, e.approval!, ...e.calls!]) c.chainId = 8453;
+    refuses(e, { ...intent, inputChainId: 8453 }, /The approval names a spender RAVN doesn't route through/);
+    const bare = { ...e, approval: undefined, calls: e.calls!.filter((c) => c.to.toLowerCase() === STATION) } as Tx;
+    refuses(bare, { ...intent, inputChainId: 8453 }, /The swap goes to a contract RAVN doesn't route through/);
+  });
+
+  it("refuses submitOrderWithPermit, and passes a message fee of exactly the cap", () => {
+    let t = tampered((d) => "0x8432dc32" + d.slice(10));
+    refuses(t.e, t.intent, /call to Transit isn't submitOrder/);
+    t = tampered((d) => d, "5000000000000000");
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+  });
+
+  it("passes RAVN's fee beside the order as every integrator's Transit swap carries it, and refuses more than the swap", () => {
+    // The intent is the order plus RAVN's fee (5 bp of 10,000.5 USDG), paid to RAVN's wallet in USDG beside it.
+    const withFee = (fee: bigint) => {
+      const { execution, intent } = fixture(NAME);
+      const e = execution as Tx;
+      const usdg = intent.inputToken;
+      const transaction = {
+        to: usdg,
+        data: "0xa9059cbb" + word("0x12d2425fD88c693EDB4dE004E0c747879B7D6933") + word(fee) + "3f79be6a1d3673891446b1a28f32b858",
+        value: "0",
+        chainId: 42161,
+      };
+      e.fee = { amount: fee.toString(), address: "0x12d2425fD88c693EDB4dE004E0c747879B7D6933", chainId: 42161, transaction } as Tx["fee"];
+      e.calls = [...e.calls!, transaction];
+      return { e, intent: { ...intent, inputAmount: (10_000_000_000n + 5_000_000n).toString() } };
+    };
+    let t = withFee(5_000_000n);
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+    t = withFee(5_000_001n);
+    expect(() => checkExecution(t.e, t.intent)).toThrow();
   });
 });
 
