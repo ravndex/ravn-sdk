@@ -259,6 +259,7 @@ describe("checkExecution: EVM transactions", () => {
         "0xC87De04e2EC1F4282dFF2933A2D58199f688fC3d", // Nordstern's guard
         "0x8f98a825ac89501afe33299ddb561829a24c0cc4", // OKX router
         "0xd72f9Af181A0eB1B8550a00124ECdb71Bb758C89", // OKX approvals
+        "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d", // Circle CCTP TokenMessengerV2 (fast burns, 0.4.37)
       ].map((a) => a.toLowerCase()).sort()
     );
     expect(separateSpender(57073, "0x8f98a825ac89501afe33299ddb561829a24c0cc4")).toBe("0xd72f9af181a0eb1b8550a00124ecdb71bb758c89");
@@ -1501,13 +1502,48 @@ describe("checkExecution: Circle's CCTP burn", () => {
     return { e: execution, intent };
   };
 
-  it("passes both delivered canary burns, and knows TokenMessengerV2 only on the four source chains", () => {
+  it("passes both delivered canary burns, and knows TokenMessengerV2 only on the five source chains", () => {
     for (const kind of ["evm", "sol"] as const) {
       const { e, intent } = build(kind);
       expect(() => checkExecution(e, intent)).not.toThrow();
     }
     const chains = Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(MESSENGER));
-    expect(chains.sort()).toEqual(["137", "143", "43114", "999"]);
+    expect(chains.sort()).toEqual(["137", "143", "43114", "57073", "999"]);
+  });
+
+  it("from Ink (sdk 0.4.37): only a fast burn (finality 1000) passes, and a fast burn from anywhere else is refused", () => {
+    const INK_USDC = "0x2d270e6886d130d724215a266106e6832161eaed";
+    const fromInk = (finality: bigint) => {
+      const t = build("evm", (d) => setWord(setWord(d, 3, word(INK_USDC)), 6, word(finality)), { inputChainId: 57073, inputToken: INK_USDC });
+      t.e.transaction.chainId = 57073;
+      t.e.approval = { ...t.e.approval!, to: INK_USDC, chainId: 57073 };
+      return t;
+    };
+    let t = fromInk(1000n);
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+    t = fromInk(2000n);
+    refuses(t.e, t.intent, /isn't a fast transfer/);
+    t = fromInk(0n);
+    refuses(t.e, t.intent, /isn't a fast transfer/);
+    // Fee limit: 5 USDC plus 3 bp of the amount from Ink (a $100k fast burn: 2 bp = 20 USDC + delivery), never more.
+    const big = (maxFee: bigint) => {
+      const amount = 100_000_000_000n;
+      const r = build("evm", (d) => setWord(setWord(setWord(setWord(d, 3, word(INK_USDC)), 6, word(1000n)), 0, word(amount)), 5, word(maxFee)), { inputChainId: 57073, inputToken: INK_USDC, inputAmount: amount.toString() });
+      r.e.transaction.chainId = 57073;
+      r.e.approval = { ...r.e.approval!, to: INK_USDC, chainId: 57073, data: `0x095ea7b3${word(MESSENGER)}${word(amount)}`, amount: amount.toString() };
+      return r;
+    };
+    t = big(35_000_000n); // 5 + 30
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+    t = big(35_000_001n);
+    refuses(t.e, t.intent, /lets Circle keep too much/);
+    // Standard burns keep 5 USDC: 5.000001 from Polygon is refused.
+    t = build("evm", (d) => setWord(setWord(setWord(d, 0, word(100_000_000_000n)), 5, word(5_000_001n)), 6, word(2000n)), { inputAmount: "100000000000" });
+    t.e.approval = { ...t.e.approval!, data: `0x095ea7b3${word(MESSENGER)}${word(100_000_000_000n)}`, amount: "100000000000" };
+    refuses(t.e, t.intent, /lets Circle keep too much/);
+    // A fast burn from Polygon (where RAVN burns standard) is refused.
+    t = build("evm", (d) => setWord(d, 6, word(1000n)));
+    refuses(t.e, t.intent, /isn't a standard transfer/);
   });
 
   it("refuses it from a chain RAVN's venue doesn't burn on", () => {
