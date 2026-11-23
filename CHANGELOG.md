@@ -3,6 +3,14 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.36
+
+### Added
+
+- The wallet check knows Ink as a destination of Circle's CCTP burn (CCTP domain 21), for RAVN's CCTP venue into Ink.
+  Every other check on the burn is unchanged. 0.4.35 refuses a burn into Ink ("isn't one a CCTP burn delivers to"), so
+  RAVN's API offers CCTP into Ink only to 0.4.36+.
+
 ## @ravnexchange/sdk 0.4.35
 
 ### Added
