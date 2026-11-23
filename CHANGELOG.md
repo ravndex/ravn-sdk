@@ -20,6 +20,16 @@ sale, which they also refuse).
 
 - Nothing to change.
 
+## @ravnexchange/sdk 0.4.37
+
+### Added
+
+- The wallet check knows Ink as a source of Circle's CCTP burn, for RAVN's CCTP venue from Ink. From Ink the burn must
+  be a fast transfer (finality 1000: Ink's standard one waits ~30 min for Ethereum); from the other four sources it
+  stays standard (2000). A fast burn's fee limit may also be 3 bp of the amount above the 5 USDC (Circle's fast fee
+  from Ink is 2 bp); still at most a quarter of the burn. Every other check on the burn is unchanged. 0.4.36 refuses a
+  burn from Ink, so RAVN's API offers CCTP from Ink only to 0.4.37+.
+
 ## @ravnexchange/sdk 0.4.36
 
 ### Added

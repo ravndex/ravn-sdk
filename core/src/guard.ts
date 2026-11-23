@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { CCTP_DOMAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CCTP_DOMAINS, CCTP_FAST_SOURCE_CHAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt, checkLayerswapBitcoinPsbt } from "./guard-bitcoin";
 import { associatedTokenAddress, base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -95,6 +95,7 @@ const SEL = {
 const CCTP_FORWARD = `${Array.from("cctp-forward", (c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("").padEnd(48, "0")}0000000000000000`;
 // The standard finality RAVN's burns use (Circle's 2000: free, and its attestation never expires).
 const CCTP_STANDARD_FINALITY = 2000n;
+const CCTP_FAST_FINALITY = 1000n;
 const SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const hex32 = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
@@ -533,8 +534,8 @@ function classifyEvmCall(
     // and burns it; Circle mints the same amount, less at most `maxFee`, to `mintRecipient` on the destination
     // domain. Nothing else can redirect it once burned, so every field is held: the swap's token within its
     // amount, the swap's destination chain and wallet (into Solana, that wallet's USDC account), no named
-    // caller (anyone, the user included, can finish the mint), standard finality, a bounded fee, and Circle's
-    // delivery request as the only hook data.
+    // caller (anyone, the user included, can finish the mint), the source's finality (fast from Ink, standard
+    // elsewhere), a bounded fee, and Circle's delivery request as the only hook data.
     if (sel !== SEL.cctpBurnWithHook) fail("The call to Circle's TokenMessenger isn't a burn RAVN builds", { selector: sel });
     if (ctx.native) fail("A CCTP burn was built for a coin sell");
     if (value !== 0n) fail("The CCTP burn sends value", { value: value.toString() });
@@ -546,10 +547,14 @@ function classifyEvmCall(
     if (domain === undefined || ctx.outputChainId === ctx.chainId) fail("The swap's output chain isn't one a CCTP burn delivers to", { chainId: ctx.outputChainId });
     if (wordUint(data, 1) !== BigInt(domain)) fail("The burn delivers to a chain other than the swap's", { domain: wordUint(data, 1).toString() });
     if (wordUint(data, 4) !== 0n) fail("The burn names a caller: only it could finish the mint");
-    if (wordUint(data, 6) !== CCTP_STANDARD_FINALITY) fail("The burn isn't a standard transfer", { finality: wordUint(data, 6).toString() });
-    // Circle spends the whole limit it's given, so a wide one is the user's loss: at most a quarter of the burn, and 5 USDC.
+    const fast = CCTP_FAST_SOURCE_CHAINS.includes(ctx.chainId);
+    if (wordUint(data, 6) !== (fast ? CCTP_FAST_FINALITY : CCTP_STANDARD_FINALITY)) {
+      fail(fast ? "The burn isn't a fast transfer" : "The burn isn't a standard transfer", { finality: wordUint(data, 6).toString() });
+    }
+    // Circle spends the whole limit it's given, so a wide one is the user's loss: at most a quarter of the burn, and 5 USDC
+    // (a fast burn: plus 3 bp of the amount, for Circle's fast fee, 2 bp from Ink).
     const maxFee = wordUint(data, 5);
-    if (maxFee * 4n > pulled || maxFee > 5_000_000n) fail("The burn lets Circle keep too much", { maxFee: maxFee.toString() });
+    if (maxFee * 4n > pulled || maxFee > 5_000_000n + (fast ? (pulled * 3n) / 10_000n : 0n)) fail("The burn lets Circle keep too much", { maxFee: maxFee.toString() });
     const recipient = word(data, 2);
     const hook = wordBytes(data, 7);
     if (ctx.outputChainId === SOLANA_CHAIN_ID) {
