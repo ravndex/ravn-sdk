@@ -3,9 +3,9 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
-## @ravnexchange/sdk 0.4.37
+## @ravnexchange/sdk 0.4.38
 
-Paxos Labs' Transit: USDG between Ethereum, Arbitrum and Robinhood Chain. 0.4.36 and older refuse its swaps: "The
+Paxos Labs' Transit: USDG between Ethereum, Arbitrum and Robinhood Chain. 0.4.37 and older refuse its swaps: "The
 approval names a spender RAVN doesn't route through" (and its order sends ETH, LayerZero's message fee, on a token
 sale, which they also refuse).
 
