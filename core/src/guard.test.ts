@@ -1537,6 +1537,17 @@ describe("checkExecution: Circle's CCTP burn", () => {
     refuses(t.e, t.intent, /isn't one a CCTP burn delivers to/);
   });
 
+  it("into Ink (domain 21, sdk 0.4.36): the burn passes when it names Ink, and is refused when it names another chain", () => {
+    // The canary burn re-pointed at Ink: domain word 21, the swap quoted for Ink.
+    let t = build("evm", (d) => setWord(d, 1, word(21n)), { outputChainId: 57073 });
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+    // The swap quoted Ink, the burn delivers to Base (6): refused, and the reverse.
+    t = build("evm", undefined, { outputChainId: 57073 });
+    refuses(t.e, t.intent, /delivers to a chain other than the swap's/);
+    t = build("evm", (d) => setWord(d, 1, word(21n)));
+    refuses(t.e, t.intent, /delivers to a chain other than the swap's/);
+  });
+
   it("refuses a mint to anyone but the destination (on Solana, its own USDC account)", () => {
     let t = build("evm", (d) => setWord(d, 2, word(ATTACKER)));
     refuses(t.e, t.intent, /mints to an address other than the swap's destination/);

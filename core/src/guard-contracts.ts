@@ -157,6 +157,7 @@ export const CCTP_DOMAINS: Record<number, number> = {
   [WORLD_CHAIN]: 14,
   [MONAD]: 15,
   [HYPEREVM]: 19,
+  [INK]: 21,
   [ARC]: 26,
 };
 
