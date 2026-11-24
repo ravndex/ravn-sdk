@@ -11,11 +11,12 @@ Lightning (chain -3): a payer pays one Lightning invoice and gets a token on an 
 ### Added
 
 - Lightning in the check (`checkExecution`): a DEPOSIT only, its `deposit.address` a mainnet BOLT11 invoice with an
-  amount, that amount in whole sats equal to `deposit.amount` and at most the swap's, and nothing beside it (no fee,
+  amount above zero, that amount in whole sats equal to `deposit.amount` and at most the swap's, and nothing beside it (no fee,
   calls, PSBT or transaction: RAVN's fee on a Lightning swap rides inside the venue's own order). Whom the invoice
   pays isn't in it to check; RAVN's server checks the bridge behind it.
-- `executeAndTrack()` with `sendDeposit` hands a Lightning invoice back unsent, saying so in `depositNotSent`: show
-  `deposit.address` for the payer to pay from any Lightning wallet before `deposit.expiresAt`, when its price ends.
+- `executeAndTrack()` with `sendDeposit` hands a Lightning invoice back unsent, saying so in `depositNotSent`, even
+  inside the 2 minutes before `deposit.expiresAt` (nothing is sent from here): show `deposit.address` for the payer to
+  pay from any Lightning wallet before then, when its price ends.
 - -3 in the generated `ChainId` and "breez" in the venue lists. The quote and execute request types still list only
   live chains, so a Lightning quote request types once RAVN lists Lightning there (a later release).
 

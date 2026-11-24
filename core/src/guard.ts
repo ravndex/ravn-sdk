@@ -1005,7 +1005,8 @@ function checkLightning(ctx: Ctx, execution: ExecutionDTO) {
     fail("Something besides the Lightning invoice came back for a Lightning payment");
   }
   const sats = bolt11Sats(String(deposit.address));
-  if (sats === null) fail("The deposit isn't a mainnet Lightning invoice with an amount", { address: deposit.address });
+  // Zero too: a wallet may read an invoice for 0 as one whose amount the payer chooses.
+  if (sats === null || sats <= 0n) fail("The deposit isn't a mainnet Lightning invoice with an amount", { address: deposit.address });
   if (sats !== big(deposit.amount, "The deposit amount")) {
     fail("The invoice asks for a different amount than the deposit states", { invoiceSats: sats.toString(), amount: deposit.amount });
   }

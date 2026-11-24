@@ -784,6 +784,11 @@ export async function executeAndTrack(
     // Typed away, but a newer API can answer with a type this version doesn't know: never sent.
     const type = (execution as { executionType: string }).executionType;
     if (type !== "DEPOSIT") return unsent(`executionType ${type} isn't one this SDK version can send`);
+    // A Lightning invoice is paid from the payer's own Lightning wallet, never sent from here, so it's handed back
+    // before the deposit window below is read: its 2-minute price window is the payer's to meet, not a send's.
+    if (deposit.chainId === LIGHTNING_CHAIN_ID) {
+      return unsent("it's a Lightning invoice (deposit.address): show it for the payer to pay from any Lightning wallet before deposit.expiresAt, when its price ends");
+    }
     // A deposit that must arrive by `expiresAt` (a venue order with a deadline): none sent with under
     // 2 minutes left, or it lands at an expired order. One it can't read is refused, not guessed.
     // ponytail: read on this device's clock (the API sends no window to count from): a clock over 2
@@ -851,9 +856,7 @@ export async function executeAndTrack(
           ? "RAVN returned no PSBT for it (it builds one only from a bc1q… userAddress, when it can within a few seconds)"
           : chainId === SOLANA_CHAIN_ID
             ? "RAVN returned no transaction for it (it builds one only for a deposit carrying RAVN's fee, when it can within a few seconds)"
-            : chainId === LIGHTNING_CHAIN_ID
-              ? "it's a Lightning invoice (deposit.address): show it for the payer to pay from any Lightning wallet before deposit.expiresAt, when its price ends"
-              : "RAVN returned nothing ready to sign for it"
+            : "RAVN returned nothing ready to sign for it"
       );
     }
     const handler = deposit.psbt ? "sendBitcoinPsbt" : "sendSolanaTransaction";

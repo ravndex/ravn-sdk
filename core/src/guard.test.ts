@@ -1084,6 +1084,10 @@ describe("checkExecution: Lightning invoices", () => {
     for (const address of [synth("lntb2500u"), synth("lntbs2500u"), synth("lnbcrt2500u"), synth("lnbc"), synth("lnbc1500p"), synth("lnbc1n"), "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", `${SPEC}b`]) {
       refuses(deposit({ address }), intent, /isn't a mainnet Lightning invoice with an amount/);
     }
+    // An invoice for 0, which a wallet may read as one whose amount the payer chooses.
+    for (const hrp of ["lnbc0u", "lnbc0p", "lnbc0"]) {
+      refuses(deposit({ address: synth(hrp), amount: "0" }), intent, /isn't a mainnet Lightning invoice with an amount/);
+    }
     refuses(deposit({ amount: "249999" }), intent, /different amount than the deposit states/);
     refuses(deposit(), { ...intent, inputAmount: "249999" }, /more than the swap's amount/);
   });
