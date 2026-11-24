@@ -282,6 +282,7 @@ export type DepositFeePayment =
 
 const BITCOIN_CHAIN_ID = -1;
 const SOLANA_CHAIN_ID = -2;
+const LIGHTNING_CHAIN_ID = -3;
 const EVM_TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 // What a sandbox status poll is sent as ref when there's no tx hash: RAVN doesn't read it.
 const SANDBOX_REF = "sandbox";
@@ -783,6 +784,11 @@ export async function executeAndTrack(
     // Typed away, but a newer API can answer with a type this version doesn't know: never sent.
     const type = (execution as { executionType: string }).executionType;
     if (type !== "DEPOSIT") return unsent(`executionType ${type} isn't one this SDK version can send`);
+    // A Lightning invoice is paid from the payer's own Lightning wallet, never sent from here, so it's handed back
+    // before the deposit window below is read: its 2-minute price window is the payer's to meet, not a send's.
+    if (deposit.chainId === LIGHTNING_CHAIN_ID) {
+      return unsent("it's a Lightning invoice (deposit.address): show it for the payer to pay from any Lightning wallet before deposit.expiresAt, when its price ends");
+    }
     // A deposit that must arrive by `expiresAt` (a venue order with a deadline): none sent with under
     // 2 minutes left, or it lands at an expired order. One it can't read is refused, not guessed.
     // ponytail: read on this device's clock (the API sends no window to count from): a clock over 2

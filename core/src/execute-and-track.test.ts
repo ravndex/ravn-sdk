@@ -339,6 +339,22 @@ describe("executeAndTrack: DEPOSIT with sendDeposit", () => {
     expect(r.txHash).toBeUndefined();
   });
 
+  it("Lightning: the invoice is handed back unsent, even inside its 2-minute price window, and nothing is sent", async () => {
+    const { handlers } = evmHandlers({ sendCalls: vi.fn() });
+    const lightning = {
+      executionType: "DEPOSIT", quoteToken: "qt-exec", statusRef: "breez-ref",
+      // As RAVN sends it: Breez's quote ends ~2 minutes after the build, so it's under the send margin on arrival.
+      deposit: { address: `lnbc199990n1p${"q".repeat(300)}`, amount: "19999", chainId: -3, expiresAt: new Date(Date.now() + 110_000).toISOString() },
+    };
+    const { result, getStatus } = run(lightning, handlers);
+    const r = await result;
+    expect(r.depositNotSent).toMatch(/Lightning invoice/);
+    expect(r.txHash).toBeUndefined();
+    expect(handlers.sendTransaction).not.toHaveBeenCalled();
+    expect(handlers.sendCalls).not.toHaveBeenCalled();
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
   it("EVM, batchable: deposit and RAVN's fee in one wallet confirmation, then tracked with the tx that carried the fee", async () => {
     const sendCalls = vi.fn(async () => [DEP]);
     const { handlers } = evmHandlers({ sendCalls });

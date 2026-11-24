@@ -1055,6 +1055,54 @@ describe("checkExecution: Layerswap's Bitcoin PSBT (TRANSACTION, posted back thr
   });
 });
 
+describe("checkExecution: Lightning invoices", () => {
+  // BOLT 11's own example invoice: 2500u, 250,000 sats.
+  const SPEC =
+    "lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se903vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp";
+  const synth = (hrp: string) => `${hrp}1p${"q".repeat(300)}`;
+  const intent: SwapIntent = { inputChainId: -3, inputToken: "native", inputAmount: "250000", userAddress: "payer@getalby.com" };
+  const deposit = (over: Record<string, unknown> = {}, extra: Record<string, unknown> = {}): ExecutionDTO =>
+    ({
+      executionType: "DEPOSIT",
+      quoteToken: "qt",
+      statusRef: "breez:q_1:1794992346:8453:0x03508bb71268bba25ecacc8f620e01866650532c:rt",
+      deposit: { address: SPEC, amount: "250000", chainId: -3, ...over },
+      ...extra,
+    }) as ExecutionDTO;
+
+  it("accepts an invoice for the swap's sats, or under them, whatever its case", () => {
+    expect(() => checkExecution(deposit(), intent)).not.toThrow();
+    // RAVN sizes Breez's invoice up to a sat under the quote.
+    expect(() => checkExecution(deposit(), { ...intent, inputAmount: "250001" })).not.toThrow();
+    expect(() => checkExecution(deposit({ address: SPEC.toUpperCase() }), intent)).not.toThrow();
+    for (const [hrp, sats] of [["lnbc200u", "20000"], ["lnbc312460n", "31246"], ["lnbc25m", "2500000"], ["lnbc2", "200000000"], ["lnbc2500000p", "250"]]) {
+      expect(() => checkExecution(deposit({ address: synth(hrp), amount: sats }), { ...intent, inputAmount: sats })).not.toThrow();
+    }
+  });
+
+  it("refuses another network, no amount, a sub-sat amount, or an amount other than the deposit's", () => {
+    for (const address of [synth("lntb2500u"), synth("lntbs2500u"), synth("lnbcrt2500u"), synth("lnbc"), synth("lnbc1500p"), synth("lnbc1n"), "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", `${SPEC}b`]) {
+      refuses(deposit({ address }), intent, /isn't a mainnet Lightning invoice with an amount/);
+    }
+    // An invoice for 0, which a wallet may read as one whose amount the payer chooses.
+    for (const hrp of ["lnbc0u", "lnbc0p", "lnbc0"]) {
+      refuses(deposit({ address: synth(hrp), amount: "0" }), intent, /isn't a mainnet Lightning invoice with an amount/);
+    }
+    refuses(deposit({ amount: "249999" }), intent, /different amount than the deposit states/);
+    refuses(deposit(), { ...intent, inputAmount: "249999" }, /more than the swap's amount/);
+  });
+
+  it("refuses anything beside the invoice, another chain, and anything but a deposit", () => {
+    refuses(deposit({}, { fee: { amount: "100", address: "x", chainId: -3 } }), intent, /besides the Lightning invoice/);
+    refuses(deposit({}, { calls: [{ to: "0x0000000000000000000000000000000000000001", data: "0x", chainId: -3 }] }), intent, /besides the Lightning invoice/);
+    refuses(deposit({ psbt: "cHNidP8=" }), intent, /besides the Lightning invoice/);
+    refuses(deposit({ chainId: undefined }), intent, /names no chain/);
+    refuses(deposit({ chainId: -1 }), intent, /is for chain -1/);
+    refuses({ executionType: "TRANSACTION", quoteToken: "qt", statusRef: "x", transaction: { chainId: -3 } } as unknown as ExecutionDTO, intent, /Only a Lightning invoice/);
+    refuses(deposit(), { ...intent, inputToken: "BTC" }, /isn't an address/);
+  });
+});
+
 describe("checkExecution: Bitcoin PSBTs", () => {
   const intent: SwapIntent = { inputChainId: -1, inputToken: "native", inputAmount: "200000", userAddress: BTC_USER };
   const deposit = (b64: string): ExecutionDTO => ({

@@ -51,6 +51,7 @@ const NATIVE_EVM = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const BITCOIN_CHAIN_ID = -1;
 const SOLANA_CHAIN_ID = -2;
+const LIGHTNING_CHAIN_ID = -3;
 
 /** The most coin a Transit order may send: its LayerZero message fee, 0.00016–0.001 ETH measured 2026-11-22 (into
  * Ethereum the dearest). 0.005 ETH leaves room for gas spikes and still caps what a tampered answer could spend. */
@@ -230,6 +231,7 @@ const TOKEN_FORMAT: Record<string, RegExp> = {
   evm: /^0x[0-9a-fA-F]{40}$/,
   [SOLANA_CHAIN_ID]: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
   [BITCOIN_CHAIN_ID]: /^native$/,
+  [LIGHTNING_CHAIN_ID]: /^native$/,
 };
 
 function context(intent: SwapIntent, options: GuardOptions): Ctx {
@@ -850,6 +852,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
  * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Khalani's, Transit's and Chainflip's Vault amounts are read; others aren't);
+ * whom a Lightning invoice pays (a node key, not an address: RAVN's server checks the bridge behind it);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
  * RPC). Your user's wallet preview is still the last word.
@@ -870,6 +873,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
   if (ctx.chainId === BITCOIN_CHAIN_ID || ctx.chainId === SOLANA_CHAIN_ID) {
     return checkNonEvm(ctx, execution, intent);
   }
+  if (ctx.chainId === LIGHTNING_CHAIN_ID) return checkLightning(ctx, execution);
   if (!KNOWN_CONTRACTS[ctx.chainId]) fail(`This SDK version doesn't know chain ${ctx.chainId}: update @ravnexchange/sdk`);
 
   const type = (execution as { executionType: string }).executionType;
@@ -972,6 +976,41 @@ function checkCalls(ctx: Ctx, calls: Call[], expected: Call[]) {
     fail("The execution's calls aren't the transactions it describes");
   }
   for (const c of calls) sameChain(ctx, c.chainId, "A call", true);
+}
+
+/**
+ * A mainnet BOLT11 invoice's amount in whole sats, from its human-readable part; null for another network (testnet,
+ * signet, regtest), no amount (the payer's wallet would choose one), a sub-sat amount, or anything but bech32
+ * characters after the separator. The same reading as RAVN's server (bolt11Sats in its Breez adapter). The checksum
+ * isn't verified: no wallet pays an invoice whose checksum is bad.
+ */
+function bolt11Sats(invoice: string): bigint | null {
+  const m = /^lnbc(\d+)([munp]?)1[02-9ac-hj-np-z]+$/.exec(invoice.trim().toLowerCase());
+  if (!m) return null;
+  const n = BigInt(m[1]);
+  // msat = n × 1e11 (whole BTC) / 1e3 (m) / 1e6 (u) / 1e9 (n) / 1e12 (p).
+  const msat = { "": n * 100_000_000_000n, m: n * 100_000_000n, u: n * 100_000n, n: n * 100n, p: n / 10n }[m[2]]!;
+  if (m[2] === "p" && n % 10n !== 0n) return null;
+  return msat % 1000n === 0n ? msat / 1000n : null;
+}
+
+// Lightning: the payer pays one invoice from any Lightning wallet, nothing to sign here. Its amount is what the
+// wallet pays, so it's held to the deposit's and the swap's; nothing may ride beside it (RAVN's fee on a Lightning
+// swap is inside the venue's own order).
+function checkLightning(ctx: Ctx, execution: ExecutionDTO) {
+  if (execution.executionType !== "DEPOSIT") fail("Only a Lightning invoice can come back for a Lightning payment");
+  const { deposit } = execution;
+  sameChain(ctx, deposit.chainId, "The invoice", true);
+  if (deposit.psbt || deposit.transaction || execution.fee || execution.calls?.length) {
+    fail("Something besides the Lightning invoice came back for a Lightning payment");
+  }
+  const sats = bolt11Sats(String(deposit.address));
+  // Zero too: a wallet may read an invoice for 0 as one whose amount the payer chooses.
+  if (sats === null || sats <= 0n) fail("The deposit isn't a mainnet Lightning invoice with an amount", { address: deposit.address });
+  if (sats !== big(deposit.amount, "The deposit amount")) {
+    fail("The invoice asks for a different amount than the deposit states", { invoiceSats: sats.toString(), amount: deposit.amount });
+  }
+  if (sats > ctx.amount) fail("The invoice asks for more than the swap's amount", { invoiceSats: sats.toString() });
 }
 
 function checkNonEvm(ctx: Ctx, execution: ExecutionDTO, intent: SwapIntent) {
