@@ -282,6 +282,7 @@ export type DepositFeePayment =
 
 const BITCOIN_CHAIN_ID = -1;
 const SOLANA_CHAIN_ID = -2;
+const LIGHTNING_CHAIN_ID = -3;
 const EVM_TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 // What a sandbox status poll is sent as ref when there's no tx hash: RAVN doesn't read it.
 const SANDBOX_REF = "sandbox";
@@ -850,7 +851,9 @@ export async function executeAndTrack(
           ? "RAVN returned no PSBT for it (it builds one only from a bc1q… userAddress, when it can within a few seconds)"
           : chainId === SOLANA_CHAIN_ID
             ? "RAVN returned no transaction for it (it builds one only for a deposit carrying RAVN's fee, when it can within a few seconds)"
-            : "RAVN returned nothing ready to sign for it"
+            : chainId === LIGHTNING_CHAIN_ID
+              ? "it's a Lightning invoice (deposit.address): show it for the payer to pay from any Lightning wallet before deposit.expiresAt, when its price ends"
+              : "RAVN returned nothing ready to sign for it"
       );
     }
     const handler = deposit.psbt ? "sendBitcoinPsbt" : "sendSolanaTransaction";

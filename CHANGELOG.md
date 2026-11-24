@@ -3,6 +3,26 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.39
+
+Lightning (chain -3): a payer pays one Lightning invoice and gets a token on an EVM chain, for RAVN's Breez venue.
+0.4.38 and older refuse every Lightning swap: "This SDK version doesn't know chain -3: update @ravnexchange/sdk".
+
+### Added
+
+- Lightning in the check (`checkExecution`): a DEPOSIT only, its `deposit.address` a mainnet BOLT11 invoice with an
+  amount, that amount in whole sats equal to `deposit.amount` and at most the swap's, and nothing beside it (no fee,
+  calls, PSBT or transaction: RAVN's fee on a Lightning swap rides inside the venue's own order). Whom the invoice
+  pays isn't in it to check; RAVN's server checks the bridge behind it.
+- `executeAndTrack()` with `sendDeposit` hands a Lightning invoice back unsent, saying so in `depositNotSent`: show
+  `deposit.address` for the payer to pay from any Lightning wallet before `deposit.expiresAt`, when its price ends.
+- -3 in the generated `ChainId` and "breez" in the venue lists. The quote and execute request types still list only
+  live chains, so a Lightning quote request types once RAVN lists Lightning there (a later release).
+
+### Upgrading
+
+- Nothing to change.
+
 ## @ravnexchange/sdk 0.4.38
 
 Paxos Labs' Transit: USDG between Ethereum, Arbitrum and Robinhood Chain. 0.4.37 and older refuse its swaps: "The
