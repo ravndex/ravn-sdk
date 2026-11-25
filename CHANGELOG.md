@@ -3,6 +3,28 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.40
+
+Mancer (mancer.xyz) on Robinhood Chain. 0.3.0–0.4.39 refuse every Mancer swap: "The approval names a spender RAVN
+doesn't route through" on a token sell, "The swap goes to a contract RAVN doesn't route through" on an ETH sell. This
+release knows Mancer's router, verified on Sourcify, and the allowance target its constructor deploys.
+
+### Added
+
+- Mancer's router (`0xa628…B3e7`, Robinhood Chain only) in the check (`checkExecution`): the contract a Mancer swap
+  calls, and a target only, never a spender (it runs venue calldata as itself).
+- Mancer's allowance target (`0x4c16…e388`) as the spender a Mancer swap's approval names: a spender only, and only beside
+  a call to Mancer's router (refused in a signature-only execution). Its one function, callable only by the router, moves
+  funds from the router's caller into the router.
+- A Mancer swap must be one `execute` (its router's other functions are refused), taking the token being swapped (the
+  zero address for an ETH sell, with exactly the ETH sent) and more than 0, at most the swap's amount: the router pulls
+  that once, through the allowance target, so an allowance your user already gave it is held to the swap.
+- "mancer" in the generated venue lists.
+
+### Upgrading
+
+- Nothing to change. Update to get Mancer's Robinhood prices once RAVN switches it on.
+
 ## @ravnexchange/sdk 0.4.39
 
 Lightning (chain -3): a payer pays one Lightning invoice and gets a token on an EVM chain, for RAVN's Breez venue.

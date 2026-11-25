@@ -17,6 +17,8 @@ import type { ExecutionDTO } from "./types";
 // Fynd's six (2026-11-06): RAVN's own builds, from a local server with Fynd switched on; their router moved to
 // the one Fynd redeployed on 16 Nov (2026-11-22), whose calls are the same (it isn't named in the calldata).
 // FlowRouter's three (2026-11-09): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign.
+// Mancer's four (2026-11-25): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign, from a
+// local server with Mancer switched on (the stock sell from a TSLA holder: Mancer can't simulate it, RAVN does).
 // Khalani's one (2026-11-13): Khalani's own build of a real, unfunded order, in /v1/execute's shape, as Khalani
 // isn't in RAVN's race yet.
 // Transit's one (2026-11-22): RAVN's own build (its Transit adapter) of a real, unfunded order from Transit's
@@ -562,6 +564,111 @@ describe("checkExecution: FlowRouter's router", () => {
       const t = tampered(TOKEN, (d) => sel + d.slice(10));
       refuses(t.e, t.intent, /call to FlowRouter isn't a swap/);
     }
+  });
+});
+
+describe("checkExecution: Mancer's router and allowance target", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const ROUTER = "0xa62858659c83095eb5e702f0af6a7bb7f370b3e7";
+  const ALLOWANCE = "0x4c16269006db0dd87e6ae3c8a014b2807aa2e388";
+  const FLOWROUTER = "0x8ad60fae44dd6aafd8a98b7f25ead026013efdf2";
+  // execute(Plan): word 0 is the plan's offset (0x20), so its tokenIn is word 1 and its amountIn word 3.
+  const TOKEN_IN = 1;
+  const AMOUNT_IN = 3;
+  const setWord = (data: string, i: number, value: string) => data.slice(0, 10 + 64 * i) + value + data.slice(10 + 64 * (i + 1));
+  const tampered = (name: string, edit: (data: string) => string, value?: string) => {
+    const { execution, intent } = fixture(name);
+    const e = execution as Tx;
+    e.transaction.data = edit(e.transaction.data!);
+    const call = e.calls!.find((c) => c.to.toLowerCase() === ROUTER)!;
+    call.data = e.transaction.data;
+    if (value !== undefined) e.transaction.value = call.value = value;
+    return { e, intent };
+  };
+  // Points the swap (and its entry in calls) at another contract, keeping its calldata.
+  const retargeted = (name: string, to: string) => {
+    const { execution, intent } = fixture(name);
+    const e = execution as Tx;
+    e.calls!.find((c) => c.to.toLowerCase() === ROUTER)!.to = to;
+    e.transaction.to = to;
+    return { e, intent };
+  };
+  const TOKEN = "4663 usdg->tsla mancer (fee in the token)";
+  const COIN = "4663 eth->usdg mancer (coin sell, WETH fee)";
+
+  it("knows the router on Robinhood Chain only, as a target, with its allowance target as its spender", () => {
+    expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(ROUTER))).toEqual(["4663"]);
+    expect(Object.values(KNOWN_CONTRACTS).some((list) => list.includes(ALLOWANCE))).toBe(false);
+    expect(separateSpender(4663, ROUTER)).toBe(ALLOWANCE);
+    expect(separateSpender(8453, ROUTER)).toBeUndefined();
+  });
+
+  it("holds a Mancer swap to the token and amount being swapped (a standing allowance to its allowance target would cover more)", () => {
+    let t = tampered(TOKEN, (d) => setWord(d, AMOUNT_IN, word(100_000_001n)));
+    refuses(t.e, t.intent, /takes more than the swap's amount/);
+    t = tampered(TOKEN, (d) => setWord(d, TOKEN_IN, word(ATTACKER)));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+    t = tampered(TOKEN, (d) => setWord(d, AMOUNT_IN, word(0n)));
+    refuses(t.e, t.intent, /takes no amount/);
+  });
+
+  it("an ETH sell names the coin as the zero address and its amount is exactly the coin sent", () => {
+    let t = tampered(COIN, (d) => setWord(d, TOKEN_IN, word("0x0bd7d308f8e1639fab988df18a8011f41eacad73")));
+    refuses(t.e, t.intent, /token other than the one being swapped/);
+    t = tampered(COIN, (d) => d, "1");
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+    t = tampered(COIN, (d) => setWord(d, AMOUNT_IN, word(1n)));
+    refuses(t.e, t.intent, /amount isn't the coin it sends/);
+  });
+
+  it("refuses anything else to the router: the SDK's swap and swapVia, its owner's rescue and pause", () => {
+    // swap(Swap) 0xd2d97328 and swapVia(SwapVia) 0x413a816b (@blockhash/mancer-sdk 0.2.4's router ABI);
+    // rescue(address,address) 0x4fdf5d1d and setPaused(bool) 0x16c38b3c (MancerRouter.sol on Sourcify).
+    for (const sel of ["0xd2d97328", "0x413a816b", "0x4fdf5d1d", "0x16c38b3c", "0xdeadbeef"]) {
+      const t = tampered(TOKEN, (d) => sel + d.slice(10));
+      refuses(t.e, t.intent, /call to Mancer isn't an execute/);
+    }
+  });
+
+  it("refuses a swap sent to the allowance target, and an approval to it beside another venue's swap", () => {
+    let t = retargeted(COIN, ALLOWANCE);
+    refuses(t.e, t.intent, /goes to a contract RAVN doesn't route through/);
+    // A real FlowRouter swap whose approval names Mancer's allowance target instead of FlowRouter's router.
+    const { execution, intent } = fixture("4663 usdg->nvda flowrouter (fee in the token)");
+    const e = execution as Tx;
+    e.approval!.data = approve(ALLOWANCE, BigInt(e.approval!.amount));
+    e.approval!.spender = ALLOWANCE;
+    e.calls![0] = { ...e.calls![0], data: e.approval!.data };
+    expect(e.transaction.to?.toLowerCase()).toBe(FLOWROUTER);
+    refuses(e, intent, /approval is for a contract the swap doesn't call/);
+  });
+
+  it("refuses an approval to the router itself, which runs venue calldata as itself", () => {
+    const { execution, intent } = fixture(TOKEN);
+    const e = execution as Tx;
+    e.approval!.data = approve(ROUTER, 99_750_000n);
+    e.approval!.spender = ROUTER;
+    e.calls![0] = { ...e.calls![0], data: e.approval!.data };
+    refuses(e, intent, /router anyone can call/);
+  });
+
+  it("refuses the allowance target as a spender off Robinhood Chain", () => {
+    const { execution, intent } = fixture(TOKEN);
+    const e = execution as Tx;
+    for (const x of [e.approval!, e.transaction, e.fee!.transaction!, ...e.calls!]) x.chainId = 8453;
+    refuses(e, { ...intent, inputChainId: 8453 }, /spender RAVN doesn't route through|contract RAVN doesn't route through/);
+  });
+
+  it("refuses the allowance target in a signature-only execution, where no call to the router uses it", () => {
+    // Relay's EIP-3009 signature moved to Robinhood Chain, with an approval to the allowance target beside it.
+    const { execution, intent } = fixture("8453 xchain token relay");
+    const e = execution as Extract<ExecutionDTO, { executionType: "SIGNATURE" }>;
+    const typed = e.typedData as { domain: { chainId: number } };
+    typed.domain.chainId = 4663;
+    const signed = { ...intent, inputChainId: 4663 };
+    expect(() => checkExecution(e, signed)).not.toThrow();
+    e.approval = { to: intent.inputToken, data: approve(ALLOWANCE, 100_000_000n), value: "0", chainId: 4663, spender: ALLOWANCE, amount: "100000000" };
+    refuses(e, signed, /Mancer's allowance target with no call to Mancer's router/);
   });
 });
 

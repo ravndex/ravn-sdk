@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { CCTP_DOMAINS, CCTP_FAST_SOURCE_CHAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CCTP_DOMAINS, CCTP_FAST_SOURCE_CHAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, MANCER_ROUTER, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt, checkLayerswapBitcoinPsbt } from "./guard-bitcoin";
 import { associatedTokenAddress, base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -78,6 +78,8 @@ const SEL = {
   fyndSwaps: ["0xfe745a0f", "0x3c226834", "0x0c1a0ee7"],
   /** FlowRouter swap((inputToken, inputAmount, outputToken, outputQuote, outputMin, outputReceiver), bytes, executor, referralCode). */
   flowSwap: "0xd46cadbc",
+  /** Mancer execute((tokenIn, tokenOut, amountIn, minAmountOut, recipient, deadline, feeBps, feeMode, feeAsset, feeAfterLeg, minFeeBasis, legs[])). */
+  mancerExecute: "0x85e6ff1e",
   /** Khalani deposit(address token, uint256 amount, bytes payload, uint256 gas). */
   khalaniDeposit: "0xf3125a1f",
   /** Transit submitOrder(((uint32,address,address),uint256,address,uint256,uint256,address,bytes32,uint256,bytes32) quote, bytes signature). */
@@ -359,7 +361,7 @@ function checkChainflipTerms(terms: string, ctx: Ctx): void {
 
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani, Transit or Chainflip's Vault, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter, Mancer, Khalani, Transit or Chainflip's Vault, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -389,7 +391,9 @@ function classifyEvmCall(
     const spender = wordAddress(data, 0);
     const approved = wordUint(data, 1);
     notToRouter(spender, "The approval");
-    if (!ctx.known.has(spender) && !ctx.gated.has(spender)) fail("The approval names a spender RAVN doesn't route through", { spender });
+    // Mancer's allowance target is a spender only: known here, and held to a call to Mancer's router with the swap.
+    const mancerSpender = spender === separateSpender(ctx.chainId, MANCER_ROUTER);
+    if (!ctx.known.has(spender) && !ctx.gated.has(spender) && !mancerSpender) fail("The approval names a spender RAVN doesn't route through", { spender });
     if (approved > ctx.amount && !ctx.gated.has(spender)) {
       fail("The approval is for more than the swap's amount", { spender, amount: approved.toString() });
     }
@@ -495,6 +499,18 @@ function classifyEvmCall(
     pulled = wordUint(data, 1);
     if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
     if (pulled === 0n) fail("The swap would take the whole balance", { amount: "0" });
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+    if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
+  } else if (to === lower(MANCER_ROUTER)) {
+    // Mancer's execute, its only call RAVN routes through (its other functions are the owner's): the plan is a tuple behind an
+    // offset, and the router pulls its amountIn of tokenIn (the coin as the zero address, exactly the coin sent) from
+    // the sender once, through its allowance target, so a standing allowance there is held to the swap.
+    if (sel !== SEL.mancerExecute) fail("The call to Mancer isn't an execute", { selector: sel });
+    const plan = offsetAt(data, 0, 0);
+    const token = wordAddress(data, plan);
+    pulled = wordUint(data, plan + 2);
+    if (token !== (ctx.native ? ZERO_ADDRESS : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
+    if (pulled === 0n) fail("The swap takes no amount", { amount: "0" });
     if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
     if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
   } else if (to === lower(KHALANI_DEPOSITS[ctx.chainId])) {
@@ -851,7 +867,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Khalani's, Transit's and Chainflip's Vault amounts are read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Mancer's, Khalani's, Transit's and Chainflip's Vault amounts are read; others aren't);
  * whom a Lightning invoice pays (a node key, not an address: RAVN's server checks the bridge behind it);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
@@ -882,12 +898,12 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter, Khalani, Transit or Chainflip's Vault: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter, Mancer, Khalani, Transit or Chainflip's Vault: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");
-    // The approval goes to the contract the swap calls (OKX's own approval contract beside its
-    // router excepted): an allowance to another one would outlive this swap.
+    // The approval goes to the contract the swap calls (OKX's approval contract and Mancer's allowance target
+    // beside their routers excepted): an allowance to another one would outlive this swap.
     if (execution.approval) {
       const spender = wordAddress(lower(execution.approval.data), 0);
       const target = lower(execution.transaction.to);
@@ -918,7 +934,13 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
   }
 
   if (type === "SIGNATURE" && execution.executionType === "SIGNATURE") {
-    if (execution.approval) checkApproval(ctx, execution.approval);
+    if (execution.approval) {
+      checkApproval(ctx, execution.approval);
+      // Mancer's allowance target is a spender only beside a call to Mancer's router, which a signature isn't.
+      if (wordAddress(lower(execution.approval.data), 0) === separateSpender(ctx.chainId, MANCER_ROUTER)) {
+        fail("The approval names Mancer's allowance target with no call to Mancer's router");
+      }
+    }
     if (execution.approvalData) checkTypedData(ctx, execution.approvalData);
     if (!execution.typedData) fail("The signature request is empty");
     checkTypedData(ctx, execution.typedData);
