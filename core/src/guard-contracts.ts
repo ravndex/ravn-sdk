@@ -29,7 +29,9 @@
  * need its own entry here, and is refused until it has one. Paxos Labs' Transit station (Ethereum, Arbitrum,
  * Robinhood) added 2026-11-22 from its quote API's `transaction.to`, the same address on all three: verified on
  * Sourcify on Ethereum and Arbitrum (TransitStation.sol); Robinhood's bytecode is the same but for its immutables
- * (LayerZero endpoint and endpoint id).
+ * (LayerZero endpoint and endpoint id). Mancer's router and allowance target (Robinhood) added 2026-11-25 from its
+ * docs, its GET /health and RAVN's own builds for it: the router verified on Sourcify (MancerRouter.sol, exact match), the
+ * allowance target deployed by its constructor from that source (the router's allowanceTarget() names it, its router() the router).
  */
 
 const ETHEREUM = 1;
@@ -127,6 +129,15 @@ export const FYND_ROUTERS: Record<number, string> = {
  * upgradeable. The guard reads the token and amount its swap pulls. */
 export const FLOWROUTER = "0x8Ad60fAE44DD6aaFD8A98B7f25EaD026013efdF2";
 
+/** Mancer's router (mancer.xyz), Robinhood Chain only: every Mancer swap is one execute(Plan) to it, which pulls the
+ * plan's amountIn of its tokenIn from the sender once, through MANCER_ALLOWANCE_TARGET. It runs venue calldata as
+ * itself, so it is a target only (TARGET_ONLY). The guard reads the token and amount its execute pulls. */
+export const MANCER_ROUTER = "0xa62858659C83095Eb5E702f0Af6a7Bb7F370B3e7";
+/** What a Mancer swap's approval names: its one function, callable only by the router (immutable), moves funds
+ * from the router's caller into the router. A spender only, and only beside a call to the router (separateSpender):
+ * never a transaction target, and never in a signature-only execution. */
+export const MANCER_ALLOWANCE_TARGET = "0x4c16269006dB0DD87e6aE3C8A014B2807Aa2e388";
+
 /** Khalani's deposit contract per chain: every Khalani order is funded by one deposit call to it, which its
  * approval names. The guard reads the token and amount it pulls and the payout and refund Khalani signed into it. */
 export const KHALANI_DEPOSITS: Record<number, string> = {
@@ -214,6 +225,8 @@ export const TARGET_ONLY: ReadonlySet<string> = new Set([
   "0x0729e2a4716d9f7dd17858d5d504426d228697f7",
   "0x9ef6d3c2f60d7b9008d74cab1fc0f899c957c819",
   "0x6328ea02d28131e58b28e55c6258258a30d90e05",
+  // Mancer's router: never a spender (its own allowance target is).
+  "0xa62858659c83095eb5e702f0af6a7bb7f370b3e7",
 ]);
 
 // [chains, addresses, venue]: each address is accepted as a transaction target and a spender on those
@@ -264,6 +277,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   [[ROBINHOOD], [ROUTE_ENTRY], "Route RouteEntry"],
   [[ROBINHOOD], [METRIC_ROUTER], "Metric SimpleRouter"],
   [[ROBINHOOD], [FLOWROUTER], "FlowRouter router"],
+  [[ROBINHOOD], [MANCER_ROUTER], "Mancer router"],
   ...Object.entries(FYND_ROUTERS).map(([chain, router]): [readonly number[], readonly string[], string] => [[Number(chain)], [router], "Fynd router"]),
   ...Object.entries(KHALANI_DEPOSITS).map(([chain, deposit]): [readonly number[], readonly string[], string] => [[Number(chain)], [deposit], "Khalani deposit"]),
   ...Object.entries(CHAINFLIP_VAULTS).map(([chain, vault]): [readonly number[], readonly string[], string] => [[Number(chain)], [vault], "Chainflip Vault"]),
@@ -351,8 +365,9 @@ const GARDEN: Record<number, string[]> = {
   [ARC]: ["0x5fA58e4E89c85B8d678Ade970bD6afD4311aF17E", "0x89b6612A2121BFBd1c2Dc593504AbE4e5d5E9296"],
 };
 
-/** The contract approved to swap through `router`, where it's a different one (OKX's approval contract). */
+/** The contract approved to swap through `router`, where it's a different one (OKX's approval contract, Mancer's allowance target). */
 export function separateSpender(chainId: number, router: string): string | undefined {
+  if (chainId === ROBINHOOD && router.toLowerCase() === MANCER_ROUTER.toLowerCase()) return MANCER_ALLOWANCE_TARGET.toLowerCase();
   const pair = OKX[chainId];
   return pair && pair[0].toLowerCase() === router.toLowerCase() ? pair[1].toLowerCase() : undefined;
 }
