@@ -84,7 +84,9 @@
           "khalani",
           "transit",
           "breez",
-          "cctp"
+          "cctp",
+          "velora",
+          "velora_delta"
         ]
       },
       "ErrorCode": {
@@ -1452,7 +1454,9 @@
                         "khalani",
                         "transit",
                         "breez",
-                        "cctp"
+                        "cctp",
+                        "velora",
+                        "velora_delta"
                       ]
                     }
                   },
@@ -1494,7 +1498,9 @@
                         "khalani",
                         "transit",
                         "breez",
-                        "cctp"
+                        "cctp",
+                        "velora",
+                        "velora_delta"
                       ]
                     }
                   },
@@ -2985,7 +2991,9 @@
                         "khalani",
                         "transit",
                         "breez",
-                        "cctp"
+                        "cctp",
+                        "velora",
+                        "velora_delta"
                       ]
                     }
                   },
@@ -3027,7 +3035,9 @@
                         "khalani",
                         "transit",
                         "breez",
-                        "cctp"
+                        "cctp",
+                        "velora",
+                        "velora_delta"
                       ]
                     }
                   },
