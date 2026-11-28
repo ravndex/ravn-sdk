@@ -1,6 +1,6 @@
 import { UnsafeExecutionError } from "./types";
 import type { ApprovalDTO, AuthorizeDTO, DepositFeeDTO, ExecutionDTO, RecoverDTO } from "./types";
-import { CCTP_DOMAINS, CCTP_FAST_SOURCE_CHAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, MANCER_ROUTER, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, WETH_FEE_MINTERS } from "./guard-contracts";
+import { CCTP_DOMAINS, CCTP_FAST_SOURCE_CHAINS, CCTP_SOURCE_CHAINS, CCTP_TOKEN_MESSENGER, CHAINFLIP_VAULTS, RAVN_CHAINFLIP_BROKER, COW_SETTLEMENT, FLOWROUTER, FYND_ROUTERS, HINKAL, HINKAL_CHAINS, KHALANI_DEPOSITS, KNOWN_CONTRACTS, MANCER_ROUTER, METRIC_ROUTER, METRIC_WETH, PERMIT2, RAVN_FEE_WALLETS, ROUTE_ENTRY, separateSpender, signatureGatedSpenders, SOLANA_USDC_MINT, TARGET_ONLY, TRANSIT_CHAINS, TRANSIT_STATION, VELORA_AUGUSTUS, VELORA_CHAINS, VELORA_DELTA, VELORA_DELTA_CHAINS, WETH_FEE_MINTERS } from "./guard-contracts";
 import { checkBitcoinPsbt, checkLayerswapBitcoinPsbt } from "./guard-bitcoin";
 import { associatedTokenAddress, base58, base58Decode32, checkSolanaSimulation, checkSolanaTransaction } from "./guard-solana";
 
@@ -91,6 +91,30 @@ const SEL = {
   /** Circle TokenMessengerV2 depositForBurnWithHook(amount, destinationDomain, mintRecipient, burnToken, destinationCaller, maxFee, minFinalityThreshold, hookData). */
   cctpBurnWithHook: "0x779b432d",
 };
+
+/**
+ * Velora's Augustus v6.2 sells RAVN builds, by selector: the words holding srcToken, fromAmount and beneficiary (inside the
+ * leading tuple for the Uniswap ones, whose first word is its offset), partnerAndFee, and the permit's offset. Each pulls
+ * fromAmount of srcToken from the sender (verified source, Sourcify), but the UniswapV3 one, whose first pool's callback
+ * pulls that pool's input token.
+ */
+const VELORA_SWAPS: Record<string, { tuple: boolean; src: number; amount: number; beneficiary: number; fee: number; permit: number }> = {
+  /** swapExactAmountIn(executor, (srcToken, destToken, fromAmount, toAmount, quotedAmount, metadata, beneficiary), partnerAndFee, permit, executorData). */
+  "0xe3ead59e": { tuple: false, src: 1, amount: 3, beneficiary: 7, fee: 8, permit: 9 },
+  /** swapExactAmountInOnUniswapV2((srcToken, destToken, fromAmount, toAmount, quotedAmount, metadata, beneficiary, pools), partnerAndFee, permit). */
+  "0xe8bb3b6c": { tuple: true, src: 0, amount: 2, beneficiary: 6, fee: 1, permit: 2 },
+  /** swapExactAmountInOnUniswapV3, the same arguments; its pools are 96 bytes each (direction bit and token0, token1, fee). */
+  "0x876a02f6": { tuple: true, src: 0, amount: 2, beneficiary: 6, fee: 1, permit: 2 },
+  /** swapExactAmountInOnCurveV1((curveData, curveAssets, srcToken, destToken, fromAmount, toAmount, quotedAmount, metadata, beneficiary), partnerAndFee, permit). */
+  "0x1a01c532": { tuple: false, src: 2, amount: 4, beneficiary: 8, fee: 9, permit: 10 },
+  /** swapExactAmountInOnCurveV2((curveData, i, j, poolAddress, srcToken, destToken, fromAmount, toAmount, quotedAmount, metadata, beneficiary), partnerAndFee, permit). */
+  "0xe37ed256": { tuple: false, src: 4, amount: 6, beneficiary: 10, fee: 11, permit: 12 },
+};
+const VELORA_UNISWAP_V3 = "0x876a02f6";
+// Augustus's partnerAndFee: partner << 96 | flags | fee bps (low 14 bits). The flags that hand positive slippage to anyone
+// (bit 90 the user, 94 a referrer, 95 the partner): RAVN sets none.
+const AUGUSTUS_FEE_BPS = 0x3fffn;
+const AUGUSTUS_SURPLUS_FLAGS = (1n << 90n) | (1n << 94n) | (1n << 95n);
 
 // Circle's Forwarding Service request ("cctp-forward" in 24 bytes, uint32 version 0, uint32 length): the only hook
 // data a RAVN CCTP burn carries. Length 0 everywhere; into Solana also length 33 = flag 1 (create the recipient's
@@ -359,9 +383,21 @@ function checkChainflipTerms(terms: string, ctx: Ctx): void {
   }
 }
 
+/** Velora's Delta contract, on a chain it runs on. */
+const isVeloraDelta = (ctx: Ctx, address: string): boolean => VELORA_DELTA_CHAINS.includes(ctx.chainId) && address === lower(VELORA_DELTA);
+
+/** A Velora partner fee (partner << 96 | flags | bps): at most 1%, only to RAVN's wallet, none of `surplus` set. */
+function checkVeloraFee(terms: bigint, bpsMask: bigint, surplus: bigint) {
+  if (terms & surplus) fail("The Velora swap hands its surplus to someone", { partnerAndFee: terms.toString() });
+  const bps = terms & bpsMask;
+  if (bps > MAX_FEE_BPS) fail("The Velora swap's partner fee is more than RAVN's fee may be", { bps: bps.toString() });
+  const partner = `0x${(terms >> 96n).toString(16).padStart(40, "0")}`;
+  if (bps > 0n && partner !== lower(RAVN_FEE_WALLETS.evm)) fail("The Velora swap's partner fee doesn't go to RAVN's fee wallet", { partner });
+}
+
 /**
  * Checks one EVM call in its role. Returns the native coin it sends and the input token it commits:
- * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter, Mancer, Khalani, Transit or Chainflip's Vault, transferred as RAVN's fee or deposited.
+ * approved (beyond a signature-gated spender), pulled by 0x, Route, Metric, Fynd, FlowRouter, Mancer, Velora, Khalani, Transit or Chainflip's Vault, transferred as RAVN's fee or deposited.
  * `limit`: the most a fee or deposit call may move.
  */
 function classifyEvmCall(
@@ -391,9 +427,10 @@ function classifyEvmCall(
     const spender = wordAddress(data, 0);
     const approved = wordUint(data, 1);
     notToRouter(spender, "The approval");
-    // Mancer's allowance target is a spender only: known here, and held to a call to Mancer's router with the swap.
-    const mancerSpender = spender === separateSpender(ctx.chainId, MANCER_ROUTER);
-    if (!ctx.known.has(spender) && !ctx.gated.has(spender) && !mancerSpender) fail("The approval names a spender RAVN doesn't route through", { spender });
+    // Mancer's allowance target and Velora's Delta contract are spenders only: known here, and held to a call to Mancer's
+    // router, or a Delta order, with the swap.
+    const separate = spender === separateSpender(ctx.chainId, MANCER_ROUTER) || isVeloraDelta(ctx, spender);
+    if (!ctx.known.has(spender) && !ctx.gated.has(spender) && !separate) fail("The approval names a spender RAVN doesn't route through", { spender });
     if (approved > ctx.amount && !ctx.gated.has(spender)) {
       fail("The approval is for more than the swap's amount", { spender, amount: approved.toString() });
     }
@@ -615,6 +652,34 @@ function classifyEvmCall(
       fail("The Chainflip swap pays out to an address other than the swap's destination");
     }
     checkChainflipTerms(wordBytes(data, sel === SEL.cfSwapNative ? 3 : 5), ctx);
+  } else if (to === lower(VELORA_AUGUSTUS) && VELORA_CHAINS.includes(ctx.chainId)) {
+    // Velora's Augustus v6.2, only the sells RAVN builds (VELORA_SWAPS): each pulls fromAmount of srcToken from the sender (the
+    // coin as 0xEeee…, which must be exactly what's sent), so a standing allowance to it is held to the swap. A UniswapV3 sell
+    // pulls its first pool's input token instead, so that must be the swap's too. No permit (another allowance), the user or
+    // the destination as beneficiary (zero: the sender), and a partner fee at most 1%, to RAVN's wallet, with no surplus taken.
+    const at = VELORA_SWAPS[sel] ?? fail("The call to Velora isn't a swap RAVN builds", { selector: sel });
+    const tuple = at.tuple ? offsetAt(data, 0, 0) : 0;
+    const token = wordAddress(data, tuple + at.src);
+    pulled = wordUint(data, tuple + at.amount);
+    if (token !== (ctx.native ? NATIVE_EVM : ctx.token)) fail("The swap takes a token other than the one being swapped", { token });
+    if (pulled === 0n) fail("The swap takes no amount", { amount: "0" });
+    if (pulled > ctx.amount) fail("The swap takes more than the swap's amount", { amount: pulled.toString() });
+    if (ctx.native && pulled !== value) fail("The swap's amount isn't the coin it sends", { amount: pulled.toString(), value: value.toString() });
+    if (sel === VELORA_UNISWAP_V3 && !ctx.native) {
+      // Pools: direction (bit 255) and token0, then token1; direction 1 sells token0, 0 sells token1. (A coin sell is paid
+      // from Augustus itself, as WETH it wraps.)
+      const pools = offsetAt(data, tuple + 7, tuple);
+      if (wordUint(data, pools) < 96n) fail("The Velora swap names no pool");
+      const head = word(data, pools + 1);
+      const first = parseInt(head[0], 16) >= 8 ? `0x${head.slice(24)}` : `0x${word(data, pools + 2).slice(24)}`;
+      if (first !== ctx.token) fail("The swap's first pool takes a token other than the one being swapped", { token: first });
+    }
+    if (wordBytes(data, at.permit) !== "") fail("The Velora swap carries a permit");
+    const beneficiary = wordAddress(data, tuple + at.beneficiary);
+    if (beneficiary !== ZERO_ADDRESS && beneficiary !== ctx.user && beneficiary !== ctx.destination) {
+      fail("The Velora swap pays an address other than the user or the swap's destination", { beneficiary });
+    }
+    checkVeloraFee(wordUint(data, at.fee), AUGUSTUS_FEE_BPS, AUGUSTUS_SURPLUS_FLAGS);
   } else if (sel === SEL.allowanceHolderExec) {
     // 0x pulls exec's `amount` of `token` from the sender: within the swap, whatever the user
     // allowed AllowanceHolder before.
@@ -682,8 +747,8 @@ function soleRoot(typed: Record<string, unknown>) {
  * the same name can sign others (DAI's Permit: holder, expiry, allowed: an unlimited allowance),
  * which the check reads past. CoW, Permit2 and Hinkal fix their own field lists.
  */
-function signsExactly(typed: Record<string, unknown>, fields: string[]) {
-  const listed = (typed.types as Record<string, unknown>)[String(typed.primaryType)];
+function signsExactly(typed: Record<string, unknown>, fields: string[], struct = String(typed.primaryType)) {
+  const listed = (typed.types as Record<string, unknown>)[struct];
   const signed = Array.isArray(listed) ? (listed as unknown[]) : [];
   // Field by field, name and type each: a joined string would take one field whose type is
   // "string,sessionId:string,…" for the whole list.
@@ -696,15 +761,86 @@ function signsExactly(typed: Record<string, unknown>, fields: string[]) {
     });
   if (!exact) {
     const shown = signed.map((f) => (isRecord(f) ? `${String(f.name)}:${String(f.type)}` : ""));
-    fail("The signature request signs other fields than its kind's", { primaryType: typed.primaryType, signed: shown });
+    fail("The signature request signs other fields than its kind's", { primaryType: typed.primaryType, struct, signed: shown });
   }
+}
+
+// A Velora Delta order and its bridge, as the Delta contract hashes them (Portikus 2.0.0).
+const DELTA_ORDER_FIELDS = [
+  "owner:address", "beneficiary:address", "srcToken:address", "destToken:address", "srcAmount:uint256", "destAmount:uint256", "expectedAmount:uint256",
+  "deadline:uint256", "kind:uint8", "nonce:uint256", "partnerAndFee:uint256", "permit:bytes", "metadata:bytes", "bridge:Bridge",
+];
+const DELTA_BRIDGE_FIELDS = ["protocolSelector:bytes4", "destinationChainId:uint256", "outputToken:address", "scalingFactor:int8", "protocolData:bytes"];
+// The two bridges whose signed terms cap their fees: Across (protocolData: multiCallHandler, maxRelayerFee) and Circle's CCTP
+// (destinationDomain, maxFee, minFinalityThreshold, relayerFee: Velora keeps the last for relaying). Delta's AcrossBridgeModule
+// and CCTPBridgeModule (2.3.0), verified on Sourcify on Base.
+const DELTA_ACROSS = "0x2e09f389";
+const DELTA_CCTP = "0x01d4f1d4";
+
+/**
+ * A Velora Delta order (signed for the Delta contract, settled by Velora's agents, which pull its srcAmount from the owner):
+ * the user's own sell of the input token, at most the amount, no permit, paying the user or the destination, a partner fee
+ * only to RAVN. Across chains only through a bridge whose signed terms cap its fees, to the swap's output chain and destination.
+ * What the bridge delivers (its outputToken, scalingFactor) isn't held, as no venue's price is here, and a cosignature from
+ * Velora's own signer can replace protocolData (BridgeLib._resolveProtocol): the fee limits hold against RAVN, not Velora.
+ */
+function checkDeltaOrder(ctx: Ctx, typed: Record<string, unknown>, message: Record<string, unknown>) {
+  signsExactly(typed, DELTA_ORDER_FIELDS);
+  signsExactly(typed, DELTA_BRIDGE_FIELDS, "Bridge");
+  if (ctx.native) fail("A Velora Delta order was built for a coin sell");
+  if (lower(message.owner) !== ctx.user) fail("The order is for another wallet", { owner: message.owner });
+  if (lower(message.srcToken) !== ctx.token) fail("The order sells a token other than the one being swapped", { srcToken: message.srcToken });
+  const sold = big(message.srcAmount, "The order's sell amount");
+  if (sold === 0n || sold > ctx.amount) fail("The order sells more than the swap's amount", { srcAmount: message.srcAmount });
+  if (big(message.kind, "The order's kind") !== 0n) fail("The order isn't a sell", { kind: message.kind });
+  if (lower(message.permit) !== "0x") fail("The order carries a permit");
+  // Delta's partnerAndFee: partner << 96 | bit 9 cap surplus | bit 8 partner takes surplus | fee bps (low 8 bits).
+  checkVeloraFee(big(message.partnerAndFee, "The order's partner fee"), 0xffn, 1n << 8n);
+  const bridge = isRecord(message.bridge) ? message.bridge : fail("The order names no bridge");
+  const beneficiary = lower(message.beneficiary);
+  const toChain = big(bridge.destinationChainId, "The order's bridge chain");
+  if (toChain === 0n) {
+    if (ctx.outputChainId !== undefined && ctx.outputChainId !== ctx.chainId) fail("The order pays out on the swap's input chain, not its output chain", { outputChainId: ctx.outputChainId });
+    if (lower(bridge.protocolSelector) !== "0x00000000" || lower(bridge.protocolData) !== "0x") fail("The order names a bridge for a swap on one chain");
+    if (beneficiary !== ZERO_ADDRESS && beneficiary !== ctx.user && beneficiary !== ctx.destination) fail("The order pays someone other than the user", { beneficiary });
+    return;
+  }
+  if (ctx.outputChainId === undefined) fail("A Velora Delta order that bridges can't be checked without the swap's output chain: update the code that calls the check");
+  if (ctx.outputChainId === ctx.chainId || toChain !== BigInt(ctx.outputChainId)) fail("The order bridges to a chain other than the swap's", { chainId: toChain.toString() });
+  // Zero pays the owner, the same address on the output chain: only when that is the destination.
+  if (beneficiary !== ctx.destination && !(beneficiary === ZERO_ADDRESS && ctx.destination === ctx.user)) {
+    fail("The order pays an address other than the swap's destination", { beneficiary });
+  }
+  // The bridge spends its whole limit if it can, out of what goes into it (destAmount, in the source token): at most a quarter.
+  const into = big(message.destAmount, "The order's minimum");
+  const selector = lower(bridge.protocolSelector);
+  const data = lower(bridge.protocolData);
+  const at = (i: number): bigint => BigInt(`0x${data.slice(2 + 64 * i, 66 + 64 * i)}`);
+  let maxFee: bigint;
+  if (selector === DELTA_ACROSS && /^0x[0-9a-f]{128}$/.test(data)) {
+    if (at(0) !== 0n) fail("The order's Across bridge names a handler, which could pay anyone");
+    maxFee = at(1);
+  } else if (selector === DELTA_CCTP && /^0x[0-9a-f]{256}$/.test(data)) {
+    const domain = CCTP_DOMAINS[ctx.outputChainId];
+    if (domain === undefined || at(0) !== BigInt(domain)) fail("The order's CCTP bridge delivers to a chain other than the swap's", { domain: at(0).toString() });
+    const finality = at(2);
+    if (finality !== CCTP_FAST_FINALITY && finality !== CCTP_STANDARD_FINALITY) fail("The order's CCTP bridge isn't a fast or standard transfer", { finality: finality.toString() });
+    // Circle's limit and Velora's relayer fee, both out of the amount bridged.
+    maxFee = at(1) + at(3);
+    // As a CCTP burn RAVN builds: at most 5 USDC, plus 3 bp of the amount for Circle's fast fee.
+    if (maxFee > 5_000_000n + (finality === CCTP_FAST_FINALITY ? (into * 3n) / 10_000n : 0n)) fail("The order's bridge may keep too much", { maxFee: maxFee.toString() });
+  } else {
+    fail("The order bridges through a bridge whose terms this SDK can't read", { protocolSelector: bridge.protocolSelector });
+  }
+  if (maxFee * 4n > into) fail("The order's bridge may keep too much", { maxFee: maxFee.toString() });
 }
 
 /**
  * Signatures RAVN asks for, by kind: each bounded to the input token and amount. A kind not listed
- * here is refused: a signature can grant anything a transaction can.
+ * here is refused: a signature can grant anything a transaction can. Returns "velora-delta" for a
+ * Velora Delta order (the one kind its approval may name Velora's Delta contract for).
  */
-function checkTypedData(ctx: Ctx, typed: unknown) {
+function checkTypedData(ctx: Ctx, typed: unknown): "velora-delta" | undefined {
   if (!isRecord(typed)) fail("The signature request isn't typed data");
   soleRoot(typed);
   const domain = isRecord(typed.domain) ? typed.domain : {};
@@ -728,6 +864,11 @@ function checkTypedData(ctx: Ctx, typed: unknown) {
       fail("The order pays someone other than the user", { receiver });
     }
     return;
+  }
+
+  if (primaryType === "Order" && isVeloraDelta(ctx, verifying)) {
+    checkDeltaOrder(ctx, typed, message);
+    return "velora-delta";
   }
 
   // Permit2 one-time transfer: the input token, at most the amount. The spender may take exactly
@@ -867,7 +1008,7 @@ export function checkRecovery(answer: RecoverDTO, userAddress: string): void {
  *
  * What it can't see: whether the swap pays out at a fair price or to the right place, once funds are
  * inside a venue's contract (RAVN's server checks that against each venue); an allowance the user
- * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Mancer's, Khalani's, Transit's and Chainflip's Vault amounts are read; others aren't);
+ * already gave one of those contracts elsewhere (0x's AllowanceHolder, Route's, Metric's, Fynd's, FlowRouter's, Mancer's, Velora's Augustus, Khalani's, Transit's and Chainflip's Vault amounts are read; others aren't);
  * whom a Lightning invoice pays (a node key, not an address: RAVN's server checks the bridge behind it);
  * and on Solana, what a venue's own program instruction moves: the user signs for every token account
  * they own, and only simulating the transaction shows what it moves (verifyExecution does, given your
@@ -898,7 +1039,7 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
     if (execution.submit) fail("A submit-through-RAVN transaction was returned for an EVM swap");
     // Hinkal's deposit: its contract is known to this transaction alone (see HINKAL).
     if (HINKAL_CHAINS.includes(ctx.chainId) && lower(execution.transaction.to) === lower(HINKAL)) ctx.known.add(lower(HINKAL));
-    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter, Mancer, Khalani, Transit or Chainflip's Vault: the same funds) plus RAVN's fee
+    // The input token the swap may take (approved, or pulled by 0x, Route, Metric, Fynd, FlowRouter, Mancer, Velora, Khalani, Transit or Chainflip's Vault: the same funds) plus RAVN's fee
     // transferred beside it, and the coin sent, each within the input amount.
     const approved = execution.approval ? checkApproval(ctx, execution.approval) : 0n;
     const swap = classifyEvmCall(ctx, execution.transaction, "swap");
@@ -934,16 +1075,22 @@ export function checkExecution(execution: ExecutionDTO | AuthorizeDTO, intent: S
   }
 
   if (type === "SIGNATURE" && execution.executionType === "SIGNATURE") {
+    let deltaSpender = false;
     if (execution.approval) {
       checkApproval(ctx, execution.approval);
+      const spender = wordAddress(lower(execution.approval.data), 0);
       // Mancer's allowance target is a spender only beside a call to Mancer's router, which a signature isn't.
-      if (wordAddress(lower(execution.approval.data), 0) === separateSpender(ctx.chainId, MANCER_ROUTER)) {
+      if (spender === separateSpender(ctx.chainId, MANCER_ROUTER)) {
         fail("The approval names Mancer's allowance target with no call to Mancer's router");
       }
+      deltaSpender = isVeloraDelta(ctx, spender);
     }
-    if (execution.approvalData) checkTypedData(ctx, execution.approvalData);
+    // One Delta order per swap: never a second one as the approval's signature.
+    if (execution.approvalData && checkTypedData(ctx, execution.approvalData) === "velora-delta") fail("A Velora Delta order came back as the approval's signature");
     if (!execution.typedData) fail("The signature request is empty");
-    checkTypedData(ctx, execution.typedData);
+    const kind = checkTypedData(ctx, execution.typedData);
+    // Velora's Delta contract is a spender only beside a Delta order (what it pulls against), with nothing else to sign.
+    if (deltaSpender && (kind !== "velora-delta" || execution.approvalData)) fail("The approval names Velora's Delta contract with no Delta order beside it");
     return;
   }
 

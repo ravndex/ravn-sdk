@@ -32,6 +32,9 @@
  * (LayerZero endpoint and endpoint id). Mancer's router and allowance target (Robinhood) added 2026-11-25 from its
  * docs, its GET /health and RAVN's own builds for it: the router verified on Sourcify (MancerRouter.sol, exact match), the
  * allowance target deployed by its constructor from that source (the router's allowanceTarget() names it, its router() the router).
+ * Velora's Augustus v6.2 (9 chains) and Delta contract (8) added 2026-11-28 from Velora's own docs and API (/prices names
+ * Augustus, /v2/delta/prices names Delta as the spender) and RAVN's own builds for each: Augustus verified on Sourcify
+ * (AugustusV6.sol; Avalanche's its own build of the same five swap methods), Delta's code the same on all eight.
  */
 
 const ETHEREUM = 1;
@@ -137,6 +140,17 @@ export const MANCER_ROUTER = "0xa62858659C83095Eb5E702f0Af6a7Bb7F370B3e7";
  * from the router's caller into the router. A spender only, and only beside a call to the router (separateSpender):
  * never a transaction target, and never in a signature-only execution. */
 export const MANCER_ALLOWANCE_TARGET = "0x4c16269006dB0DD87e6aE3C8A014B2807Aa2e388";
+
+/** Velora's Augustus v6.2 (velora.xyz, ex-ParaSwap): the same address on every chain Velora runs on. Every Velora Market swap
+ * is one call to it, which its approval names; the guard reads the token and amount the call pulls from the sender, its
+ * permit, beneficiary and partner fee. */
+export const VELORA_AUGUSTUS = "0x6A000F20005980200259B80c5102003040001068";
+export const VELORA_CHAINS: readonly number[] = [ETHEREUM, OPTIMISM, BNB, UNICHAIN, POLYGON, ROBINHOOD, BASE, ARBITRUM, AVALANCHE];
+/** Velora Delta's contract: where a Delta order (signed typed data, settled by Velora's agents) is verified and the spender
+ * its approval names. Not in KNOWN_CONTRACTS: never a transaction target, and a spender only beside a Delta order. It
+ * runs modules its owner installs, so an allowance to it is held to the order's amount. */
+export const VELORA_DELTA = "0x0000000000bbF5c5Fd284e657F01Bd000933C96D";
+export const VELORA_DELTA_CHAINS: readonly number[] = VELORA_CHAINS.filter((c) => c !== AVALANCHE);
 
 /** Khalani's deposit contract per chain: every Khalani order is funded by one deposit call to it, which its
  * approval names. The guard reads the token and amount it pulls and the payout and refund Khalani signed into it. */
@@ -283,6 +297,7 @@ const ENTRIES: [readonly number[], readonly string[], string][] = [
   ...Object.entries(CHAINFLIP_VAULTS).map(([chain, vault]): [readonly number[], readonly string[], string] => [[Number(chain)], [vault], "Chainflip Vault"]),
   [CCTP_SOURCE_CHAINS, [CCTP_TOKEN_MESSENGER], "Circle CCTP TokenMessengerV2"],
   [TRANSIT_CHAINS, [TRANSIT_STATION], "Transit station"],
+  [VELORA_CHAINS, [VELORA_AUGUSTUS], "Velora Augustus v6.2"],
 ];
 
 // Across's SpokePool, per chain (GET app.across.to/api/chains).

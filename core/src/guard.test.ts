@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { encodeFunctionData, parseAbi } from "viem";
 import { RavnClient } from "./client";
 import { checkExecution } from "./guard";
 import { KNOWN_CONTRACTS, separateSpender } from "./guard-contracts";
@@ -19,6 +20,10 @@ import type { ExecutionDTO } from "./types";
 // FlowRouter's three (2026-11-09): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign.
 // Mancer's four (2026-11-25): RAVN's own builds through getBestQuote, executeSwap and /v1's ready-to-sign, from a
 // local server with Mancer switched on (the stock sell from a TSLA holder: Mancer can't simulate it, RAVN does).
+// Velora's fourteen (2026-11-28): RAVN's own builds through its Velora and Velora Delta adapters, executeSwap and /v1's
+// ready-to-sign, with RAVN's key on Velora's partners host: Market on Base (token and coin sells, one with RAVN's 25 bp
+// fee), Arbitrum, Robinhood (a stock buy) and Avalanche (its own Augustus build); Delta on Base, bridged through Across
+// (into Base and Ethereum) and CCTP (fast and standard, asked of Velora's CCTP bridges alone, and into Avalanche, its own pick).
 // Khalani's one (2026-11-13): Khalani's own build of a real, unfunded order, in /v1/execute's shape, as Khalani
 // isn't in RAVN's race yet.
 // Transit's one (2026-11-22): RAVN's own build (its Transit adapter) of a real, unfunded order from Transit's
@@ -669,6 +674,255 @@ describe("checkExecution: Mancer's router and allowance target", () => {
     expect(() => checkExecution(e, signed)).not.toThrow();
     e.approval = { to: intent.inputToken, data: approve(ALLOWANCE, 100_000_000n), value: "0", chainId: 4663, spender: ALLOWANCE, amount: "100000000" };
     refuses(e, signed, /Mancer's allowance target with no call to Mancer's router/);
+  });
+});
+
+describe("checkExecution: Velora's Augustus v6.2", () => {
+  type Tx = Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+  const AUGUSTUS = "0x6a000f20005980200259b80c5102003040001068";
+  const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+  const WETH = "0x4200000000000000000000000000000000000006";
+  const NATIVE = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  const USER = "0x03508bb71268bba25ecacc8f620e01866650532c";
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  const SWAP = "(address srcToken, address destToken, uint256 fromAmount, uint256 toAmount, uint256 quotedAmount, bytes32 metadata, address beneficiary";
+  const ABI = parseAbi([
+    `function swapExactAmountIn(address executor, ${SWAP}) swapData, uint256 partnerAndFee, bytes permit, bytes executorData) payable`,
+    `function swapExactAmountInOnUniswapV2(${SWAP}, bytes pools) uniData, uint256 partnerAndFee, bytes permit) payable`,
+    `function swapExactAmountInOnUniswapV3(${SWAP}, bytes pools) uniData, uint256 partnerAndFee, bytes permit) payable`,
+    "function swapExactAmountInOnCurveV1((uint256 curveData, uint256 curveAssets, address srcToken, address destToken, uint256 fromAmount, uint256 toAmount, uint256 quotedAmount, bytes32 metadata, address beneficiary) curveV1Data, uint256 partnerAndFee, bytes permit) payable",
+    "function swapExactAmountInOnCurveV2((uint256 curveData, uint256 i, uint256 j, address poolAddress, address srcToken, address destToken, uint256 fromAmount, uint256 toAmount, uint256 quotedAmount, bytes32 metadata, address beneficiary) curveV2Data, uint256 partnerAndFee, bytes permit) payable",
+    "function swapExactAmountOut(address executor, (address srcToken, address destToken, uint256 fromAmount, uint256 toAmount, uint256 quotedAmount, bytes32 metadata, address beneficiary) swapData, uint256 partnerAndFee, bytes permit, bytes executorData) payable",
+  ]);
+  // Base's USDC/WETH 0.01% pool as Augustus encodes it: direction bit and token0 (WETH), token1 (USDC), fee. Direction 0
+  // sells token1, the USDC (the canary's own pool, 2026-11-28).
+  const pool = (direction: 0 | 1, token0 = WETH, token1 = USDC) =>
+    `0x${(BigInt(direction) << 255n | BigInt(token0)).toString(16).padStart(64, "0")}${word(token1)}${word(100n)}` as `0x${string}`;
+  type Terms = { src?: string; amount?: bigint; beneficiary?: string; fee?: bigint; permit?: `0x${string}`; pools?: `0x${string}` };
+  const swapData = (t: Terms) => ({
+    srcToken: (t.src ?? USDC) as `0x${string}`,
+    destToken: WETH as `0x${string}`,
+    fromAmount: t.amount ?? 5_000_000n,
+    toAmount: 1n,
+    quotedAmount: 1n,
+    metadata: `0x${"00".repeat(32)}` as `0x${string}`,
+    beneficiary: (t.beneficiary ?? ZERO) as `0x${string}`,
+  });
+  const calldata = (method: string, t: Terms = {}): string => {
+    const fee = t.fee ?? 0n;
+    const permit = t.permit ?? "0x";
+    const s = swapData(t);
+    if (method === "swapExactAmountIn" || method === "swapExactAmountOut") {
+      return encodeFunctionData({ abi: ABI, functionName: method, args: [ATTACKER, s, fee, permit, "0x"] });
+    }
+    if (method === "swapExactAmountInOnUniswapV2" || method === "swapExactAmountInOnUniswapV3") {
+      return encodeFunctionData({ abi: ABI, functionName: method, args: [{ ...s, pools: t.pools ?? pool(0) }, fee, permit] });
+    }
+    if (method === "swapExactAmountInOnCurveV1") {
+      return encodeFunctionData({ abi: ABI, functionName: method, args: [{ curveData: 0n, curveAssets: 0n, ...s }, fee, permit] });
+    }
+    return encodeFunctionData({ abi: ABI, functionName: "swapExactAmountInOnCurveV2", args: [{ curveData: 0n, i: 0n, j: 1n, poolAddress: ATTACKER, ...s }, fee, permit] });
+  };
+  const intent: SwapIntent = { inputChainId: 8453, inputToken: USDC, inputAmount: "5000000", userAddress: USER };
+  const coin: SwapIntent = { ...intent, inputToken: NATIVE, inputAmount: "2000000000000000" };
+  const sell = (data: string, value = "0", chainId = 8453): Tx => ({
+    executionType: "TRANSACTION",
+    quoteToken: "qt",
+    ...(value === "0" ? { approval: { to: USDC, data: approve(AUGUSTUS, 5_000_000n), value: "0", chainId, spender: AUGUSTUS, amount: "5000000" } } : {}),
+    transaction: { to: AUGUSTUS, data, value, chainId },
+  }) as Tx;
+  const METHODS = ["swapExactAmountIn", "swapExactAmountInOnUniswapV2", "swapExactAmountInOnUniswapV3", "swapExactAmountInOnCurveV1", "swapExactAmountInOnCurveV2"];
+  const feeTerms = (partner: string, flags: bigint, bps: bigint) => (BigInt(partner) << 96n) | flags | bps;
+
+  it("knows Augustus on Velora's nine chains, as a target and a spender, and its five sells by their selectors", () => {
+    expect(Object.keys(KNOWN_CONTRACTS).filter((c) => KNOWN_CONTRACTS[Number(c)].includes(AUGUSTUS)).sort()).toEqual(["1", "10", "130", "137", "42161", "43114", "4663", "56", "8453"]);
+    expect(METHODS.map((m) => calldata(m).slice(0, 10))).toEqual(["0xe3ead59e", "0xe8bb3b6c", "0x876a02f6", "0x1a01c532", "0xe37ed256"]);
+  });
+
+  it.each(METHODS)("accepts a %s sell of the token, for the amount, to the user, with RAVN's fee", (method) => {
+    expect(() => checkExecution(sell(calldata(method, { fee: feeTerms(FEE_WALLET, 1n << 91n, 25n) })), intent)).not.toThrow();
+    expect(() => checkExecution(sell(calldata(method, { beneficiary: USER })), intent)).not.toThrow();
+  });
+
+  it.each(METHODS)("holds a %s sell to the token and amount being swapped (a standing allowance to Augustus would cover more)", (method) => {
+    refuses(sell(calldata(method, { amount: 5_000_001n })), intent, /takes more than the swap's amount/);
+    refuses(sell(calldata(method, { src: ATTACKER })), intent, /token other than the one being swapped/);
+    refuses(sell(calldata(method, { amount: 0n })), intent, /takes no amount/);
+  });
+
+  it.each(METHODS)("refuses a %s sell with a permit, to someone else, or with a fee or surplus not RAVN's", (method) => {
+    refuses(sell(calldata(method, { permit: `0x${"11".repeat(224)}` })), intent, /carries a permit/);
+    refuses(sell(calldata(method, { beneficiary: ATTACKER })), intent, /pays an address other than the user/);
+    refuses(sell(calldata(method, { fee: feeTerms(ATTACKER, 0n, 25n) })), intent, /partner fee doesn't go to RAVN's fee wallet/);
+    refuses(sell(calldata(method, { fee: feeTerms(FEE_WALLET, 0n, 101n) })), intent, /partner fee is more than RAVN's fee may be/);
+    for (const bit of [90n, 94n, 95n]) refuses(sell(calldata(method, { fee: feeTerms(ATTACKER, 1n << bit, 0n) })), intent, /hands its surplus to someone/);
+  });
+
+  it("holds a UniswapV3 sell's first pool to the token being swapped: its callback pulls that pool's input", () => {
+    // Direction 1 sells token0 (WETH here), whatever srcToken says.
+    refuses(sell(calldata("swapExactAmountInOnUniswapV3", { pools: pool(1) })), intent, /first pool takes a token other than the one being swapped/);
+    refuses(sell(calldata("swapExactAmountInOnUniswapV3", { pools: pool(0, WETH, ATTACKER) })), intent, /first pool takes a token other than the one being swapped/);
+    expect(() => checkExecution(sell(calldata("swapExactAmountInOnUniswapV3", { pools: pool(1, USDC, WETH) })), intent)).not.toThrow();
+    refuses(sell(calldata("swapExactAmountInOnUniswapV3", { pools: "0x" })), intent, /names no pool/);
+  });
+
+  it("a coin sell names 0xEeee… and sends exactly its amount (a real one, and hand-built ones)", () => {
+    const { execution, intent: real } = fixture("8453 eth->usdc velora (coin sell)");
+    const e = execution as Tx;
+    e.transaction.value = "1999999999999999";
+    refuses(e, real, /amount isn't the coin it sends/);
+    for (const method of METHODS) {
+      expect(() => checkExecution(sell(calldata(method, { src: NATIVE, amount: 2_000_000_000_000_000n }), "2000000000000000"), coin)).not.toThrow();
+      refuses(sell(calldata(method, { src: WETH, amount: 2_000_000_000_000_000n }), "2000000000000000"), coin, /token other than the one being swapped/);
+    }
+  });
+
+  it("refuses Augustus's other functions, a buy included", () => {
+    refuses(sell(calldata("swapExactAmountOut")), intent, /call to Velora isn't a swap RAVN builds/);
+    refuses(sell(`0xdeadbeef${calldata("swapExactAmountIn").slice(10)}`), intent, /call to Velora isn't a swap RAVN builds/);
+  });
+
+  it("refuses Augustus on a chain Velora doesn't run on", () => {
+    refuses(sell(calldata("swapExactAmountIn"), "0", 59144), { ...intent, inputChainId: 59144 }, /spender RAVN doesn't route through|contract RAVN doesn't route through/);
+  });
+});
+
+describe("checkExecution: Velora Delta orders", () => {
+  type Sig = Extract<ExecutionDTO, { executionType: "SIGNATURE" }>;
+  type Order = Record<string, unknown> & { bridge: Record<string, unknown> };
+  const DELTA = "0x0000000000bbf5c5fd284e657f01bd000933c96d";
+  const SAME = "8453 usdc->weth velora_delta";
+  const ACROSS = "42161->8453 usdc velora_delta (Across)";
+  const CCTP = "42161->8453 usdc velora_delta (CCTP standard)";
+  const FAST = "42161->8453 usdc velora_delta (CCTP fast)";
+  const order = (name: string, edit: (o: Order, e: Sig) => void = () => {}) => {
+    const { execution, intent } = fixture(name);
+    const e = execution as Sig;
+    edit((e.typedData as { message: Order }).message, e);
+    return { e, intent };
+  };
+  const data = (...words: (string | bigint)[]) => `0x${words.map(word).join("")}`;
+
+  it("knows the Delta contract on no chain as a transaction target", () => {
+    expect(Object.values(KNOWN_CONTRACTS).some((list) => list.includes(DELTA))).toBe(false);
+  });
+
+  it("holds an order to the user's own sell of the token and amount", () => {
+    let t = order(SAME, (o) => (o.owner = ATTACKER));
+    refuses(t.e, t.intent, /order is for another wallet/);
+    t = order(SAME, (o) => (o.srcToken = ATTACKER));
+    refuses(t.e, t.intent, /sells a token other than the one being swapped/);
+    t = order(SAME, (o) => (o.srcAmount = "5000001"));
+    refuses(t.e, t.intent, /sells more than the swap's amount/);
+    t = order(SAME, (o) => (o.srcAmount = "0"));
+    refuses(t.e, t.intent, /sells more than the swap's amount/);
+    t = order(SAME, (o) => (o.kind = 1));
+    refuses(t.e, t.intent, /isn't a sell/);
+    t = order(SAME, (o) => (o.permit = "0x1234"));
+    refuses(t.e, t.intent, /carries a permit/);
+  });
+
+  it("refuses an order that pays someone else, or a fee or surplus not RAVN's", () => {
+    let t = order(SAME, (o) => (o.beneficiary = ATTACKER));
+    refuses(t.e, t.intent, /pays someone other than the user/);
+    t = order(SAME, (o) => (o.partnerAndFee = ((BigInt(ATTACKER) << 96n) | 25n).toString()));
+    refuses(t.e, t.intent, /partner fee doesn't go to RAVN's fee wallet/);
+    t = order(SAME, (o) => (o.partnerAndFee = ((BigInt(FEE_WALLET) << 96n) | 101n).toString()));
+    refuses(t.e, t.intent, /partner fee is more than RAVN's fee may be/);
+    t = order(SAME, (o) => (o.partnerAndFee = ((BigInt(ATTACKER) << 96n) | 256n).toString()));
+    refuses(t.e, t.intent, /hands its surplus to someone/);
+    t = order(SAME, (o) => (o.partnerAndFee = ((BigInt(FEE_WALLET) << 96n) | 512n | 25n).toString()));
+    expect(() => checkExecution(t.e, t.intent)).not.toThrow();
+  });
+
+  it("reads only the fields the Delta contract signs", () => {
+    let t = order(SAME, (_, e) => (e.typedData as { types: Record<string, unknown[]> }).types.Order.push({ name: "extra", type: "uint256" }));
+    refuses(t.e, t.intent, /signs other fields than its kind's/);
+    t = order(SAME, (_, e) => ((e.typedData as { types: Record<string, { name: string; type: string }[]> }).types.Bridge[2].type = "bytes32"));
+    refuses(t.e, t.intent, /signs other fields than its kind's/);
+  });
+
+  it("names the Delta contract as a spender only beside a Delta order, and one order per swap", () => {
+    // Relay's EIP-3009 signature, with an approval to the Delta contract beside it.
+    const { execution, intent } = fixture("8453 xchain token relay");
+    const relay = execution as Sig;
+    expect(() => checkExecution(relay, intent)).not.toThrow();
+    relay.approval = { to: intent.inputToken, data: approve(DELTA, 100_000_000n), value: "0", chainId: 8453, spender: DELTA, amount: "100000000" };
+    refuses(relay, intent, /Delta contract with no Delta order beside it/);
+    // A second order as the approval's signature.
+    let t = order(SAME, (_, e) => (e.approvalData = structuredClone(e.typedData)));
+    refuses(t.e, t.intent, /Delta order came back as the approval's signature/);
+    // A transaction may not use it either: it's no contract RAVN calls.
+    const swap = fixture("8453 usdc->weth velora");
+    const tx = swap.execution as Extract<ExecutionDTO, { executionType: "TRANSACTION" }>;
+    tx.approval = { ...tx.approval!, data: approve(DELTA, 5_000_000n), spender: DELTA };
+    refuses(tx, swap.intent, /approval is for a contract the swap doesn't call/);
+    t = order(SAME, (_, e) => (e.approval!.data = approve(DELTA, 5_000_001n)));
+    refuses(t.e, t.intent, /approval is for more than the swap's amount/);
+  });
+
+  it("refuses a Delta order for a coin sell, off Velora's chains, or on Avalanche", () => {
+    let t = order(SAME, (o) => (o.srcToken = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"));
+    refuses({ ...t.e, approval: undefined }, { ...t.intent, inputToken: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" }, /Delta order was built for a coin sell/);
+    t = order(SAME, (_, e) => {
+      (e.typedData as { domain: { chainId: number } }).domain.chainId = 43114;
+      e.approval!.chainId = 43114;
+    });
+    refuses(t.e, { ...t.intent, inputChainId: 43114 }, /spender RAVN doesn't route through/);
+  });
+
+  it("holds a one-chain order to one chain", () => {
+    let t = order(SAME, (o) => (o.bridge.protocolSelector = "0x2e09f389"));
+    refuses(t.e, t.intent, /names a bridge for a swap on one chain/);
+    t = order(SAME);
+    refuses(t.e, { ...t.intent, outputChainId: 42161 }, /pays out on the swap's input chain/);
+  });
+
+  it("holds a bridged order to the swap's output chain and destination", () => {
+    let t = order(ACROSS);
+    refuses(t.e, { ...t.intent, outputChainId: undefined }, /can't be checked without the swap's output chain/);
+    refuses(t.e, { ...t.intent, outputChainId: 10 }, /bridges to a chain other than the swap's/);
+    // Zero pays the owner: refused once the destination is someone else.
+    refuses(t.e, { ...t.intent, destinationAddress: "0x8c8d7c46219d9205f056f28fee5950ad564d7465" }, /pays an address other than the swap's destination/);
+    t = order(ACROSS, (o) => (o.beneficiary = ATTACKER));
+    refuses(t.e, t.intent, /pays an address other than the swap's destination/);
+    t = order(ACROSS, (o) => (o.bridge.destinationChainId = 10));
+    refuses(t.e, t.intent, /bridges to a chain other than the swap's/);
+    t = order(ACROSS, (o) => (o.bridge.destinationChainId = 42161));
+    refuses(t.e, { ...t.intent, outputChainId: 42161 }, /bridges to a chain other than the swap's/);
+  });
+
+  it("takes Across only with no handler and a relayer fee within a quarter", () => {
+    let t = order(ACROSS, (o) => (o.bridge.protocolData = data(ATTACKER, 9602n)));
+    refuses(t.e, t.intent, /names a handler, which could pay anyone/);
+    t = order(ACROSS, (o) => (o.bridge.protocolData = data(0n, BigInt(o.destAmount as string) / 4n + 1n)));
+    refuses(t.e, t.intent, /bridge may keep too much/);
+    t = order(ACROSS, (o) => (o.bridge.protocolData = `${o.bridge.protocolData}00`));
+    refuses(t.e, t.intent, /bridge whose terms this SDK can't read/);
+  });
+
+  it("takes CCTP only to the output chain's domain, fast or standard, with Circle's and Velora's fees capped", () => {
+    const words = (o: Order) => (o.bridge.protocolData as string).slice(2).match(/.{64}/g)!.map((w) => BigInt(`0x${w}`));
+    let t = order(CCTP, (o) => (o.bridge.protocolData = data(3n, ...words(o).slice(1))));
+    refuses(t.e, t.intent, /delivers to a chain other than the swap's/);
+    t = order(CCTP, (o) => (o.bridge.protocolData = data(6n, 0n, 1500n, 1710n)));
+    refuses(t.e, t.intent, /isn't a fast or standard transfer/);
+    // Velora's relayer fee (the fourth word) counts with Circle's limit.
+    t = order(CCTP, (o) => (o.bridge.protocolData = data(6n, 0n, 2000n, 5_000_001n)));
+    refuses(t.e, t.intent, /bridge may keep too much/);
+    t = order(CCTP, (o) => (o.bridge.protocolData = data(6n, 5_000_001n, 2000n, 0n)));
+    refuses(t.e, t.intent, /bridge may keep too much/);
+    t = order(FAST, (o) => (o.bridge.protocolData = data(6n, 2800n, 1000n, BigInt(o.destAmount as string) / 4n)));
+    refuses(t.e, t.intent, /bridge may keep too much/);
+    t = order(CCTP, (o) => (o.bridge.protocolData = data(6n, 0n, 2000n)));
+    refuses(t.e, t.intent, /bridge whose terms this SDK can't read/);
+  });
+
+  it("refuses the bridges whose signed terms don't cap their fees (Relay, Mayan, Stargate, any other)", () => {
+    for (const sel of ["0x00000000", "0x12345678", "0xdeadbeef"]) {
+      const t = order(ACROSS, (o) => (o.bridge.protocolSelector = sel));
+      refuses(t.e, t.intent, /bridge whose terms this SDK can't read/);
+    }
   });
 });
 

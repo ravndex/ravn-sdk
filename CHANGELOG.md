@@ -3,6 +3,38 @@
 `@ravnexchange/sdk` (core) unless a package is named. Merging a version bump to `main` publishes it
 to npm (see `.github/workflows/publish-sdk.yml`).
 
+## @ravnexchange/sdk 0.4.41
+
+Velora (velora.xyz, ex-ParaSwap): Market swaps on 9 chains and gasless Delta orders on 8. 0.3.0 to 0.4.40 refuse every
+Velora swap: "The approval names a spender RAVN doesn't route through" on a token sell or a Delta order, "The swap goes to a
+contract RAVN doesn't route through" on a coin sell. This release knows Velora's Augustus v6.2, verified on Sourcify, and
+its Delta contract, and reads a Delta order.
+
+### Added
+
+- Augustus v6.2 (`0x6A00…1068`) in the check (`checkExecution`) on Ethereum, Optimism, BNB Chain, Unichain, Polygon, Robinhood
+  Chain, Base, Arbitrum and Avalanche: the contract a Velora Market swap calls and its approval names.
+- A Market swap must be one of the five sells RAVN builds (`swapExactAmountIn` and its UniswapV2, UniswapV3, CurveV1 and
+  CurveV2 forms; Augustus's other functions are refused). It takes the token being swapped (0xEeee… for a coin sell, with
+  exactly the coin sent), more than 0 and at most the swap's amount, so an allowance your user already gave Augustus is held
+  to the swap. A UniswapV3 sell's first pool must sell that token too, as its callback pulls the pool's input. No permit; the
+  beneficiary is the user or your destination; a partner fee is at most 1%, only to RAVN's fee wallet, with no surplus taken.
+- Velora Delta's contract (`0x0000…C96D`, those chains but Avalanche) as the spender a Delta order's approval names: a
+  spender only, and only beside a Delta order, never a transaction target.
+- A Delta order (`Order` typed data for that contract) as a kind of signature: the user's own sell of the input token, more
+  than 0 and at most the amount, signing exactly the contract's fields, no permit, paying the user or your destination, a
+  partner fee only to RAVN, at most one order per swap. A bridged one goes to the swap's output chain (pass `outputChainId`
+  when you give the intent yourself) and your destination, only through Across with no handler or CCTP to that chain's
+  domain, with the bridge's fees capped at a quarter of what goes into it (CCTP: at most 5 USDC, plus 3 bp on a fast
+  transfer, Velora's relayer fee included). Any other bridge is refused. What the bridge delivers (its output token and
+  decimal scaling) isn't held, as the intent names no output token, and Velora's own cosigner can replace a bridge's terms:
+  like Hinkal's bridge call, a tampered order could still deliver less, up to the swap's amount.
+- "velora" and "velora_delta" in the generated venue lists.
+
+### Upgrading
+
+- Nothing to change. Update to get Velora's prices once RAVN switches it on.
+
 ## @ravnexchange/sdk 0.4.40
 
 Mancer (mancer.xyz) on Robinhood Chain. 0.3.0–0.4.39 refuse every Mancer swap: "The approval names a spender RAVN
